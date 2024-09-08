@@ -3,6 +3,8 @@ name = "TJ2"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+
 [dependencies.serde]
 version = "1"
 features = ["derive"]
@@ -12,11 +14,13 @@ version = "1"
 
 [dependencies.toml]
 version = "0.8"
-features = ["serde"]
 
 [dependencies.clap]
 version = "4"
 features = ["derive"]
+
+[dependencies.thiserror]
+version = "1"
 
 [dependencies.sha2]
 version = "0.10"
@@ -33,6 +37,4 @@ version = "0.7"
 
 [dependencies.hyper]
 version = "1"
-
-[dependencies]
 
