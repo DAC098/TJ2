@@ -15,11 +15,17 @@ version = "1"
 [dependencies.toml]
 version = "0.8"
 
+[dependencies.serde_yml]
+version = "0.0"
+
 [dependencies.clap]
 version = "4"
 features = ["derive"]
 
 [dependencies.thiserror]
+version = "1"
+
+[dependencies.num_cpus]
 version = "1"
 
 [dependencies.sha2]
