@@ -14,14 +14,14 @@ fn main() {
         Err(err) => {
             error::print_error_stack(&err);
 
-            std::process::exit(err.code);
+            std::process::exit(1);
         }
     };
 
     if let Err(err) = setup(config) {
         error::print_error_stack(&err);
 
-        std::process::exit(err.code);
+        std::process::exit(1);
     } else {
         std::process::exit(0);
     }

@@ -4,7 +4,6 @@ pub type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
 pub struct Error {
-    pub code: i32,
     cxt: String,
 
     #[source]
@@ -17,18 +16,6 @@ impl Error {
         C: Into<String>
     {
         Error {
-            code: 1,
-            cxt: cxt.into(),
-            src: None,
-        }
-    }
-
-    pub fn code<C>(code: i32, cxt: C) -> Error
-    where
-        C: Into<String>
-    {
-        Error {
-            code,
             cxt: cxt.into(),
             src: None,
         }
@@ -37,16 +24,12 @@ impl Error {
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "CODE ({}) {}", self.code, self.cxt)
+        write!(f, "{}", self.cxt)
     }
 }
 
 pub trait Context<T, E> {
     fn context<C>(self, cxt: C) -> std::result::Result<T, Error>
-    where
-        C: Into<String>;
-
-    fn code<C>(self, code: i32, cxt: C) -> std::result::Result<T, Error>
     where
         C: Into<String>;
 }
@@ -60,20 +43,8 @@ where
         C: Into<String>
     {
         self.map_err(|err| Error {
-            code: 1,
             cxt: cxt.into(),
             src: Some(err.into())
-        })
-    }
-
-    fn code<C>(self, code: i32, cxt: C) -> std::result::Result<T, Error>
-    where
-        C: Into<String>
-    {
-        self.map_err(|err| Error {
-            code,
-            cxt: cxt.into(),
-            src: Some(err.into()),
         })
     }
 }
@@ -84,20 +55,8 @@ impl<T> Context<T, ()> for std::option::Option<T> {
         C: Into<String>
     {
         self.ok_or(Error {
-            code: 1,
             cxt: cxt.into(),
             src: None
-        })
-    }
-
-    fn code<C>(self, code: i32, cxt: C) -> std::result::Result<T, Error>
-    where
-        C: Into<String>
-    {
-        self.ok_or(Error {
-            code,
-            cxt: cxt.into(),
-            src: None,
         })
     }
 }
