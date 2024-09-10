@@ -76,7 +76,7 @@ async fn init(config: config::Config) -> Result<(), Error> {
         }));
     }
 
-    while let Some(_) = all_futs.next().await {
+    while (all_futs.next().await).is_some() {
     }
 
     Ok(())

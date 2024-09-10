@@ -21,7 +21,7 @@ pub fn get_cwd() -> Result<&'static Path, error::Error> {
     let result = std::env::current_dir()
         .context("failed to retrieve the current working directory")?;
 
-    if let Err(_) = CWD.set(result.into_boxed_path()) {
+    if CWD.set(result.into_boxed_path()).is_err() {
         Err(error::Error::context("failed to set cwd global"))
     } else {
         Ok(CWD.get().unwrap())
@@ -47,7 +47,7 @@ impl<'a> SrcFile<'a> {
     }
 
     pub fn normalize(&self, given: PathBuf) -> PathBuf {
-        normalize_from(&self.parent, given)
+        normalize_from(self.parent, given)
     }
 }
 
@@ -119,12 +119,10 @@ where
                 "{dot} {path_quote} is not a file in {src}"
             )));
         }
-    } else {
-        if !meta.is_dir() {
-            return Err(error::Error::context(format!(
-                "{dot} {path_quote} is not a directory in {src}"
-            )));
-        }
+    } else if !meta.is_dir() {
+        return Err(error::Error::context(format!(
+            "{dot} {path_quote} is not a directory in {src}"
+        )));
     }
 
     Ok(())
