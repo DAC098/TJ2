@@ -68,7 +68,7 @@ pub fn print_error_stack(err: &Error) {
 
     while let Some(next) = curr {
         if let Err(err) = write!(&mut msg, "\n{count}) {next}") {
-            println!("error when writing out error message {err}");
+            tracing::error!("error when writing out error message {err}");
 
             return;
         }
@@ -77,5 +77,5 @@ pub fn print_error_stack(err: &Error) {
         curr = std::error::Error::source(next);
     }
 
-    println!("{msg}");
+    tracing::error!("error stack:\n{msg}");
 }
