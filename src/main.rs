@@ -9,12 +9,14 @@ use tracing_subscriber::{FmtSubscriber, EnvFilter};
 mod error;
 mod path;
 mod config;
+mod db;
 
 use error::{Error, Context};
 
 fn main() {
     let args = config::CliArgs::parse();
-    let filter = EnvFilter::from_default_env();
+    let filter = EnvFilter::from_default_env()
+        .add_directive("TJ2=trace".parse().unwrap());
 
     if let Err(err) = FmtSubscriber::builder()
         .with_env_filter(filter)
@@ -64,6 +66,8 @@ async fn init(config: config::Config) -> Result<(), Error> {
         .route("/", get(retrieve_root))
         .with_state(());
 
+    let _db_pool = db::connect(&config).await?;
+
     let mut all_futs = FuturesUnordered::new();
 
     for listener in config.settings.listeners {
@@ -76,8 +80,7 @@ async fn init(config: config::Config) -> Result<(), Error> {
         }));
     }
 
-    while (all_futs.next().await).is_some() {
-    }
+    while (all_futs.next().await).is_some() {}
 
     Ok(())
 }

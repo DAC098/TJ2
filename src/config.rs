@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::error::{self, Context};
 use crate::path::normalize_from;
 
-mod meta;
+pub mod meta;
 
 use meta::{TryDefault, SrcFile, DotPath, get_cwd, check_path};
 

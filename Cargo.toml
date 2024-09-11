@@ -69,3 +69,6 @@ features = [
     "chrono",
     "runtime-tokio",
 ]
+
+[dependencies.url]
+version = "2"
