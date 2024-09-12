@@ -77,24 +77,40 @@ async fn init(config: config::Config) -> Result<(), Error> {
 
     let _db_pool = db::connect(&config).await?;
 
+    let mut server_handles = Vec::with_capacity(config.settings.listeners.len());
     let mut all_futs = FuturesUnordered::new();
 
     for listener in config.settings.listeners {
+        let handle = axum_server::Handle::new();
         let local_router = router.clone();
+        let local_handle = handle.clone();
 
+        server_handles.push(handle);
         all_futs.push(tokio::spawn(async move {
-            if let Err(err) = start_server(listener, local_router).await {
+            if let Err(err) = start_server(listener, local_router, local_handle).await {
                 error::print_error_stack(&err);
             }
         }));
     }
+
+    all_futs.push(tokio::spawn(async move {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            tracing::error!("error when listening for ctrl-c. {err}");
+        } else {
+            tracing::info!("shuting down server listeners");
+
+            for handle in server_handles {
+                handle.shutdown();
+            }
+        }
+    }));
 
     while (all_futs.next().await).is_some() {}
 
     Ok(())
 }
 
-async fn start_server(listener: config::Listener, router: Router<()>) -> Result<(), error::Error> {
+async fn start_server(listener: config::Listener, router: Router<()>, handle: axum_server::Handle) -> Result<(), error::Error> {
     let tcp_listener = {
         let err_msg = format!("failed binding to listener address {}", listener.addr);
 
@@ -112,6 +128,7 @@ async fn start_server(listener: config::Listener, router: Router<()>) -> Result<
     }
 
     axum_server::from_tcp(tcp_listener)
+        .handle(handle)
         .serve(router.into_make_service())
         .await
         .context("error when running server")
