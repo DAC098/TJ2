@@ -15,8 +15,17 @@ use error::{Error, Context};
 
 fn main() {
     let args = config::CliArgs::parse();
-    let filter = EnvFilter::from_default_env()
-        .add_directive("TJ2=trace".parse().unwrap());
+    let mut filter = EnvFilter::from_default_env();
+
+    if let Some(verbosity) = &args.verbosity {
+        filter = match verbosity {
+            config::Verbosity::Error => filter.add_directive("TJ2=error".parse().unwrap()),
+            config::Verbosity::Warn => filter.add_directive("TJ2=warn".parse().unwrap()),
+            config::Verbosity::Info => filter.add_directive("TJ2=info".parse().unwrap()),
+            config::Verbosity::Debug => filter.add_directive("TJ2=debug".parse().unwrap()),
+            config::Verbosity::Trace => filter.add_directive("TJ2=trace".parse().unwrap()),
+        }
+    }
 
     if let Err(err) = FmtSubscriber::builder()
         .with_env_filter(filter)
@@ -93,9 +102,13 @@ async fn start_server(listener: config::Listener, router: Router<()>) -> Result<
             .context(err_msg)?
     };
 
-    match tcp_listener.local_addr() {
-        Ok(addr) => tracing::info!("listening on: {addr}"),
-        Err(err) => tracing::warn!("failed getting listener addr: {err}")
+    {
+        // we should always get a valid addr because we will only be using v4/v6
+        // addresses for the tcp listener
+        let addr = tcp_listener.local_addr()
+            .expect("expected to retrieve a valid ipv4/v6 address for the listener socket");
+
+        tracing::info!("listening on: {addr}");
     }
 
     axum_server::from_tcp(tcp_listener)

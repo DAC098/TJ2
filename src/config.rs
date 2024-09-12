@@ -4,7 +4,7 @@ use std::io::Read;
 use std::net::{SocketAddr, IpAddr, Ipv6Addr};
 use std::str::FromStr;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 
 use crate::error::{self, Context};
@@ -14,9 +14,21 @@ pub mod meta;
 
 use meta::{TryDefault, SrcFile, DotPath, get_cwd, check_path};
 
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Verbosity {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
 #[derive(Debug, Parser)]
 pub struct CliArgs {
-    config_path: PathBuf
+    pub config_path: PathBuf,
+
+    #[arg(short = 'V', long)]
+    pub verbosity: Option<Verbosity>
 }
 
 #[derive(Debug)]
