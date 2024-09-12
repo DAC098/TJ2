@@ -10,6 +10,7 @@ mod error;
 mod path;
 mod config;
 mod db;
+mod state;
 
 use error::{Error, Context};
 
@@ -71,11 +72,13 @@ fn setup(config: config::Config) -> Result<(), Error> {
 }
 
 async fn init(config: config::Config) -> Result<(), Error> {
+    let state = state::SharedState::new(&config)
+        .await
+        .context("failed to create SharedState")?;
+
     let router = Router::new()
         .route("/", get(retrieve_root))
-        .with_state(());
-
-    let _db_pool = db::connect(&config).await?;
+        .with_state(state.clone());
 
     let mut server_handles = Vec::with_capacity(config.settings.listeners.len());
     let mut all_futs = FuturesUnordered::new();
@@ -110,7 +113,11 @@ async fn init(config: config::Config) -> Result<(), Error> {
     Ok(())
 }
 
-async fn start_server(listener: config::Listener, router: Router<()>, handle: axum_server::Handle) -> Result<(), error::Error> {
+async fn start_server(
+    listener: config::Listener,
+    router: Router,
+    handle: axum_server::Handle
+) -> Result<(), error::Error> {
     let tcp_listener = {
         let err_msg = format!("failed binding to listener address {}", listener.addr);
 

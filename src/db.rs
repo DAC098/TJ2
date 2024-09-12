@@ -13,6 +13,9 @@ use crate::error::{Error, Context};
 use crate::config::{Config, meta::get_cwd};
 use crate::path::metadata;
 
+pub type DbPool = SqlitePool;
+pub type DbConn = SqliteConnection;
+
 pub async fn connect(config: &Config) -> Result<SqlitePool, Error> {
     let db_path = config.settings.data.join("database.db");
     let db_url = format!("sqlite://{}", db_path.display());
