@@ -3,6 +3,9 @@ name = "TJ2"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+rustls = ["axum-server/tls-rustls"]
+
 [dependencies]
 
 [dependencies.serde]

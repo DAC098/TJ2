@@ -1,3 +1,5 @@
+use std::net::{SocketAddr, TcpListener};
+
 use axum::Router;
 use axum::routing::get;
 use clap::Parser;
@@ -113,32 +115,66 @@ async fn init(config: config::Config) -> Result<(), Error> {
     Ok(())
 }
 
+fn create_listener(addr: &SocketAddr) -> Result<TcpListener, error::Error> {
+    let listener = std::net::TcpListener::bind(addr)
+        .context(format!("failed binding to listener address {addr}"))?;
+
+    if addr.port() == 0 {
+        let local_addr = listener.local_addr()
+            .expect("expected to retrieve a valid ipv4/v6 address for the listener socket");
+
+        tracing::info!("listening on: {local_addr}");
+    } else {
+        tracing::info!("listening on: {addr}");
+    }
+
+    Ok(listener)
+}
+
+#[cfg(not(feature = "rustls"))]
 async fn start_server(
     listener: config::Listener,
     router: Router,
     handle: axum_server::Handle
 ) -> Result<(), error::Error> {
-    let tcp_listener = {
-        let err_msg = format!("failed binding to listener address {}", listener.addr);
+    let listener = create_listener(&listener.addr)?;
 
-        std::net::TcpListener::bind(listener.addr)
-            .context(err_msg)?
-    };
-
-    {
-        // we should always get a valid addr because we will only be using v4/v6
-        // addresses for the tcp listener
-        let addr = tcp_listener.local_addr()
-            .expect("expected to retrieve a valid ipv4/v6 address for the listener socket");
-
-        tracing::info!("listening on: {addr}");
-    }
-
-    axum_server::from_tcp(tcp_listener)
+    axum_server::from_tcp(listener)
         .handle(handle)
         .serve(router.into_make_service())
         .await
         .context("error when running server")
+}
+
+#[cfg(feature = "rustls")]
+async fn start_server(
+    listener: config::Listener,
+    router: Router,
+    handle: axum_server::Handle
+) -> Result<(), error::Error> {
+    use axum_server::tls_rustls::RustlsConfig;
+
+    if let Some(tls) = listener.tls {
+        let tls_config = RustlsConfig::from_pem_file(tls.cert, tls.key)
+            .await
+            .context(format!("failed to load pem files for listener {}", listener.addr))?;
+
+        let listener = create_listener(&listener.addr)?;
+
+        axum_server::from_tcp_rustls(listener, tls_config)
+            .handle(handle)
+            .serve(router.into_make_service())
+            .await
+            .context("error when running server")
+    } else {
+        let listener = create_listener(&listener.addr)?;
+
+        axum_server::from_tcp(listener)
+            .handle(handle)
+            .serve(router.into_make_service())
+            .await
+            .context("error when running server")
+    }
 }
 
 async fn retrieve_root() -> &'static str {

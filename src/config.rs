@@ -167,12 +167,18 @@ impl TryDefault for Settings {
 
 #[derive(Debug, Deserialize)]
 pub struct ListenerShape {
-    addr: String
+    addr: String,
+
+    #[cfg(feature = "rustls")]
+    tls: Option<tls::TlsShape>,
 }
 
 #[derive(Debug)]
 pub struct Listener {
-    pub addr: SocketAddr
+    pub addr: SocketAddr,
+
+    #[cfg(feature = "rustls")]
+    pub tls: Option<tls::Tls>,
 }
 
 impl Listener {
@@ -187,6 +193,16 @@ impl Listener {
             }
         };
 
+        #[cfg(feature = "rustls")] {
+            if let Some(tls) = listener.tls {
+                let mut base = tls::Tls::default();
+
+                base.merge(src, dot.push(&"tls"), tls)?;
+
+                self.tls = Some(base);
+            }
+        }
+
         Ok(())
     }
 }
@@ -194,7 +210,52 @@ impl Listener {
 impl Default for Listener {
     fn default() -> Self {
         Listener {
-            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 8080)
+            addr: SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 8080),
+            #[cfg(feature = "rustls")]
+            tls: None,
+        }
+    }
+}
+
+#[cfg(feature = "rustls")]
+pub mod tls {
+    use std::path::PathBuf;
+
+    use serde::Deserialize;
+
+    use crate::error;
+    use super::meta::{SrcFile, DotPath, check_path};
+
+    #[derive(Debug, Deserialize)]
+    pub struct TlsShape {
+        key: PathBuf,
+        cert: PathBuf,
+    }
+
+    #[derive(Debug)]
+    pub struct Tls {
+        pub key: PathBuf,
+        pub cert: PathBuf,
+    }
+
+    impl Tls {
+        pub(super) fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, tls: TlsShape) -> Result<(), error::Error> {
+            self.key = src.normalize(tls.key);
+            self.cert = src.normalize(tls.cert);
+
+            check_path(&self.key, src, dot.push(&"key"), true)?;
+            check_path(&self.cert, src, dot.push(&"cert"), true)?;
+
+            Ok(())
+        }
+    }
+
+    impl Default for Tls {
+        fn default() -> Self {
+            Tls {
+                key: Default::default(),
+                cert: Default::default(),
+            }
         }
     }
 }
