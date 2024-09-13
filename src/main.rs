@@ -21,13 +21,15 @@ fn main() {
     let mut filter = EnvFilter::from_default_env();
 
     if let Some(verbosity) = &args.verbosity {
-        filter = match verbosity {
-            config::Verbosity::Error => filter.add_directive("TJ2=error".parse().unwrap()),
-            config::Verbosity::Warn => filter.add_directive("TJ2=warn".parse().unwrap()),
-            config::Verbosity::Info => filter.add_directive("TJ2=info".parse().unwrap()),
-            config::Verbosity::Debug => filter.add_directive("TJ2=debug".parse().unwrap()),
-            config::Verbosity::Trace => filter.add_directive("TJ2=trace".parse().unwrap()),
-        }
+        let log_str = match verbosity {
+            config::Verbosity::Error => "TJ2=error",
+            config::Verbosity::Warn => "TJ2=warn",
+            config::Verbosity::Info => "TJ2=info",
+            config::Verbosity::Debug => "TJ2=debug",
+            config::Verbosity::Trace => "TJ2=trace",
+        };
+
+        filter = filter.add_directive(log_str.parse().unwrap());
     }
 
     if let Err(err) = FmtSubscriber::builder()
@@ -91,24 +93,10 @@ async fn init(config: config::Config) -> Result<(), Error> {
         let local_handle = handle.clone();
 
         server_handles.push(handle);
-        all_futs.push(tokio::spawn(async move {
-            if let Err(err) = start_server(listener, local_router, local_handle).await {
-                error::print_error_stack(&err);
-            }
-        }));
+        all_futs.push(tokio::spawn(start_server(listener, local_router, local_handle)));
     }
 
-    all_futs.push(tokio::spawn(async move {
-        if let Err(err) = tokio::signal::ctrl_c().await {
-            tracing::error!("error when listening for ctrl-c. {err}");
-        } else {
-            tracing::info!("shuting down server listeners");
-
-            for handle in server_handles {
-                handle.shutdown();
-            }
-        }
-    }));
+    all_futs.push(tokio::spawn(handle_signal(server_handles)));
 
     while (all_futs.next().await).is_some() {}
 
@@ -131,8 +119,14 @@ fn create_listener(addr: &SocketAddr) -> Result<TcpListener, error::Error> {
     Ok(listener)
 }
 
+async fn start_server(listener: config::Listener, router: Router, handle: axum_server::Handle) {
+    if let Err(err) = create_server(listener, router, handle).await {
+        error::print_error_stack(&err);
+    }
+}
+
 #[cfg(not(feature = "rustls"))]
-async fn start_server(
+async fn create_server(
     listener: config::Listener,
     router: Router,
     handle: axum_server::Handle
@@ -147,7 +141,7 @@ async fn start_server(
 }
 
 #[cfg(feature = "rustls")]
-async fn start_server(
+async fn create_server(
     listener: config::Listener,
     router: Router,
     handle: axum_server::Handle
@@ -179,4 +173,16 @@ async fn start_server(
 
 async fn retrieve_root() -> &'static str {
     "root"
+}
+
+async fn handle_signal(handles: Vec<axum_server::Handle>) {
+    if let Err(err) = tokio::signal::ctrl_c().await {
+        tracing::error!("error when listening for ctrl-c. {err}");
+    } else {
+        tracing::info!("shuting down server listeners");
+
+        for handle in handles {
+            handle.shutdown();
+        }
+    }
 }

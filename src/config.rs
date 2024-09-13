@@ -232,7 +232,7 @@ pub mod tls {
         cert: PathBuf,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     pub struct Tls {
         pub key: PathBuf,
         pub cert: PathBuf,
@@ -247,15 +247,6 @@ pub mod tls {
             check_path(&self.cert, src, dot.push(&"cert"), true)?;
 
             Ok(())
-        }
-    }
-
-    impl Default for Tls {
-        fn default() -> Self {
-            Tls {
-                key: Default::default(),
-                cert: Default::default(),
-            }
         }
     }
 }

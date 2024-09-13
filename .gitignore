@@ -1,4 +1,7 @@
 /target
 /data
 
+self_signed_certs/localhost.ecdsa.*
+self_signed_certs/localhost.rsa.*
+
 server.config.toml

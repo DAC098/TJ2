@@ -48,6 +48,7 @@ version = "0.7"
 version = "1"
 
 [dependencies.axum-server]
+git = "https://github.com/DAC098/axum-server.git"
 version = "0.7"
 
 [dependencies.futures]
