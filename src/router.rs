@@ -14,6 +14,7 @@ use crate::state;
 use crate::error;
 
 mod layer;
+mod assets;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -25,7 +26,7 @@ where
 {
     let wrapper = error.into();
 
-    error::print_error_stack(&wrapper);
+    error::log_prefix_error("uncaught error in middleware", &wrapper);
 
     wrapper
 }
@@ -33,6 +34,7 @@ where
 pub fn build(state: &state::SharedState) -> Router {
     Router::new()
         .route("/ping", get(ping))
+        .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())
             .layer(TraceLayer::new_for_http()

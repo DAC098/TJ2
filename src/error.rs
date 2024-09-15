@@ -49,7 +49,7 @@ impl Display for Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response<Body> {
-        print_error_stack(&self);
+        log_prefix_error("response error", &self);
 
         error_response("internal server error")
     }
@@ -88,9 +88,10 @@ impl<T> Context<T, ()> for std::option::Option<T> {
     }
 }
 
-pub fn print_error_stack<E>(err: &E)
+pub fn log_prefix_error<D, E>(prefix: &D, err: &E)
 where
-    E: std::error::Error
+    D: Display + ?Sized,
+    E: std::error::Error,
 {
     let mut msg = format!("0) {err}");
     let mut count = 1;
@@ -107,7 +108,14 @@ where
         curr = std::error::Error::source(next);
     }
 
-    tracing::error!("error stack:\n{msg}");
+    tracing::error!("{prefix}:\n{msg}");
+}
+
+pub fn log_error<E>(err: &E)
+where
+    E: std::error::Error
+{
+    log_prefix_error("error stack", err)
 }
 
 macro_rules! simple_from {

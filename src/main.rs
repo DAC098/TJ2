@@ -36,7 +36,7 @@ fn main() {
         .with_env_filter(filter)
         .try_init()
         .context("failed to initialize stdout logging") {
-        error::print_error_stack(&err);
+        error::log_error(&err);
 
         std::process::exit(1);
     }
@@ -44,14 +44,14 @@ fn main() {
     let config = match config::Config::from_args(&args) {
         Ok(config) => config,
         Err(err) => {
-            error::print_error_stack(&err);
+            error::log_error(&err);
 
             std::process::exit(1);
         }
     };
 
     if let Err(err) = setup(config) {
-        error::print_error_stack(&err);
+        error::log_error(&err);
 
         std::process::exit(1);
     } else {
@@ -119,7 +119,7 @@ fn create_listener(addr: &SocketAddr) -> Result<TcpListener, error::Error> {
 
 async fn start_server(listener: config::Listener, router: Router, handle: axum_server::Handle) {
     if let Err(err) = create_server(listener, router, handle).await {
-        error::print_error_stack(&err);
+        error::log_error(&err);
     }
 }
 

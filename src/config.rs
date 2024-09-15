@@ -1,7 +1,8 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::default::Default;
 use std::io::Read;
 use std::net::{SocketAddr, IpAddr, Ipv6Addr};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Parser, ValueEnum};
@@ -12,7 +13,15 @@ use crate::path::normalize_from;
 
 pub mod meta;
 
-use meta::{TryDefault, SrcFile, DotPath, get_cwd, check_path};
+use meta::{
+    TryDefault,
+    SrcFile,
+    DotPath,
+    Quote,
+    get_cwd,
+    check_path,
+    sanitize_url_key,
+};
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum Verbosity {
@@ -95,6 +104,7 @@ pub struct SettingsShape {
     thread_pool: Option<usize>,
     blocking_pool: Option<usize>,
     listeners: Vec<ListenerShape>,
+    assets: Option<AssetsShape>,
 }
 
 #[derive(Debug)]
@@ -103,6 +113,7 @@ pub struct Settings {
     pub thread_pool: usize,
     pub blocking_pool: usize,
     pub listeners: Vec<Listener>,
+    pub assets: Assets,
 }
 
 impl Settings {
@@ -148,6 +159,10 @@ impl Settings {
             self.listeners.push(default);
         }
 
+        if let Some(assets) = settings.assets {
+            self.assets.merge(src, dot.push(&"assets"), assets)?;
+        }
+
         Ok(())
     }
 }
@@ -161,6 +176,7 @@ impl TryDefault for Settings {
             thread_pool: 1,
             blocking_pool: 1,
             listeners: vec![Listener::default()],
+            assets: Assets::default(),
         })
     }
 }
@@ -247,6 +263,71 @@ pub mod tls {
             check_path(&self.cert, src, dot.push(&"cert"), true)?;
 
             Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AssetsShape {
+    files: Option<HashMap<String, PathBuf>>,
+    directories: Option<HashMap<String, PathBuf>>,
+}
+
+#[derive(Debug)]
+pub struct Assets {
+    pub files: HashMap<String, PathBuf>,
+    pub directories: HashMap<String, PathBuf>,
+}
+
+impl Assets {
+    fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, assets: AssetsShape) -> Result<(), error::Error> {
+        if let Some(files) = assets.files {
+            let files_dot = dot.push(&"files");
+
+            for (url_key, path) in files {
+                let key_quote = Quote(&url_key);
+                let key = sanitize_url_key(&url_key, src, files_dot.push(&key_quote))?;
+
+                let normalized = src.normalize(path);
+
+                check_path(&normalized, src, files_dot.push(&key_quote), false)?;
+
+                if let Some(found) = self.files.get_mut(&key) {
+                    *found = normalized;
+                } else {
+                    self.files.insert(key, normalized);
+                }
+            }
+        }
+
+        if let Some(directories) = assets.directories {
+            let dir_dot = dot.push(&"directories");
+
+            for (url_key, path) in directories {
+                let key_quote = Quote(&url_key);
+                let key = sanitize_url_key(&url_key, src, dir_dot.push(&key_quote))?;
+
+                let normalized = src.normalize(path);
+
+                check_path(&normalized, src, dir_dot.push(&key_quote), false)?;
+
+                if let Some(found) = self.directories.get_mut(&key) {
+                    *found = normalized;
+                } else {
+                    self.directories.insert(key, normalized);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for Assets {
+    fn default() -> Self {
+        Assets {
+            files: HashMap::new(),
+            directories: HashMap::new(),
         }
     }
 }

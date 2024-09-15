@@ -127,3 +127,32 @@ where
 
     Ok(())
 }
+
+pub fn sanitize_url_key(given: &str, src: &SrcFile<'_>, dot: DotPath<'_>) -> Result<String, error::Error> {
+    let trimmed = given.trim();
+    let rtn: String;
+
+    let to_parse = if trimmed.starts_with('/') {
+        rtn = trimmed.to_owned();
+
+        format!("https://localhost{trimmed}")
+    } else {
+        rtn = format!("/{trimmed}");
+
+        format!("https://localhost/{trimmed}")
+    };
+
+    let url = url::Url::parse(&to_parse).context(format!(
+        "{dot} \"{given}\" is not a valid url path. file: {src}"
+    ))?;
+
+    for part in url.path_segments().unwrap() {
+        if part == ".." || part == "." {
+            return Err(error::Error::context(format!(
+                "{dot} \"{given}\" is not a valid url path. file: {src}"
+            )));
+        }
+    }
+
+    Ok(rtn)
+}

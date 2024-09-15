@@ -70,6 +70,9 @@ features = ["small_rng", "std"]
 version = "1"
 features = ["signal", "time", "rt-multi-thread", "net", "fs", "tracing"]
 
+[dependencies.tokio-util]
+version = "0.7"
+
 [dependencies.hyper]
 version = "1"
 
@@ -90,6 +93,9 @@ features = ["trace"]
 
 [dependencies.mime]
 version = "0.3"
+
+[dependencies.mime_guess]
+version = "2"
 
 [dependencies.tracing]
 version = "0.1"
