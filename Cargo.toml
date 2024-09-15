@@ -8,6 +8,10 @@ rustls = ["axum-server/tls-rustls"]
 
 [dependencies]
 
+# -----------------------------------------------------------------------------
+# serde
+# -----------------------------------------------------------------------------
+
 [dependencies.serde]
 version = "1"
 features = ["derive"]
@@ -21,6 +25,10 @@ version = "0.8"
 [dependencies.serde_yml]
 version = "0.0"
 
+# -----------------------------------------------------------------------------
+# utility
+# -----------------------------------------------------------------------------
+
 [dependencies.clap]
 version = "4"
 features = ["derive"]
@@ -31,27 +39,56 @@ version = "1"
 [dependencies.num_cpus]
 version = "1"
 
+[dependencies.futures]
+version = "0.3"
+
+[dependencies.pin-project]
+version = "1"
+
+# -----------------------------------------------------------------------------
+# security
+# -----------------------------------------------------------------------------
+
 [dependencies.sha2]
 version = "0.10"
 
 [dependencies.sha3]
 version = "0.10"
 
+[dependencies.blake3]
+version = "1"
+
+[dependencies.rand]
+version = "0.8"
+features = ["small_rng", "std"]
+
+# -----------------------------------------------------------------------------
+# network
+# -----------------------------------------------------------------------------
+
 [dependencies.tokio]
 version = "1"
 features = ["signal", "time", "rt-multi-thread", "net", "fs", "tracing"]
 
-[dependencies.axum]
-version = "0.7"
-
 [dependencies.hyper]
 version = "1"
+
+[dependencies.axum]
+version = "0.7"
 
 [dependencies.axum-server]
 git = "https://github.com/DAC098/axum-server.git"
 version = "0.7"
 
-[dependencies.futures]
+[dependencies.tower]
+version = "0.4"
+features = ["timeout"]
+
+[dependencies.tower-http]
+version = "0.5"
+features = ["trace"]
+
+[dependencies.mime]
 version = "0.3"
 
 [dependencies.tracing]
@@ -60,6 +97,10 @@ version = "0.1"
 [dependencies.tracing-subscriber]
 version = "0.3"
 features = ["env-filter"]
+
+# -----------------------------------------------------------------------------
+# database
+# -----------------------------------------------------------------------------
 
 [dependencies.sqlx]
 version = "0.8"

@@ -1,6 +1,25 @@
+use std::convert::Infallible;
 use std::fmt::{Display, Result as FmtResult, Formatter, Write};
 
+use axum::body::Body;
+use axum::http::StatusCode;
+use axum::response::{Response, IntoResponse};
+
 pub type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
+
+pub fn error_response<S>(msg: S) -> Response<Body>
+where
+    S: Into<String>
+{
+    let message = msg.into();
+
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header("content-type", "text/plain; charset=utf-8")
+        .header("content-length", message.len())
+        .body(Body::from(message))
+        .unwrap()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub struct Error {
@@ -25,6 +44,14 @@ impl Error {
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.cxt)
+    }
+}
+
+impl IntoResponse for Error {
+    fn into_response(self) -> Response<Body> {
+        print_error_stack(&self);
+
+        error_response("internal server error")
     }
 }
 
@@ -61,7 +88,10 @@ impl<T> Context<T, ()> for std::option::Option<T> {
     }
 }
 
-pub fn print_error_stack(err: &Error) {
+pub fn print_error_stack<E>(err: &E)
+where
+    E: std::error::Error
+{
     let mut msg = format!("0) {err}");
     let mut count = 1;
     let mut curr = std::error::Error::source(&err);
@@ -78,4 +108,29 @@ pub fn print_error_stack(err: &Error) {
     }
 
     tracing::error!("error stack:\n{msg}");
+}
+
+macro_rules! simple_from {
+    ($e:path) => {
+        impl From<$e> for crate::error::api::Error {
+            fn from(err: $e) -> Self {
+                crate::error::Error::source("internal error", err)
+            }
+        }
+    };
+    ($e:path, $m:expr) => {
+        impl From<$e> for crate::error::api::Error {
+            fn from(err: $e) -> Self {
+                crate::error::Error::source($m, err)
+            }
+        }
+    }
+}
+
+pub(crate) use simple_from;
+
+impl From<Infallible> for Error {
+    fn from(_: Infallible) -> Self {
+        Error::context("received Infallible?")
+    }
 }

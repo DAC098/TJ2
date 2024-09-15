@@ -1,7 +1,6 @@
 use std::net::{SocketAddr, TcpListener};
 
 use axum::Router;
-use axum::routing::get;
 use clap::Parser;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -13,6 +12,7 @@ mod path;
 mod config;
 mod db;
 mod state;
+mod router;
 
 use error::{Error, Context};
 
@@ -80,9 +80,7 @@ async fn init(config: config::Config) -> Result<(), Error> {
         .await
         .context("failed to create SharedState")?;
 
-    let router = Router::new()
-        .route("/", get(retrieve_root))
-        .with_state(state.clone());
+    let router = router::build(&state);
 
     let mut server_handles = Vec::with_capacity(config.settings.listeners.len());
     let mut all_futs = FuturesUnordered::new();
@@ -169,10 +167,6 @@ async fn create_server(
             .await
             .context("error when running server")
     }
-}
-
-async fn retrieve_root() -> &'static str {
-    "root"
 }
 
 async fn handle_signal(handles: Vec<axum_server::Handle>) {
