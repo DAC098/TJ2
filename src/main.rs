@@ -11,6 +11,7 @@ mod error;
 mod path;
 mod config;
 mod db;
+mod templates;
 mod state;
 mod router;
 

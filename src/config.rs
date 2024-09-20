@@ -105,6 +105,7 @@ pub struct SettingsShape {
     blocking_pool: Option<usize>,
     listeners: Vec<ListenerShape>,
     assets: Option<AssetsShape>,
+    templates: Option<TemplatesShape>,
 }
 
 #[derive(Debug)]
@@ -114,6 +115,7 @@ pub struct Settings {
     pub blocking_pool: usize,
     pub listeners: Vec<Listener>,
     pub assets: Assets,
+    pub templates: Templates,
 }
 
 impl Settings {
@@ -163,6 +165,10 @@ impl Settings {
             self.assets.merge(src, dot.push(&"assets"), assets)?;
         }
 
+        if let Some(templates) = settings.templates {
+            self.templates.merge(src, dot.push(&"templates"), templates)?;
+        }
+
         Ok(())
     }
 }
@@ -177,6 +183,7 @@ impl TryDefault for Settings {
             blocking_pool: 1,
             listeners: vec![Listener::default()],
             assets: Assets::default(),
+            templates: Templates::try_default()?,
         })
     }
 }
@@ -329,5 +336,37 @@ impl Default for Assets {
             files: HashMap::new(),
             directories: HashMap::new(),
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TemplatesShape {
+    directory: Option<PathBuf>
+}
+
+#[derive(Debug)]
+pub struct Templates {
+    pub directory: PathBuf
+}
+
+impl Templates {
+    fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, templates: TemplatesShape) -> Result<(), error::Error> {
+        if let Some(directory) = templates.directory {
+            self.directory = src.normalize(directory);
+
+            check_path(&self.directory, src, dot.push(&"directory"), false)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl TryDefault for Templates {
+    type Error = error::Error;
+
+    fn try_default() -> Result<Self, Self::Error> {
+        Ok(Templates {
+            directory: get_cwd()?.join("templates")
+        })
     }
 }

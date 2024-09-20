@@ -4,8 +4,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::config;
-use crate::db;
 use crate::error;
+use crate::db;
+use crate::templates;
 
 #[derive(Debug, Clone)]
 pub struct SharedState(Arc<State>);
@@ -13,13 +14,15 @@ pub struct SharedState(Arc<State>);
 impl SharedState {
     pub async fn new(config: &config::Config) -> Result<Self, error::Error> {
         let db_pool = db::connect(config).await?;
+        let templates = templates::initialize(config)?;
 
         Ok(SharedState(Arc::new(State {
             db_pool,
             assets: Assets {
                 files: config.settings.assets.files.clone(),
                 directories: config.settings.assets.directories.clone(),
-            }
+            },
+            templates,
         })))
     }
 }
@@ -36,6 +39,7 @@ impl Deref for SharedState {
 pub struct State {
     db_pool: db::DbPool,
     assets: Assets,
+    templates: tera::Tera,
 }
 
 impl State {
