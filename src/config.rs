@@ -297,7 +297,7 @@ impl Assets {
 
                 let normalized = src.normalize(path);
 
-                check_path(&normalized, src, files_dot.push(&key_quote), false)?;
+                check_path(&normalized, src, files_dot.push(&key_quote), true)?;
 
                 if let Some(found) = self.files.get_mut(&key) {
                     *found = normalized;

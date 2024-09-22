@@ -1,7 +1,10 @@
 /target
 /data
+/node_modules
 
-self_signed_certs/localhost.ecdsa.*
-self_signed_certs/localhost.rsa.*
+/self_signed_certs/localhost.ecdsa.*
+/self_signed_certs/localhost.rsa.*
+
+/assets/stylesheet.css
 
 server.config.toml

@@ -6,6 +6,7 @@ version = 3
 name = "TJ2"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "axum-server",
  "blake3",

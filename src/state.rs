@@ -1,7 +1,11 @@
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
-use std::ops::Deref;
 use std::sync::Arc;
+
+use async_trait::async_trait;
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
 
 use crate::config;
 use crate::error;
@@ -25,13 +29,22 @@ impl SharedState {
             templates,
         })))
     }
+
+    pub fn assets(&self) -> &Assets {
+        &self.0.assets
+    }
+
+    pub fn templates(&self) -> &tera::Tera {
+        &self.0.templates
+    }
 }
 
-impl Deref for SharedState {
-    type Target = State;
+#[async_trait]
+impl FromRequestParts<SharedState> for SharedState {
+    type Rejection = Infallible;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    async fn from_request_parts(_: &mut Parts, state: &SharedState) -> Result<Self, Self::Rejection> {
+        Ok(state.clone())
     }
 }
 
@@ -40,12 +53,6 @@ pub struct State {
     db_pool: db::DbPool,
     assets: Assets,
     templates: tera::Tera,
-}
-
-impl State {
-    pub fn assets(&self) -> &Assets {
-        &self.assets
-    }
 }
 
 #[derive(Debug)]

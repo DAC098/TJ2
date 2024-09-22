@@ -3,7 +3,8 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
-use axum::http::{Request, Response, StatusCode};
+use axum::http::{Request, StatusCode};
+use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
@@ -11,13 +12,33 @@ use tower_http::classify::ServerErrorsFailureClass;
 use tracing::Span;
 
 use crate::state;
-use crate::error;
+use crate::error::{self, Context};
 
 mod layer;
 mod assets;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
+}
+
+async fn retrieve_root(
+    state: state::SharedState,
+) -> Result<Response, error::Error> {
+    use tera::Context;
+
+    let mut context = Context::new();
+    context.insert("title", &"Root Page");
+
+    let page_index = state.templates()
+        .render("pages/index", &context)
+        .context("failed to render index page")?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/html; charset=utf-8")
+        .header("content-length", page_index.len())
+        .body(page_index.into())
+        .context("failed create response")
 }
 
 async fn handle_error<E>(error: E) -> error::Error
@@ -33,6 +54,7 @@ where
 
 pub fn build(state: &state::SharedState) -> Router {
     Router::new()
+        .route("/", get(retrieve_root))
         .route("/ping", get(ping))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
