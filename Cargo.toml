@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
+default = ["rustls"]
 rustls = ["axum-server/tls-rustls"]
 
 [dependencies]
@@ -47,6 +48,13 @@ version = "1"
 
 [dependencies.async-trait]
 version = "0.1"
+
+[dependencies.chrono]
+version = "0.4"
+features = ["serde"]
+
+[dependencies.base64]
+version = "0.22"
 
 # -----------------------------------------------------------------------------
 # security

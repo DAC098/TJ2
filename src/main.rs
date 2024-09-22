@@ -12,7 +12,11 @@ mod path;
 mod config;
 mod db;
 mod templates;
+mod sec;
 mod state;
+
+mod cookie;
+
 mod router;
 
 use error::{Error, Context};
