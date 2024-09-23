@@ -19,7 +19,7 @@ pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
 
     let mut required = HashSet::from([
         "pages/index",
-        "email/validate",
+        "pages/login",
     ]);
 
     for name in tera.get_template_names() {

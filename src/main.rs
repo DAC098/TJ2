@@ -103,6 +103,12 @@ async fn init(config: config::Config) -> Result<(), Error> {
 
     while (all_futs.next().await).is_some() {}
 
+    tracing::info!("closing database connections");
+
+    state.db()
+        .close()
+        .await;
+
     Ok(())
 }
 

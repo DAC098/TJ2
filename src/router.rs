@@ -9,6 +9,7 @@ use axum::routing::get;
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 use tower_http::classify::ServerErrorsFailureClass;
+use tera::Context as TeraContext;
 use tracing::Span;
 
 use crate::state;
@@ -17,6 +18,8 @@ use crate::error::{self, Context};
 mod layer;
 mod assets;
 
+mod auth;
+
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
 }
@@ -24,9 +27,7 @@ async fn ping() -> (StatusCode, &'static str) {
 async fn retrieve_root(
     state: state::SharedState,
 ) -> Result<Response, error::Error> {
-    use tera::Context;
-
-    let mut context = Context::new();
+    let mut context = TeraContext::new();
     context.insert("title", &"Root Page");
 
     let page_index = state.templates()
@@ -56,6 +57,8 @@ pub fn build(state: &state::SharedState) -> Router {
     Router::new()
         .route("/", get(retrieve_root))
         .route("/ping", get(ping))
+        .route("/login", get(auth::login)
+            .post(auth::request_login))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())

@@ -37,6 +37,10 @@ impl SharedState {
     pub fn templates(&self) -> &tera::Tera {
         &self.0.templates
     }
+
+    pub fn db(&self) -> &db::DbPool {
+        &self.0.db_pool
+    }
 }
 
 #[async_trait]

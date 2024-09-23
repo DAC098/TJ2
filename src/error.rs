@@ -39,6 +39,17 @@ impl Error {
             src: None,
         }
     }
+
+    pub fn context_source<C, S>(cxt: C, src: S) -> Error
+    where
+        C: Into<String>,
+        S: Into<BoxDynError>
+    {
+        Error {
+            cxt: cxt.into(),
+            src: Some(src.into())
+        }
+    }
 }
 
 impl Display for Error {
