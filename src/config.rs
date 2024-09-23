@@ -41,6 +41,13 @@ pub struct CliArgs {
 }
 
 #[derive(Debug)]
+struct ConfigStack {
+    shape: SettingsShape,
+    path: PathBuf,
+    preload: std::vec::IntoIter<PathBuf>,
+}
+
+#[derive(Debug)]
 pub struct Config {
     pub settings: Settings,
 }
@@ -48,15 +55,62 @@ pub struct Config {
 impl Config {
     pub fn from_args(args: &CliArgs) -> Result<Self, error::Error> {
         let resolved = normalize_from(get_cwd()?, args.config_path.clone());
-        let shape = Self::load_file(&resolved)?;
+        let mut shape = Self::load_file(&resolved)?;
 
         let mut settings = Settings::try_default()?;
-        let src = SrcFile::new(&resolved)?;
         let dot = DotPath::new(&"settings");
 
-        settings.merge(&src, dot.clone(), shape)?;
+        let preload = shape.preload.take()
+            .unwrap_or_default();
+        let mut stack: Vec<ConfigStack> = Vec::new();
+        stack.push(ConfigStack {
+            shape,
+            path: resolved,
+            preload: preload.into_iter(),
+        });
 
-        check_path(&settings.data, &src, dot.push(&"data"), false)?;
+        tracing::debug!("initial stack: {stack:#?}");
+
+        while let Some(ConfigStack { shape, path, mut preload }) = stack.pop() {
+            if let Some(next_path) = preload.next() {
+                let path_parent = path.parent()
+                    .context(format!("failed to retrieve parent directory of path: \"{}\"", path.display()))?;
+
+                let next_resolved = normalize_from(&path_parent, next_path);
+                let mut next_shape = Self::load_file(&next_resolved)?;
+                let next_preload = next_shape.preload.take()
+                    .unwrap_or_default();
+
+                stack.push(ConfigStack {
+                    shape,
+                    path,
+                    preload
+                });
+                stack.push(ConfigStack {
+                    shape: next_shape,
+                    path: next_resolved,
+                    preload: next_preload.into_iter(),
+                });
+
+                tracing::debug!("stack: {stack:#?}");
+
+                continue;
+            }
+
+            let src = SrcFile::new(&path)?;
+
+            tracing::debug!("merging settings file: {src}");
+
+            settings.merge(&src, dot.clone(), shape)?;
+
+            tracing::debug!("settings: {settings:#?}");
+        }
+
+        if settings.listeners.is_empty() {
+            return Err(error::Error::context(
+                "no server listeners have been specified in config files"
+            ));
+        }
 
         Ok(Config {
             settings
@@ -100,10 +154,11 @@ impl Config {
 
 #[derive(Debug, Deserialize)]
 pub struct SettingsShape {
+    preload: Option<Vec<PathBuf>>,
     data: Option<PathBuf>,
     thread_pool: Option<usize>,
     blocking_pool: Option<usize>,
-    listeners: Vec<ListenerShape>,
+    listeners: Option<Vec<ListenerShape>>,
     assets: Option<AssetsShape>,
     templates: Option<TemplatesShape>,
 }
@@ -152,13 +207,15 @@ impl Settings {
             println!("WARNING: total number of threads exceeds the systems");
         }
 
-        self.listeners = Vec::with_capacity(settings.listeners.len());
+        if let Some(listeners) = settings.listeners {
+            self.listeners = Vec::with_capacity(listeners.len());
 
-        for listener in settings.listeners {
-            let mut default = Listener::default();
-            default.merge(src, dot.push(&"listeners"), listener)?;
+            for listener in listeners {
+                let mut default = Listener::default();
+                default.merge(src, dot.push(&"listeners"), listener)?;
 
-            self.listeners.push(default);
+                self.listeners.push(default);
+            }
         }
 
         if let Some(assets) = settings.assets {
@@ -181,7 +238,7 @@ impl TryDefault for Settings {
             data: get_cwd()?.join("data"),
             thread_pool: 1,
             blocking_pool: 1,
-            listeners: vec![Listener::default()],
+            listeners: Vec::new(),
             assets: Assets::default(),
             templates: Templates::try_default()?,
         })
