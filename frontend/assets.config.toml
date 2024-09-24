@@ -1,6 +1,9 @@
+[templates]
+directory = "./templates"
+
 [assets.directories]
 "assets" = "./assets"
 
 [assets.files]
-"assets/htmx.min.js" = "./node_modules/htmx.org/dist/htmx.min.js"
+"assets/htmx.min.js" = "../node_modules/htmx.org/dist/htmx.min.js"
 
