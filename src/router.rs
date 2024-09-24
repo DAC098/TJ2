@@ -88,7 +88,7 @@ fn make_span_with(request: &Request<Body>) -> Span {
 fn on_request(_request: &Request<Body>, _span: &Span) {}
 
 fn on_response(response: &Response<Body>, latency: Duration, span: &Span) {
-    span.record("s", &tracing::field::display(response.status()));
+    span.record("s", tracing::field::display(response.status()));
 
     tracing::info!("{:#?}", latency)
 }

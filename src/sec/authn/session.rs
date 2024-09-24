@@ -14,7 +14,7 @@ use crate::error::{self, Context, BoxDynError};
 use crate::db;
 use crate::cookie;
 
-pub const SESSION_ID_KEY: &'static str = "session_id";
+pub const SESSION_ID_KEY: &str = "session_id";
 pub const SESSION_TOKEN_LEN: usize = 48;
 
 #[derive(Debug, thiserror::Error)]
@@ -48,7 +48,7 @@ impl Token {
     }
 
     pub fn as_base64(&self) -> String {
-        URL_SAFE_NO_PAD.encode(&self.0)
+        URL_SAFE_NO_PAD.encode(self.0)
     }
 }
 
@@ -115,8 +115,7 @@ impl Session {
         let users_id = options.users_id;
         let dropped = false;
         let issued_on = Utc::now();
-        let expires_on = issued_on.clone()
-            .checked_add_signed(options.duration)
+        let expires_on = issued_on.checked_add_signed(options.duration)
             .context("failed to add duration to expires_on")?;
         let authenticated = options.authenticated;
         let verified = options.verified;
@@ -133,11 +132,11 @@ impl Session {
                 values (?1, ?2, ?3, ?4, ?5, ?6)"
             )
                 .bind(&token)
-                .bind(&users_id)
-                .bind(&issued_on)
-                .bind(&expires_on)
-                .bind(&authenticated)
-                .bind(&verified)
+                .bind(users_id)
+                .bind(issued_on)
+                .bind(expires_on)
+                .bind(authenticated)
+                .bind(verified)
                 .execute(&mut *conn)
                 .await;
 
@@ -201,7 +200,7 @@ impl Session {
 
     pub fn build_cookie(&self) -> cookie::SetCookie {
         cookie::SetCookie::new(SESSION_ID_KEY, self.token.as_base64())
-            .with_expires(self.expires_on.clone())
+            .with_expires(self.expires_on)
             .with_path("/")
             .with_secure(true)
             .with_http_only(true)
@@ -218,7 +217,7 @@ impl Session {
     }
 }
 
-pub fn find_session_id<'a>(headers: &'a HeaderMap) -> Result<Option<&'a str>, axum::http::header::ToStrError> {
+pub fn find_session_id(headers: &HeaderMap) -> Result<Option<&str>, axum::http::header::ToStrError> {
     for cookie in headers.get_all("cookie") {
         let cookie_str = cookie.to_str()?;
 

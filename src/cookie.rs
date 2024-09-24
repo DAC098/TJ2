@@ -77,11 +77,11 @@ impl SetCookie {
     }
 
     pub fn domain(&self) -> Option<&str> {
-        self.domain.as_ref().map(|v| v.as_str())
+        self.domain.as_deref()
     }
 
     pub fn path(&self) -> Option<&str> {
-        self.path.as_ref().map(|v| v.as_str())
+        self.path.as_deref()
     }
 
     pub fn secure(&self) -> &bool {

@@ -128,9 +128,9 @@ pub async fn handle(
 
     tracing::debug!("searching for: \"{uri_path}\"");
 
-    if let Some(asset) = state.assets().get_file(&uri_path) {
+    if let Some(asset) = state.assets().get_file(uri_path) {
         send_file(asset).await
-    } else if let Some((dir, stripped)) = state.assets().get_dir(&uri_path) {
+    } else if let Some((dir, stripped)) = state.assets().get_dir(uri_path) {
         let parts = stripped.split('/');
         let mut working = dir.to_path_buf();
 

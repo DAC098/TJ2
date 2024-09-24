@@ -20,11 +20,11 @@ pub struct RequestId {
 }
 
 impl RequestId {
-    pub fn from_request<'a, B>(req: &'a Request<B>) -> Option<&'a Self> {
+    pub fn from_request<B>(req: &Request<B>) -> Option<&Self> {
         Self::from_extensions(req.extensions())
     }
 
-    pub fn from_extensions<'a>(extensions: &'a Extensions) -> Option<&'a Self> {
+    pub fn from_extensions(extensions: &Extensions) -> Option<&Self> {
         extensions.get()
     }
 

@@ -29,7 +29,7 @@ pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
     }
 
     if !required.is_empty() {
-        let mut msg = format!("missing required templates:");
+        let mut msg = String::from("missing required templates:");
 
         for name in required {
             msg.push_str("\n    ");

@@ -76,7 +76,7 @@ impl Config {
                 let path_parent = path.parent()
                     .context(format!("failed to retrieve parent directory of path: \"{}\"", path.display()))?;
 
-                let next_resolved = normalize_from(&path_parent, next_path);
+                let next_resolved = normalize_from(path_parent, next_path);
                 let mut next_shape = Self::load_file(&next_resolved)?;
                 let next_preload = next_shape.preload.take()
                     .unwrap_or_default();
@@ -337,7 +337,7 @@ pub struct AssetsShape {
     directories: Option<HashMap<String, PathBuf>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Assets {
     pub files: HashMap<String, PathBuf>,
     pub directories: HashMap<String, PathBuf>,
@@ -384,15 +384,6 @@ impl Assets {
         }
 
         Ok(())
-    }
-}
-
-impl Default for Assets {
-    fn default() -> Self {
-        Assets {
-            files: HashMap::new(),
-            directories: HashMap::new(),
-        }
     }
 }
 

@@ -42,10 +42,8 @@ pub async fn connect(config: &Config) -> Result<SqlitePool, Error> {
         if let Err(err) = init_database(&mut conn).await {
             if let Err(err) = conn.close().await {
                 tracing::error!("failed to close connection to database: {err:#?}");
-            } else {
-                if let Err(err) = std::fs::remove_file(&db_path) {
-                    tracing::error!("failed to remove database.db: {err:#?}");
-                }
+            } else if let Err(err) = std::fs::remove_file(&db_path) {
+                tracing::error!("failed to remove database.db: {err:#?}");
             }
 
             return Err(err);
@@ -114,10 +112,10 @@ async fn create_admin_user(conn: &mut SqliteConnection) -> Result<(), Error> {
         insert into users (uid, username, password, version) values \
         (?1, ?2, ?3, ?4)"
     )
-        .bind(&"")
-        .bind(&"admin")
+        .bind("")
+        .bind("admin")
         .bind(&password_hash)
-        .bind(&0)
+        .bind(0)
         .execute(&mut *conn)
         .await
         .context("failed to create admin user")?;

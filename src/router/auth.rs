@@ -152,7 +152,7 @@ pub async fn request_login(
     options.authenticated = true;
     options.verified = true;
 
-    let session = Session::create(&mut *conn, options)
+    let session = Session::create(&mut conn, options)
         .await
         .context("failed to create session for login")?;
 

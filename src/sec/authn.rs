@@ -72,7 +72,7 @@ impl Initiator {
         }
 
         let maybe_user = sqlx::query("select * from users where id = ?1")
-            .bind(&session.users_id)
+            .bind(session.users_id)
             .fetch_optional(&mut *conn)
             .await?;
 
