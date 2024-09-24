@@ -1,12 +1,12 @@
 {% extends "pages/base" %}
+
 {% block title %}Login{% endblock title %}
 {% block body %}
-<div>
-    <form action="/login" method="post">
+<div class="w-full h-full">
+    <form action="/login" method="post" class="mx-auto my-auto">
         <div>
             <div>
-                <label for="username">Username:</label>
-                <input id="username" type="text" name="username"/>
+                {{ self::input(id="username", name="username", title="Username") }}
                 {% if user_not_found %}
                 <p>the requested user was not found</p>
                 {% else %}
@@ -14,8 +14,7 @@
                 {% endif %}
             </div>
             <div>
-                <label for="password">Password:</label>
-                <input id="password" type="password" name="password"/>
+                {{ self::input(id="password", name="password", title="Password", type="password") }}
                 {% if invalid_password %}
                 <p>the provided password was invalid</p>
                 {% else %}
@@ -27,3 +26,14 @@
     </form>
 </div>
 {% endblock body %}
+
+{% macro input(id, name, title, type="text") %}
+<div>
+    <div>
+        <label for="{{id}}">{{title}}</label>
+    </div>
+    <div>
+        <input id="{{id}}" type="{{type}}" name="{{name}}"/>
+    </div>
+</div>
+{% endmacro input %}

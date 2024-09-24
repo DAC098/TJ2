@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "build-css": "npx tailwindcss -i ./css/input.css -o ./assets/stylesheet.css"
+    "build-css": "npx tailwindcss -i ./frontend/css/input.css -o ./frontend/assets/stylesheet.css",
+    "watch-css": "npx tailwindcss -w -i ./frontend/css/input.css -o ./frontend/assets/stylesheet.css"
   },
   "dependencies": {
     "htmx.org": "^2.0.2",
