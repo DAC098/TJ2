@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use axum::http::HeaderMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
@@ -13,16 +14,12 @@ use crate::error::{self, Context, BoxDynError};
 use crate::db;
 use crate::cookie;
 
+pub const SESSION_ID_KEY: &'static str = "session_id";
 pub const SESSION_TOKEN_LEN: usize = 48;
 
 #[derive(Debug, thiserror::Error)]
-pub enum TokenError {
-    #[error("invalid base64 string provided")]
-    InvalidBase64,
-
-    #[error(transparent)]
-    Rand(#[from] rand::Error),
-}
+#[error("invalid base64 string provided")]
+pub struct InvalidBase64;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Token([u8; SESSION_TOKEN_LEN]);
@@ -32,7 +29,7 @@ impl Token {
         Token([0; SESSION_TOKEN_LEN])
     }
 
-    pub fn new() -> Result<Self, TokenError> {
+    pub fn new() -> Result<Self, rand::Error> {
         let mut bytes = [0; SESSION_TOKEN_LEN];
 
         rand::thread_rng().try_fill_bytes(&mut bytes)?;
@@ -40,12 +37,12 @@ impl Token {
         Ok(Token(bytes))
     }
 
-    pub fn from_base64(given: &str) -> Result<Self, TokenError> {
+    pub fn from_base64(given: &str) -> Result<Self, InvalidBase64> {
         let decoded = URL_SAFE_NO_PAD.decode(given)
-            .map_err(|_| TokenError::InvalidBase64)?;
+            .map_err(|_| InvalidBase64)?;
 
         let bytes = decoded.try_into()
-            .map_err(|_| TokenError::InvalidBase64)?;
+            .map_err(|_| InvalidBase64)?;
 
         Ok(Token(bytes))
     }
@@ -83,6 +80,7 @@ impl Type<Sqlite> for Token {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Session {
     pub token: Token,
     pub users_id: i64,
@@ -93,16 +91,35 @@ pub struct Session {
     pub verified: bool,
 }
 
+pub struct SessionOptions {
+    pub users_id: i64,
+    pub duration: Duration,
+    pub authenticated: bool,
+    pub verified: bool,
+}
+
+impl SessionOptions {
+    pub fn new(users_id: i64) -> Self {
+        SessionOptions {
+            users_id,
+            duration: Duration::days(7),
+            authenticated: false,
+            verified: false,
+        }
+    }
+}
+
 impl Session {
-    pub async fn create(conn: &mut db::DbConn, users_id: i64, duration: Duration) -> Result<Self, error::Error> {
+    pub async fn create(conn: &mut db::DbConn, options: SessionOptions) -> Result<Self, error::Error> {
         let mut token: Token;
+        let users_id = options.users_id;
         let dropped = false;
         let issued_on = Utc::now();
         let expires_on = issued_on.clone()
-            .checked_add_signed(duration)
-            .unwrap();
-        let authenticated = false;
-        let verified = false;
+            .checked_add_signed(options.duration)
+            .context("failed to add duration to expires_on")?;
+        let authenticated = options.authenticated;
+        let verified = options.verified;
         let mut attempts = 3usize;
 
         loop {
@@ -112,13 +129,15 @@ impl Session {
 
             let result = sqlx::query(
                 "\
-                insert into authn_sessions (token, users_id, issued_on, expires_on) \
-                values (?1, ?2, ?3, ?4)"
+                insert into authn_sessions (token, users_id, issued_on, expires_on, authenticated, verified) \
+                values (?1, ?2, ?3, ?4, ?5, ?6)"
             )
                 .bind(&token)
                 .bind(&users_id)
                 .bind(&issued_on)
                 .bind(&expires_on)
+                .bind(&authenticated)
+                .bind(&verified)
                 .execute(&mut *conn)
                 .await;
 
@@ -159,12 +178,11 @@ impl Session {
         })
     }
 
-    pub async fn retrieve_token(conn: &mut db::DbConn, token: &Token) -> Result<Option<Self>, error::Error> {
+    pub async fn retrieve_token(conn: &mut db::DbConn, token: &Token) -> Result<Option<Self>, sqlx::Error> {
         let maybe = sqlx::query("select * from authn_sessions where token = ?1")
             .bind(token)
             .fetch_optional(&mut *conn)
-            .await
-            .context("failed to retrieve authn_session record from database")?;
+            .await?;
 
         if let Some(row) = maybe {
             Ok(Some(Session {
@@ -182,8 +200,17 @@ impl Session {
     }
 
     pub fn build_cookie(&self) -> cookie::SetCookie {
-        cookie::SetCookie::new("session_id", self.token.as_base64())
+        cookie::SetCookie::new(SESSION_ID_KEY, self.token.as_base64())
             .with_expires(self.expires_on.clone())
+            .with_path("/")
+            .with_secure(true)
+            .with_http_only(true)
+            .with_same_site(cookie::SameSite::Strict)
+    }
+
+    pub fn clear_cookie() -> cookie::SetCookie {
+        cookie::SetCookie::new(SESSION_ID_KEY, "")
+            .with_max_age(std::time::Duration::from_secs(0))
             .with_path("/")
             .with_secure(true)
             .with_http_only(true)
@@ -191,3 +218,20 @@ impl Session {
     }
 }
 
+pub fn find_session_id<'a>(headers: &'a HeaderMap) -> Result<Option<&'a str>, axum::http::header::ToStrError> {
+    for cookie in headers.get_all("cookie") {
+        let cookie_str = cookie.to_str()?;
+
+        for sub_cookie in cookie_str.split("; ") {
+            let Some((key, value)) = sub_cookie.split_once('=') else {
+                continue;
+            };
+
+            if key == SESSION_ID_KEY {
+                return Ok(Some(value))
+            }
+        }
+    }
+
+    Ok(None)
+}

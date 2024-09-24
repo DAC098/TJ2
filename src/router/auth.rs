@@ -1,7 +1,7 @@
 use argon2::{Argon2, PasswordVerifier};
 use argon2::password_hash::PasswordHash;
 use axum::Form;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, HeaderMap};
 use axum::body::Body;
 use axum::response::Response;
 use tera::Context as TeraContext;
@@ -10,12 +10,14 @@ use sqlx::Row;
 
 use crate::state;
 use crate::error::{self, Context};
-use crate::sec::authn::session::Session;
+use crate::sec::authn::{Session, Initiator, InitiatorError};
+use crate::sec::authn::session::SessionOptions;
 
 fn respond_login_page(
     state: &state::SharedState,
     user_found: bool,
-    invalid_password: bool
+    invalid_password: bool,
+    clear_session_id: bool,
 ) -> Result<Response, error::Error> {
     let mut login_context = TeraContext::new();
     login_context.insert("user_not_found", &user_found);
@@ -25,18 +27,76 @@ fn respond_login_page(
         .render("pages/login", &login_context)
         .context("failed to render the login page")?;
 
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/html; charset=utf-8")
-        .header("content-length", login_render.len())
-        .body(login_render.into())
+        .header("content-length", login_render.len());
+
+    if clear_session_id {
+        builder = builder.header("set-cookie", Session::clear_cookie());
+    }
+
+    builder.body(login_render.into())
         .context("failed to create login page response")
 }
 
 pub async fn login(
     state: state::SharedState,
+    headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    respond_login_page(&state, false, false)
+    let mut conn = state.db()
+        .acquire()
+        .await
+        .context("failed to retrieve database connection")?;
+
+    let result = Initiator::from_headers(&mut conn, &headers)
+        .await;
+
+    match result {
+        Ok(_) => {
+            tracing::debug!("session for initiator is valid");
+
+            Response::builder()
+                .status(StatusCode::FOUND)
+                .header("location", "/")
+                .body(Body::empty())
+                .context("failed to create redirect response")
+        }
+        Err(err) => match err {
+            InitiatorError::SessionIdNotFound => {
+                tracing::debug!("session id not found");
+
+                respond_login_page(&state, false, false, false)
+            }
+            InitiatorError::SessionNotFound |
+            InitiatorError::UserNotFound(_) |
+            InitiatorError::Unauthenticated(_) |
+            InitiatorError::Unverified(_) |
+            InitiatorError::SessionExpired(_) => {
+                tracing::debug!("problem with session");
+
+                respond_login_page(&state, false, false, true)
+            }
+            InitiatorError::HeaderStr(err) => {
+                Err(error::Error::context_source(
+                    "error when parsing cookie headers",
+                    err
+                ))
+            }
+            InitiatorError::Token(err) => {
+                Err(error::Error::context_source(
+                    "invalid session token",
+                    err
+                ))
+            }
+            InitiatorError::Db(err) => {
+                Err(error::Error::context_source(
+                    "database error when retrieving session",
+                    err
+                ))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,10 +123,10 @@ pub async fn request_login(
         .context("database error when searching for login username")?;
 
     let Some(found_user) = maybe_user else {
-        return respond_login_page(&state, true, false);
+        return respond_login_page(&state, true, false, true);
     };
 
-    let user_id: i64 = found_user.get(0);
+    let users_id: i64 = found_user.get(0);
     //let user_uid: String = found_user.get(1);
     //let username: String = found_user.get(2);
     let password: String = found_user.get(3);
@@ -85,10 +145,14 @@ pub async fn request_login(
     if let Err(err) = argon_config.verify_password(login.password.as_bytes(), &parsed_hash) {
         tracing::debug!("verify_password failed: {err:#?}");
 
-        return respond_login_page(&state, false, true);
+        return respond_login_page(&state, false, true, true);
     }
 
-    let session = Session::create(&mut *conn, user_id, chrono::Duration::days(7))
+    let mut options = SessionOptions::new(users_id);
+    options.authenticated = true;
+    options.verified = true;
+
+    let session = Session::create(&mut *conn, options)
         .await
         .context("failed to create session for login")?;
 
