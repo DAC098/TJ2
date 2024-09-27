@@ -1,6 +1,7 @@
 use argon2::{Argon2, PasswordVerifier};
 use argon2::password_hash::PasswordHash;
 use axum::Form;
+use axum::extract::Query;
 use axum::http::{StatusCode, HeaderMap};
 use axum::body::Body;
 use axum::response::Response;
@@ -13,15 +14,31 @@ use crate::error::{self, Context};
 use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
 
-fn respond_login_page(
-    state: &state::SharedState,
-    user_found: bool,
+#[derive(Debug, Default)]
+struct LoginPageOptions {
+    user_not_found: bool,
     invalid_password: bool,
     clear_session_id: bool,
+    prev: Option<String>,
+}
+
+fn respond_login_page(
+    state: &state::SharedState,
+    options: LoginPageOptions,
 ) -> Result<Response, error::Error> {
     let mut login_context = TeraContext::new();
-    login_context.insert("user_not_found", &user_found);
-    login_context.insert("invalid_password", &invalid_password);
+    login_context.insert("user_not_found", &options.user_not_found);
+    login_context.insert("invalid_password", &options.invalid_password);
+
+    let post_url = if let Some(prev) = options.prev {
+        let encoded = urlencoding::encode(&prev);
+
+        format!("/login?prev={encoded}")
+    } else {
+        "/login".to_owned()
+    };
+
+    login_context.insert("post_url", &post_url);
 
     let login_render = state.templates()
         .render("pages/login", &login_context)
@@ -32,7 +49,7 @@ fn respond_login_page(
         .header("content-type", "text/html; charset=utf-8")
         .header("content-length", login_render.len());
 
-    if clear_session_id {
+    if options.clear_session_id {
         builder = builder.header("set-cookie", Session::clear_cookie());
     }
 
@@ -40,8 +57,31 @@ fn respond_login_page(
         .context("failed to create login page response")
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LoginQuery {
+    prev: Option<String>
+}
+
+impl LoginQuery {
+    fn get_prev(&self) -> Option<String> {
+        if let Some(prev) = &self.prev {
+            match urlencoding::decode(prev) {
+                Ok(cow) => Some(cow.into_owned()),
+                Err(err) => {
+                    tracing::warn!("failed to decode login prev query: {err}");
+
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+}
+
 pub async fn login(
     state: state::SharedState,
+    Query(query): Query<LoginQuery>,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db()
@@ -56,9 +96,12 @@ pub async fn login(
         Ok(_) => {
             tracing::debug!("session for initiator is valid");
 
+            let location = query.get_prev()
+                .unwrap_or("/".to_owned());
+
             Response::builder()
                 .status(StatusCode::FOUND)
-                .header("location", "/")
+                .header("location", location)
                 .body(Body::empty())
                 .context("failed to create redirect response")
         }
@@ -66,7 +109,12 @@ pub async fn login(
             InitiatorError::SessionIdNotFound => {
                 tracing::debug!("session id not found");
 
-                respond_login_page(&state, false, false, false)
+                let options = LoginPageOptions {
+                    prev: query.get_prev(),
+                    ..Default::default()
+                };
+
+                respond_login_page(&state, options)
             }
             InitiatorError::SessionNotFound |
             InitiatorError::UserNotFound(_) |
@@ -75,7 +123,13 @@ pub async fn login(
             InitiatorError::SessionExpired(_) => {
                 tracing::debug!("problem with session");
 
-                respond_login_page(&state, false, false, true)
+                let options = LoginPageOptions {
+                    prev: query.get_prev(),
+                    clear_session_id: true,
+                    ..Default::default()
+                };
+
+                respond_login_page(&state, options)
             }
             InitiatorError::HeaderStr(err) => {
                 Err(error::Error::context_source(
@@ -107,6 +161,7 @@ pub struct LoginRequest {
 
 pub async fn request_login(
     state: state::SharedState,
+    Query(query): Query<LoginQuery>,
     Form(login): Form<LoginRequest>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db()
@@ -123,7 +178,14 @@ pub async fn request_login(
         .context("database error when searching for login username")?;
 
     let Some(found_user) = maybe_user else {
-        return respond_login_page(&state, true, false, true);
+        let options = LoginPageOptions {
+            prev: query.get_prev(),
+            user_not_found: true,
+            clear_session_id: true,
+            ..Default::default()
+        };
+
+        return respond_login_page(&state, options)
     };
 
     let users_id: i64 = found_user.get(0);
@@ -145,7 +207,14 @@ pub async fn request_login(
     if let Err(err) = argon_config.verify_password(login.password.as_bytes(), &parsed_hash) {
         tracing::debug!("verify_password failed: {err:#?}");
 
-        return respond_login_page(&state, false, true, true);
+        let options = LoginPageOptions {
+            prev: query.get_prev(),
+            invalid_password: true,
+            clear_session_id: true,
+            ..Default::default()
+        };
+
+        return respond_login_page(&state, options);
     }
 
     let mut options = SessionOptions::new(users_id);
@@ -162,9 +231,12 @@ pub async fn request_login(
         .await
         .context("failed to commit transaction for login")?;
 
+    let location = query.get_prev()
+        .unwrap_or("/".to_owned());
+
     Response::builder()
         .status(StatusCode::FOUND)
-        .header("location", "/")
+        .header("location", location)
         .header("set-cookie", session_cookie)
         .body(Body::empty())
         .context("failed to create login redirect response")

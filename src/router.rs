@@ -3,7 +3,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
-use axum::http::{Request, StatusCode};
+use axum::http::{Uri, Request, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use tower::ServiceBuilder;
@@ -18,6 +18,9 @@ use crate::error::{self, Context};
 mod layer;
 mod assets;
 
+pub mod responses;
+pub mod macros;
+
 mod auth;
 
 async fn ping() -> (StatusCode, &'static str) {
@@ -26,7 +29,16 @@ async fn ping() -> (StatusCode, &'static str) {
 
 async fn retrieve_root(
     state: state::SharedState,
+    uri: Uri,
+    headers: HeaderMap,
 ) -> Result<Response, error::Error> {
+    let mut conn = state.db()
+        .acquire()
+        .await
+        .context("failed to retrieve database connection")?;
+
+    macros::require_initiator!(&mut conn, &headers, Some(uri));
+
     let mut context = TeraContext::new();
     context.insert("title", &"Root Page");
 

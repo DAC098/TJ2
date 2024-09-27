@@ -2,8 +2,8 @@
 
 {% block title %}Login{% endblock title %}
 {% block body %}
-<div class="w-full h-full">
-    <form action="/login" method="post" class="mx-auto my-auto">
+<div class="flex w-full h-full">
+    <form action="{{post_url}}" method="post" class="mx-auto my-auto">
         <div>
             <div>
                 {{ self::input(id="username", name="username", title="Username") }}
