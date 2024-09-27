@@ -129,6 +129,7 @@ where
     log_prefix_error("error stack", err)
 }
 
+/*
 macro_rules! simple_from {
     ($e:path) => {
         impl From<$e> for crate::error::api::Error {
@@ -147,6 +148,7 @@ macro_rules! simple_from {
 }
 
 pub(crate) use simple_from;
+*/
 
 impl From<Infallible> for Error {
     fn from(_: Infallible) -> Self {

@@ -241,3 +241,47 @@ pub async fn request_login(
         .body(Body::empty())
         .context("failed to create login redirect response")
 }
+
+pub async fn request_logout(
+    state: state::SharedState,
+    headers: HeaderMap,
+) -> Result<Response, error::Error> {
+    let mut conn = state.db()
+        .begin()
+        .await
+        .context("failed to retrieve database transaction")?;
+
+    match Initiator::from_headers(&mut conn, &headers).await {
+        Ok(initiator) => initiator.session.delete(&mut conn)
+            .await
+            .context("failed to delete session from database")?,
+        Err(err) => match err{
+            InitiatorError::UserNotFound(session) |
+            InitiatorError::Unauthenticated(session) |
+            InitiatorError::Unverified(session) |
+            InitiatorError::SessionExpired(session) =>
+                session.delete(&mut conn)
+                    .await
+                    .context("failed to delete session from database")?,
+            InitiatorError::HeaderStr(_err) => {}
+            InitiatorError::Token(_err) => {}
+            InitiatorError::Db(err) =>
+                return Err(error::Error::context_source(
+                    "database error when retrieving session",
+                    err
+                )),
+            _ => {}
+        }
+    }
+
+    conn.commit()
+        .await
+        .context("failed to commit transaction")?;
+
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header("location", "/login")
+        .header("set-cookie", Session::clear_cookie())
+        .body(Body::empty())
+        .context("failed to create login redirect response")
+}

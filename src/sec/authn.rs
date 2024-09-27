@@ -38,8 +38,8 @@ pub enum InitiatorError {
 
 #[derive(Debug)]
 pub struct Initiator {
-    user: i64,
-    session: Session,
+    pub user: i64,
+    pub session: Session,
 }
 
 impl Initiator {

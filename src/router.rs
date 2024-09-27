@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::http::{Uri, Request, HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 use tower_http::classify::ServerErrorsFailureClass;
@@ -71,6 +71,7 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/ping", get(ping))
         .route("/login", get(auth::login)
             .post(auth::request_login))
+        .route("/logout", post(auth::request_logout))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())

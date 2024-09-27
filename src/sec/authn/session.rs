@@ -198,6 +198,15 @@ impl Session {
         }
     }
 
+    pub async fn delete(&self, conn: &mut db::DbConn) -> Result<(), sqlx::Error> {
+        sqlx::query("delete from authn_sessions where token = ?1")
+            .bind(&self.token)
+            .execute(&mut *conn)
+            .await?;
+
+        Ok(())
+    }
+
     pub fn build_cookie(&self) -> cookie::SetCookie {
         cookie::SetCookie::new(SESSION_ID_KEY, self.token.as_base64())
             .with_expires(self.expires_on)
