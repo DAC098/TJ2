@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs::read_dir;
-use std::path::Path;
+use std::path::{PathBuf, Path};
 
 use tera::Tera;
 
@@ -10,16 +10,21 @@ use crate::path::metadata;
 
 pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
     let mut tera = Tera::default();
+    let mut files = Vec::new();
 
     load_dir(
-        &mut tera,
+        &mut files,
         &config.settings.templates.directory,
         &config.settings.templates.directory
     )?;
 
+    tera.add_template_files(files)
+        .context("failed to add template files")?;
+
     let mut required = HashSet::from([
         "pages/index",
         "pages/login",
+        "pages/entries",
     ]);
 
     for name in tera.get_template_names() {
@@ -42,7 +47,7 @@ pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
     Ok(tera)
 }
 
-fn load_dir(tera: &mut Tera, root: &Path, dir: &Path) -> Result<(), error::Error> {
+fn load_dir(files: &mut Vec<(PathBuf, Option<String>)>, root: &Path, dir: &Path) -> Result<(), error::Error> {
     let reader = read_dir(dir)
         .context(format!("failed to read directory: \"{}\"", dir.display()))?;
 
@@ -66,11 +71,15 @@ fn load_dir(tera: &mut Tera, root: &Path, dir: &Path) -> Result<(), error::Error
                     continue;
                 };
 
-                tera.add_template_file(&entry_path, Some(&name))
-                    .context(format!("failed to add template file: \"{}\"", entry_path.display()))?;
+                let name = name.to_owned();
+
+                files.push((entry_path, Some(name)));
+
+                //tera.add_template_file(&entry_path, Some(&name))
+                    //.context(format!("failed to add template file: \"{}\"", entry_path.display()))?;
             }
         } else if meta.is_dir() {
-            load_dir(tera, root, &entry_path)?;
+            load_dir(files, root, &entry_path)?;
         }
     }
 
