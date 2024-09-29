@@ -1,0 +1,32 @@
+{% extends "pages/main_wrapper" %}
+
+{% block title %}Entries{% endblock title %}
+{% block main %}
+<h1>Entries</h1>
+<table>
+    <thead>
+        <tr class="sticky top-0 bg-white">
+            <th>Date</th>
+            <th>Tags</th>
+            <th>Mod</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in entries %}
+        <tr>
+            <td>{{entry.date}}</td>
+            <td>
+                {% for key, value in entry.tags %}
+                {{key}}
+                {% endfor %}
+            </td>
+            {% if entry.updated %}
+            <td>{{entry.updated}} (U)</td>
+            {% else %}
+            <td>{{entry.created}} (C)</td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock body %}

@@ -22,6 +22,7 @@ pub mod responses;
 pub mod macros;
 
 mod auth;
+mod entries;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -72,6 +73,7 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/login", get(auth::login)
             .post(auth::request_login))
         .route("/logout", post(auth::request_logout))
+        .route("/entries", get(entries::retrieve_entries))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())

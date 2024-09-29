@@ -1,0 +1,16 @@
+{% extends "pages/base" %}
+
+{% block body %}
+<div class="flex flex-row flex-nowrap w-full h-full">
+    <nav class="flex-none w-40">
+        <div>
+            <form action="/logout" method="post">
+                <button type="submit">Logout</button>
+            </form>
+        </div>
+    </nav>
+    <main class="relative flex-auto overflow-scroll">
+        {% block main %}{% endblock main %}
+    </main>
+</div>
+{% endblock body %}

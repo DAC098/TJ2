@@ -38,7 +38,7 @@ pub enum InitiatorError {
 
 #[derive(Debug)]
 pub struct Initiator {
-    pub user: i64,
+    pub users_id: i64,
     pub session: Session,
 }
 
@@ -81,7 +81,7 @@ impl Initiator {
         };
 
         Ok(Initiator {
-            user: user_row.get(0),
+            users_id: user_row.get(0),
             session,
         })
     }

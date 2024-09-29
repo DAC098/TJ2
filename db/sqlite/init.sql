@@ -69,3 +69,30 @@ CREATE TABLE group_roles (
     FOREIGN KEY (group_id) REFERENCES groups (id),
     FOREIGN KEY (role_id) REFERENCES authz_roles (id)
 );
+
+CREATE TABLE journal (
+    id INTEGER PRIMARY KEY NOT NULL,
+    users_id INTEGER NOT NULL,
+    entry_date DATE NOT NULL,
+    created DATETIME NOT NULL,
+    updated DATETIME,
+    FOREIGN KEY (users_id) REFERENCES users (id)
+);
+
+CREATE TABLE journal_text (
+    id INTEGER PRIMARY KEY NOT NULL,
+    journal_id INTEGER NOT NULL,
+    contents TEXT NOT NULL,
+    created DATETIME NOT NULL,
+    updated DATETIME,
+    FOREIGN KEY (journal_id) REFERENCES journal (id)
+);
+
+CREATE TABLE journal_tags (
+    journal_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    created DATETIME NOT NULL,
+    updated DATETIME,
+    FOREIGN KEY (journal_id) REFERENCES journal (id)
+);
