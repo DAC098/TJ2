@@ -4,13 +4,14 @@ use axum::Form;
 use axum::extract::Query;
 use axum::http::{StatusCode, HeaderMap};
 use axum::body::Body;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use tera::Context as TeraContext;
 use serde::Deserialize;
 use sqlx::Row;
 
 use crate::state;
 use crate::error::{self, Context};
+use crate::router::responses::Html;
 use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
 
@@ -44,17 +45,13 @@ fn respond_login_page(
         .render("pages/login", &login_context)
         .context("failed to render the login page")?;
 
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/html; charset=utf-8")
-        .header("content-length", login_render.len());
+    let mut html = Html::new(login_render);
 
     if options.clear_session_id {
-        builder = builder.header("set-cookie", Session::clear_cookie());
+        html = html.header("set-cookie", Session::clear_cookie());
     }
 
-    builder.body(login_render.into())
-        .context("failed to create login page response")
+    Ok(html.into_response())
 }
 
 #[derive(Debug, Deserialize)]

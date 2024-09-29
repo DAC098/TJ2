@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use axum::http::{StatusCode, HeaderMap, Uri};
-use axum::response::Response;
+use axum::http::{HeaderMap, Uri};
+use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
 use futures::StreamExt;
 use tera::Context as TeraContext;
@@ -11,6 +11,7 @@ use sqlx::Row;
 use crate::state;
 use crate::error::{self, Context};
 use crate::router::macros;
+use crate::router::responses::Html;
 
 #[derive(Debug, Serialize)]
 pub struct JournalEntry {
@@ -116,10 +117,5 @@ pub async fn retrieve_entries(
         .render("pages/entries", &context)
         .context("failed to render entries page")?;
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/html; charset=utf-8")
-        .header("content-length", page_entries.len())
-        .body(page_entries.into())
-        .context("failed to create retrieve entries response")
+    Ok(Html::new(page_entries).into_response())
 }
