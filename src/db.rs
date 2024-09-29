@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use sqlx::{Connection, ConnectOptions};
+use sqlx::{Connection, ConnectOptions, Row};
 use sqlx::sqlite::{
     SqlitePool,
     SqlitePoolOptions,
@@ -12,6 +12,9 @@ use sqlx::sqlite::{
 use crate::error::{Error, Context};
 use crate::config::{Config, meta::get_cwd};
 use crate::path::metadata;
+
+mod ids;
+mod test_data;
 
 pub type DbPool = SqlitePool;
 pub type DbConn = SqliteConnection;
@@ -83,17 +86,22 @@ async fn init_database(conn: &mut SqliteConnection) -> Result<(), Error> {
         .context("failed to check if admin user was found")?;
 
     if maybe_found.is_none() {
-        create_admin_user(conn).await?;
+        let mut rng = rand::thread_rng();
+        let admin_id = create_admin_user(conn).await?;
+
+        test_data::create_data(conn, &mut rng, admin_id).await?;
+        test_data::create_rand_users(conn, &mut rng).await?;
     }
 
     Ok(())
 }
 
-async fn create_admin_user(conn: &mut SqliteConnection) -> Result<(), Error> {
+async fn create_admin_user(conn: &mut DbConn) -> Result<i64, Error> {
     use argon2::Argon2;
     use argon2::password_hash::{PasswordHasher, SaltString};
     use argon2::password_hash::rand_core::OsRng;
 
+    let uid = ids::UserUid::gen();
     let password = b"password";
     let salt = SaltString::generate(&mut OsRng);
 
@@ -107,18 +115,19 @@ async fn create_admin_user(conn: &mut SqliteConnection) -> Result<(), Error> {
         }
     };
 
-    sqlx::query(
+    let result = sqlx::query(
         "\
         insert into users (uid, username, password, version) values \
-        (?1, ?2, ?3, ?4)"
+        (?1, ?2, ?3, ?4) \
+        returning id"
     )
-        .bind("")
+        .bind(uid)
         .bind("admin")
         .bind(&password_hash)
         .bind(0)
-        .execute(&mut *conn)
+        .fetch_one(&mut *conn)
         .await
         .context("failed to create admin user")?;
 
-    Ok(())
+    Ok(result.get(0))
 }
