@@ -6,5 +6,7 @@
 /certs/localhost.rsa.*
 
 /frontend/assets/stylesheet.css
+/frontend/assets/index.js
+/frontend/assets/**/*.map
 
 server.config.toml

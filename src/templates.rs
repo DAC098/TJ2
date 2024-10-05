@@ -25,6 +25,7 @@ pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
         "pages/index",
         "pages/login",
         "pages/entries",
+        "pages/spa",
     ]);
 
     for name in tera.get_template_names() {

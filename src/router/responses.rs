@@ -3,6 +3,8 @@ use axum::http::{Uri, StatusCode, HeaderName, HeaderValue};
 use axum::http::response::Builder;
 use axum::response::{IntoResponse, Response};
 
+use crate::error::{self, Context};
+
 pub fn login_redirect(maybe_prev: Option<Uri>) -> Response {
     let location = if let Some(prev) = maybe_prev {
         if let Some(path_query) = prev.path_and_query() {
@@ -21,6 +23,20 @@ pub fn login_redirect(maybe_prev: Option<Uri>) -> Response {
         .header("location", location)
         .body(Body::empty())
         .unwrap()
+}
+
+pub fn spa_html(templates: &tera::Tera) -> Result<Response, error::Error> {
+    let context = tera::Context::new();
+
+    let page_index = templates.render("pages/spa", &context)
+        .context("failed to render index page")?;
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/html; charset=utf-8")
+        .header("content-length", page_index.len())
+        .body(page_index.into())
+        .context("failed create response")
 }
 
 pub struct Html<T = String>{

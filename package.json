@@ -4,10 +4,24 @@
   "description": "",
   "scripts": {
     "build-css": "npx tailwindcss -i ./frontend/css/input.css -o ./frontend/assets/stylesheet.css",
-    "watch-css": "npx tailwindcss -w -i ./frontend/css/input.css -o ./frontend/assets/stylesheet.css"
+    "watch-css": "npx tailwindcss -w -i ./frontend/css/input.css -o ./frontend/assets/stylesheet.css",
+    "build-tsx": "rollup --config ./rollup.config.mjs",
+    "watch-tsx": "rollup --config ./rollup.config.mjs --watch"
   },
   "dependencies": {
     "htmx.org": "^2.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
     "tailwindcss": "^3.4.12"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.0",
+    "@rollup/plugin-node-resolve": "^15.3.0",
+    "@rollup/plugin-replace": "^6.0.1",
+    "@rollup/plugin-typescript": "^12.1.0",
+    "rollup": "^4.24.0",
+    "tslib": "^2.7.0",
+    "typescript": "^5.6.2"
   }
 }

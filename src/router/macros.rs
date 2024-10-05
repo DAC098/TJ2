@@ -32,3 +32,24 @@ macro_rules! require_initiator {
 }
 
 pub(crate) use require_initiator;
+
+macro_rules! res_if_html {
+    ($templates:expr, $headers:expr) => {
+        let Ok(is_html) = crate::header::is_accepting_html($headers) else {
+            let body = "invalid characters in accept header";
+
+            return Ok(axum::response::Response::builder()
+                .status(axum::http::StatusCode::BAD_REQUEST)
+                .header("content-type", "text/plain; charset=utf-8")
+                .header("content-length", body.len())
+                .body(axum::body::Body::from(body))
+                .unwrap());
+        };
+
+        if is_html {
+            return crate::router::responses::spa_html($templates)
+        }
+    }
+}
+
+pub(crate) use res_if_html;

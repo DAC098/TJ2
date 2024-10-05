@@ -1,17 +1,16 @@
 use std::collections::HashMap;
 
-use axum::http::{HeaderMap, Uri};
+use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
 use futures::StreamExt;
-use tera::Context as TeraContext;
 use serde::Serialize;
 use sqlx::Row;
 
 use crate::state;
 use crate::error::{self, Context};
+use crate::router::body;
 use crate::router::macros;
-use crate::router::responses::Html;
 
 #[derive(Debug, Serialize)]
 pub struct JournalEntry {
@@ -24,15 +23,20 @@ pub struct JournalEntry {
 
 pub async fn retrieve_entries(
     state: state::SharedState,
-    uri: Uri,
-    headers: HeaderMap,
+    req: Request,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db()
         .acquire()
         .await
         .context("failed to retrieve database connection")?;
 
-    let initiator = macros::require_initiator!(&mut conn, &headers, Some(uri));
+    macros::res_if_html!(state.templates(), req.headers());
+
+    let initiator = macros::require_initiator!(
+        &mut conn,
+        req.headers(),
+        Some(req.uri().clone())
+    );
 
     let mut fut_entries = sqlx::query(
         "\
@@ -110,12 +114,5 @@ pub async fn retrieve_entries(
         found.push(curr);
     }
 
-    let mut context = TeraContext::new();
-    context.insert("entries", &found);
-
-    let page_entries = state.templates()
-        .render("pages/entries", &context)
-        .context("failed to render entries page")?;
-
-    Ok(Html::new(page_entries).into_response())
+    Ok(body::Json(found).into_response())
 }

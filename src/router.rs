@@ -4,13 +4,13 @@ use axum::Router;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::http::{Uri, Request, HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{Response, IntoResponse};
 use axum::routing::{get, post};
 use tower::ServiceBuilder;
 use tower_http::trace::TraceLayer;
 use tower_http::classify::ServerErrorsFailureClass;
-use tera::Context as TeraContext;
 use tracing::Span;
+use serde::Serialize;
 
 use crate::state;
 use crate::error::{self, Context};
@@ -20,12 +20,18 @@ mod assets;
 
 pub mod responses;
 pub mod macros;
+pub mod body;
 
 mod auth;
 mod entries;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
+}
+
+#[derive(Debug, Serialize)]
+pub struct RootJson {
+    message: String
 }
 
 async fn retrieve_root(
@@ -39,20 +45,11 @@ async fn retrieve_root(
         .context("failed to retrieve database connection")?;
 
     macros::require_initiator!(&mut conn, &headers, Some(uri));
+    macros::res_if_html!(state.templates(), &headers);
 
-    let mut context = TeraContext::new();
-    context.insert("title", &"Root Page");
-
-    let page_index = state.templates()
-        .render("pages/index", &context)
-        .context("failed to render index page")?;
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/html; charset=utf-8")
-        .header("content-length", page_index.len())
-        .body(page_index.into())
-        .context("failed create response")
+    Ok(body::Json(RootJson {
+        message: String::from("okay")
+    }).into_response())
 }
 
 async fn handle_error<E>(error: E) -> error::Error
