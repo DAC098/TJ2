@@ -6,9 +6,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use sqlx::Transaction;
+use sqlx::pool::PoolConnection;
 
 use crate::config;
-use crate::error;
+use crate::error::{self, Context};
 use crate::db;
 use crate::templates;
 
@@ -40,6 +42,18 @@ impl SharedState {
 
     pub fn db(&self) -> &db::DbPool {
         &self.0.db_pool
+    }
+
+    pub async fn acquire_conn(&self) -> Result<PoolConnection<db::Db>, error::Error> {
+        self.0.db_pool.acquire()
+            .await
+            .context("failed to retrieve database connection")
+    }
+
+    pub async fn begin_conn(&self) -> Result<Transaction<'_, db::Db>, error::Error> {
+        self.0.db_pool.begin()
+            .await
+            .context("failed to retrieve transactional database connection")
     }
 }
 

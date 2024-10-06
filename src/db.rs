@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use sqlx::{Connection, ConnectOptions, Row};
 use sqlx::sqlite::{
+    Sqlite,
     SqlitePool,
     SqlitePoolOptions,
     SqliteConnectOptions,
@@ -16,6 +17,7 @@ use crate::path::metadata;
 mod ids;
 mod test_data;
 
+pub type Db = Sqlite;
 pub type DbPool = SqlitePool;
 pub type DbConn = SqliteConnection;
 

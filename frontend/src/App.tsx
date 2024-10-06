@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 
 import Entries from "./Entries";
+import Entry from "./Entry";
 
 const App = () => {
     return <div className="flex flex-row flex-nowrap w-full h-full">
@@ -23,7 +24,7 @@ const App = () => {
             <Routes>
                 <Route path="/" element={<div>root page</div>}/>
                 <Route path="/entries" element={<Entries />}/>
-                <Route path="/entries/:entry_date" element={<div>entry page</div>}/>
+                <Route path="/entries/:entry_date" element={<Entry />}/>
             </Routes>
         </main>
     </div>

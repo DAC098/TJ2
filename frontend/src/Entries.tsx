@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 
 interface JournalEntry {
     id: number,
@@ -52,8 +53,6 @@ const Entries = () => {
         });
     }, []);
 
-    console.log("entries:", entries);
-
     let entry_rows = [];
 
     for (let entry of entries) {
@@ -65,10 +64,19 @@ const Entries = () => {
 
         let mod = entry.updated != null ? entry.updated : entry.created;
 
-        entry_rows.push(<tr key={entry.date}>
-            <td>{entry.date}</td>
+        entry_rows.push(<tr key={entry.id}>
+            <td>
+                <Link to={`/entries/${entry.date}`}>{entry.date}</Link>
+            </td>
+            <td>{entry.title}</td>
             <td>{tags}</td>
             <td>{mod}</td>
+        </tr>);
+    }
+
+    if (entry_rows.length === 0) {
+        entry_rows.push(<tr key={0}>
+            <td colSpan={4}>No Entries</td>
         </tr>);
     }
 
@@ -80,6 +88,7 @@ const Entries = () => {
                 <thead>
                     <tr className="sticky top-0 bg-white">
                         <th>Date</th>
+                        <th>Title</th>
                         <th>Tags</th>
                         <th>Mod</th>
                     </tr>

@@ -19,7 +19,11 @@ pub async fn create_rand_users(conn: &mut DbConn, rng: &mut ThreadRng) -> Result
 
         let users_id = create_user(conn, &username, password).await?;
 
-        create_data(conn, rng, users_id).await?;
+        tracing::debug!("create new user: id {users_id}");
+
+        create_data(conn, rng, users_id)
+            .await
+            .context("failed to create test data for rand user")?;
     }
 
     Ok(())
@@ -27,12 +31,14 @@ pub async fn create_rand_users(conn: &mut DbConn, rng: &mut ThreadRng) -> Result
 
 pub async fn create_data(conn: &mut DbConn, rng: &mut ThreadRng, users_id: i64) -> Result<(), Error> {
     let today = Utc::now();
-    let total_entries = rng.gen_range(50..=240);
+    let total_entries = rng.gen_range(50..=240) + 1;
 
-    for count in 0..total_entries {
+    for count in 1..total_entries {
         let date = today.date_naive()
             .checked_sub_days(Days::new(count))
             .unwrap();
+
+        tracing::debug!("creating entry: {date}");
 
         create_journal_entry(conn, rng, users_id, date).await?;
     }
@@ -48,14 +54,16 @@ async fn create_journal_entry(conn: &mut DbConn, rng: &mut ThreadRng, users_id: 
 
     let created = gen_created(rng, date);
     let updated = gen_updated(rng, dist, date);
+    let title = gen_entry_title(rng, dist);
 
     let result = sqlx::query(
         "\
-        insert into journal (users_id, entry_date, created, updated) \
-        values (?1, ?2, ?3, ?4) \
+        insert into journal (users_id, title, entry_date, created, updated) \
+        values (?1, ?2, ?3, ?4, ?5) \
         returning id"
     )
         .bind(users_id)
+        .bind(title)
         .bind(date)
         .bind(created)
         .bind(updated)
@@ -83,7 +91,6 @@ async fn create_journal_entry(conn: &mut DbConn, rng: &mut ThreadRng, users_id: 
             .await
             .context("failed to insert journal tag")?;
     }
-
 
     Ok(())
 }
@@ -174,3 +181,13 @@ fn gen_updated(rng: &mut ThreadRng, dist: Bernoulli, date: NaiveDate) -> Option<
     }
 }
 
+fn gen_entry_title(rng: &mut ThreadRng, dist: Bernoulli) -> Option<String> {
+    if rng.sample(dist) {
+        let len = rng.gen_range(12..24);
+
+        Some((0..len).map(|_| rng.sample(Alphanumeric) as char)
+            .collect())
+    } else {
+        None
+    }
+}

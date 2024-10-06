@@ -74,18 +74,12 @@ CREATE TABLE journal (
     id INTEGER PRIMARY KEY NOT NULL,
     users_id INTEGER NOT NULL,
     entry_date DATE NOT NULL,
+    title TEXT,
+    contents TEXT,
     created DATETIME NOT NULL,
     updated DATETIME,
+    UNIQUE (users_id, entry_date),
     FOREIGN KEY (users_id) REFERENCES users (id)
-);
-
-CREATE TABLE journal_text (
-    id INTEGER PRIMARY KEY NOT NULL,
-    journal_id INTEGER NOT NULL,
-    contents TEXT NOT NULL,
-    created DATETIME NOT NULL,
-    updated DATETIME,
-    FOREIGN KEY (journal_id) REFERENCES journal (id)
 );
 
 CREATE TABLE journal_tags (
@@ -94,5 +88,6 @@ CREATE TABLE journal_tags (
     value TEXT,
     created DATETIME NOT NULL,
     updated DATETIME,
+    PRIMARY KEY (journal_id, key),
     FOREIGN KEY (journal_id) REFERENCES journal (id)
 );

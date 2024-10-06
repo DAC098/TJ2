@@ -5,9 +5,16 @@ use axum::response::{IntoResponse, Response};
 
 use crate::error::{self, Context};
 
-pub fn login_redirect(maybe_prev: Option<Uri>) -> Response {
+pub fn login_redirect<U>(maybe_prev: Option<U>) -> Response
+where
+    Uri: TryFrom<U>
+{
     let location = if let Some(prev) = maybe_prev {
-        if let Some(path_query) = prev.path_and_query() {
+        let Ok(uri): Result<Uri, _> = prev.try_into() else {
+            panic!("invalid uri given to login redirect");
+        };
+
+        if let Some(path_query) = uri.path_and_query() {
             let encoded = urlencoding::encode(path_query.as_str());
 
             format!("/login?prev={encoded}")
@@ -75,6 +82,17 @@ impl IntoResponse for Html<String> {
         self.builder
             .header("content-length", self.body.len())
             .body(self.body.into())
+            .unwrap()
+    }
+}
+
+impl IntoResponse for Html<&str> {
+    fn into_response(self) -> Response<Body> {
+        let owned = self.body.to_owned();
+
+        self.builder
+            .header("content-length", owned.len())
+            .body(owned.into())
             .unwrap()
     }
 }
