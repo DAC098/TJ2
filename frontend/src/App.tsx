@@ -17,6 +17,9 @@ const App = () => {
                 </button>
             </div>
             <div>
+                <Link to="/entries/new">New Entry</Link>
+            </div>
+            <div>
                 <Link to="/entries">Entries</Link>
             </div>
         </nav>

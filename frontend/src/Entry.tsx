@@ -1,44 +1,20 @@
 import { useState, useEffect, JSX } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
+import { useForm, useFieldArray, SubmitHandler,  } from "react-hook-form";
 
-interface JournalEntry {
-    id: number,
-    users_id: number,
-    date: string,
-    title: string | null,
-    contents: string | null,
-    created: string,
-    updated: string,
-    tags: JournalTag[],
-}
-
-interface JournalTag {
-    key: string,
-    value: string | null,
-    created: string,
-    updated: string | null,
-}
-
-function blank_entry(): JournalEntry {
-    let today = new Date();
-    let month = (today.getMonth() + 1)
-        .toString(10)
-        .padStart(2, '0');
-    let day = today.getDate()
-        .toString(10)
-        .padStart(2, '0');
-
-    return {
-        id: 0,
-        users_id: 0,
-        date: `${today.getFullYear()}-${month}-${day}`,
-        title: null,
-        contents: null,
-        created: today.toISOString(),
-        updated: null,
-        tags: []
-    };
-}
+import {
+    JournalEntry,
+    JournalTag,
+    EntryForm,
+    EntryTagForm,
+    get_date,
+    blank_form,
+    entry_to_form,
+    retrieve_entry,
+    create_entry,
+    update_entry,
+    delete_entry
+} from "./journal";
 
 interface EntrySecProps {
     title: JSX.Element,
@@ -60,105 +36,111 @@ const EntrySecTitle = ({title}: EntrySecTitleProps) => {
     return <span className="text-right">{title}</span>
 };
 
-interface EntryTagProps {
-    key?: string | number,
-    data: JournalTag
-}
-
-const EntryTag = ({key, data}: EntryTagProps) => {
-    let [tag_key, setTagKey] = useState(data.key);
-    let [tag_value, setTagValue] = useState(data.value ?? "");
-
-    return <div key={key}>
-        <input type="text" value={tag_key}/>
-        <input type="text" value={tag_value}/>
-    </div>
-};
-
 const Entry = () => {
-    let [entry, setEntry] = useState(blank_entry());
-    let [loading, setLoading] = useState(false);
+    const { entry_date } = useParams();
+    const navigate = useNavigate();
 
-    let { entry_date } = useParams();
+    const form = useForm<EntryForm>({
+        defaultValues: blank_form()
+    });
+    const tags = useFieldArray<EntryForm, "tags">({
+        control: form.control,
+        name: "tags"
+    });
+
+    let [loading, setLoading] = useState(true);
+
+    const onSubmit: SubmitHandler<EntryForm> = (data, event) => {
+        console.log(data);
+
+        if (entry_date == null || entry_date == "new") {
+            create_entry(data).then(result => {
+                console.log("created entry:", result);
+
+                navigate(`/entries/${result.date}`);
+
+                form.reset(entry_to_form(result));
+            }).catch(err => {
+                console.error("failed to create entry:", err);
+            })
+        } else {
+            update_entry(entry_date, data).then(result => {
+                console.log("updated entry:", result);
+            }).catch(err => {
+                console.error("failed to update entry:", err);
+            });
+        }
+    };
 
     useEffect(() => {
+        console.log("entry date:", entry_date);
+
         if (entry_date == null || entry_date == "new") {
+            console.log("resetting to blank");
+
+            form.reset(blank_form());
+
             return;
         }
 
-        setLoading(true);
+        retrieve_entry(entry_date).then(entry => {
+            console.log("resetting to entry:", entry);
 
-        fetch(`/entries/${entry_date}`).then(res => {
-            if (res.status == 404) {
-                console.log("failed to find entry");
-
-                return;
-            }
-
-            if (res.status !== 200) {
-                console.log("non 200 response status:", res);
-
-                return;
-            }
-
-            let content_type = res.headers.get("content-type");
-
-            if (content_type == null || content_type !== "application/json") {
-                console.log("unspecified content-type from response");
-
-                return;
-            }
-
-            if (content_type !== "application/json") {
-                console.log("non json content-type");
-
-                return;
-            }
-
-            return res.json();
-        }).then(json => {
-            if (json == null) {
-                return;
-            }
-
-            setEntry(() => {
-                return json as JournalEntry;
-            });
+            form.reset(entry_to_form(entry));
         }).catch(err => {
-            console.log("failed to retrieve entry:", err);
-        }).finally(() => {
-            setLoading(false);
+            console.error("failed to retrieve entry:", err);
         });
-    }, []);
+    }, [entry_date]);
 
-    let tags_ele = [];
+    return <form onSubmit={form.handleSubmit(onSubmit)}>
+        <div
+            className=""
+            style={{
+                display: "grid",
+                gridTemplateColumns: "10rem auto"
+            }}
+        >
+            <EntrySec title={<EntrySecTitle title="Date"/>}>
+                <input type="date" {...form.register("date")}/>
+            </EntrySec>
+            <EntrySec title={<EntrySecTitle title="Title"/>}>
+                <input type="text" {...form.register("title")}/>
+            </EntrySec>
+            <EntrySec title={<EntrySecTitle title="Contents"/>}>
+                <textarea {...form.register("contents")}/>
+            </EntrySec>
+            <EntrySec title={<EntrySecTitle title="Tags"/>}>
+                <button type="button" onClick={() => {
+                    tags.append({key: "", value: ""});
+                }}>Add</button>
+                {tags.fields.map((field, index) => {
+                    return <div key={field.id}>
+                        <button type="button" onClick={() => {
+                            tags.remove(index);
+                        }}>Drop</button>
+                        <input type="text" {...form.register(`tags.${index}.key`)}/>
+                        <input type="text" {...form.register(`tags.${index}.value`)}/>
+                    </div>
+                })}
+            </EntrySec>
+        </div>
+        <div>
+            <button type="submit">Save</button>
+            {entry_date != null && entry_date !== "new" ?
+                <button type="button" onClick={() => {
+                    delete_entry(entry_date).then(result => {
+                        console.log("deleted entry:", result);
 
-    for (let tag of entry.tags) {
-        tags_ele.push(<EntryTag key={tag.key} data={tag}/>);
-    }
-
-    console.log(entry);
-
-    return <div
-        className=""
-        style={{
-            display: "grid",
-            gridTemplateColumns: "10rem auto"
-        }}
-    >
-        <EntrySec title={<EntrySecTitle title="Date"/>}>
-            <input type="date" value={entry.date}/>
-        </EntrySec>
-        <EntrySec title={<EntrySecTitle title="Title"/>}>
-            <input type="text" value={entry.title ?? ""}/>
-        </EntrySec>
-        <EntrySec title={<EntrySecTitle title="Contents"/>}>
-            <textarea value={entry.contents ?? ""}/>
-        </EntrySec>
-        <EntrySec title={<EntrySecTitle title="Tags"/>}>
-            {tags_ele}
-        </EntrySec>
-    </div>;
+                        navigate("/entries");
+                    }).catch(err => {
+                        console.error("failed to delete journal entry");
+                    });
+                }}>Delete</button>
+                :
+                null
+            }
+        </div>
+    </form>
 };
 
 export default Entry;
