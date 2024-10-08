@@ -7,6 +7,7 @@ use bytes::{BytesMut, BufMut};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::error::{self, Context};
 use crate::error::log_prefix_error;
 use crate::state;
 
@@ -96,5 +97,57 @@ where
                 ))
             }
         }
+    }
+}
+
+pub struct Html<T = String>{
+    body: T
+}
+
+impl<T> Html<T> {
+    pub fn new(body: T) -> Self {
+        Self { body }
+    }
+}
+
+impl IntoResponse for Html<String> {
+    fn into_response(self) -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/html; charset=utf-8")
+            .header("content-length", self.body.len())
+            .body(self.body.into())
+            .unwrap()
+    }
+}
+
+impl IntoResponse for Html<&str> {
+    fn into_response(self) -> Response<Body> {
+        let owned = self.body.to_owned();
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/html; charset=utf-8")
+            .header("content-length", owned.len())
+            .body(owned.into())
+            .unwrap()
+    }
+}
+
+pub struct SpaPage(Html<String>);
+
+impl SpaPage {
+    pub fn new(templates: &tera::Tera) -> Result<Self, error::Error> {
+        let context = tera::Context::new();
+        let page_index = templates.render("pages/spa", &context)
+            .context("failed to render index page")?;
+
+        Ok(Self(Html::new(page_index)))
+    }
+}
+
+impl IntoResponse for SpaPage {
+    fn into_response(self) -> Response<Body> {
+        self.0.into_response()
     }
 }

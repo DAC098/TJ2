@@ -1,18 +1,31 @@
-import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
 
 import Entries from "./Entries";
 import Entry from "./Entry";
 
+async function send_logout() {
+    let res = await fetch("/logout", {
+        method: "POST"
+    });
+
+    if (res.status != 200) {
+        throw new Error("failed to logout user");
+    }
+}
+
 const App = () => {
+    const navigate = useNavigate();
+
     return <div className="flex flex-row flex-nowrap w-full h-full">
         <nav className="flex-none w-40">
             <div>
-                <button
-                    className=""
-                    onClick={() => {
-                        console.log("request logout");
-                    }}
-                >
+                <button onClick={() => {
+                    send_logout().then(() => {
+                        navigate("/login");
+                    }).catch(err => {
+                        console.error("failed to logout:", err);
+                    });
+                }}>
                     Logout
                 </button>
             </div>

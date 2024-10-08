@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
+import Login from "./Login";
 import App from "./App";
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -9,7 +10,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     renderer.render(
         <BrowserRouter basename="/">
-            <App/>
+            <Routes>
+                <Route path="/login" element={<Login/>}/>
+                <Route path="*" element={<App/>}/>
+            </Routes>
         </BrowserRouter>
     );
 });

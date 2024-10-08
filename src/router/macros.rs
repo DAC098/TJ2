@@ -47,7 +47,8 @@ macro_rules! res_if_html {
         };
 
         if is_html {
-            return crate::router::responses::spa_html($templates)
+            return Ok(crate::router::body::SpaPage::new($templates)?
+                .into_response())
         }
     }
 }

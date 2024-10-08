@@ -83,6 +83,12 @@ features = ["small_rng", "std"]
 [dependencies.argon2]
 version = "0.5"
 
+[dependencies.validator]
+version = "0.18"
+
+[dependencies.ammonia]
+version = "4"
+
 # -----------------------------------------------------------------------------
 # templates
 # -----------------------------------------------------------------------------
