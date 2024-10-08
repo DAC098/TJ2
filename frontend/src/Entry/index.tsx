@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 
 import AudioEntry from "./AudioEntry";
+import TagEntry from "./TagEntry";
 import {
     JournalEntry,
     JournalTag,
@@ -15,7 +16,7 @@ import {
     create_entry,
     update_entry,
     delete_entry
-} from "./journal";
+} from "../journal";
 
 interface EntrySecProps {
     title: JSX.Element,
@@ -63,7 +64,7 @@ const Entry = () => {
                 navigate(`/entries/${result.date}`);
             }).catch(err => {
                 console.error("failed to create entry:", err);
-            })
+            });
         } else {
             update_entry(entry_date, data).then(result => {
                 console.log("updated entry:", result);
@@ -91,7 +92,6 @@ const Entry = () => {
 
             return;
         }
-    
 
         retrieve_entry(entry_date).then(entry => {
             console.log("resetting to entry:", entry);
@@ -102,7 +102,7 @@ const Entry = () => {
         });
     }, [entry_date]);
 
-    return <FormContext {...form}>
+    return <FormProvider {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)}>
             <div className="top-0 sticky">
                 <input type="date" {...form.register("date")}/>
@@ -134,22 +134,11 @@ const Entry = () => {
                 <EntrySec title={<EntrySecTitle title="Contents"/>}>
                     <textarea {...form.register("contents")}/>
                 </EntrySec>
-                <EntrySec title={<EntrySecTitle title="Audio"}>
+                <EntrySec title={<EntrySecTitle title="Audio"/>}>
                     <AudioEntry/>
                 </EntrySec>
                 <EntrySec title={<EntrySecTitle title="Tags"/>}>
-                    <button type="button" onClick={() => {
-                        tags.append({key: "", value: ""});
-                    }}>Add</button>
-                    {tags.fields.map((field, index) => {
-                        return <div key={field.id}>
-                            <button type="button" onClick={() => {
-                                tags.remove(index);
-                            }}>Drop</button>
-                            <input type="text" {...form.register(`tags.${index}.key`)}/>
-                            <input type="text" {...form.register(`tags.${index}.value`)}/>
-                        </div>
-                    })}
+                    <TagEntry/>
                 </EntrySec>
             </div>
         </form>

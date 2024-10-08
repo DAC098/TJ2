@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState } from "react"
-import { getUserMedia } from "./media";
+import { getUserMedia } from "../media";
 
 interface AudioEntryProps {}
 
@@ -37,63 +37,61 @@ const AudioEntry = ({}: AudioEntryProps) => {
                 setMsg("failed to get audio stream for recording");
 
                 return null;
-            } else {
-                media_ref.current.stream = result;
-                const media_recorder = new MediaRecorder(result, {mimeType: "audio/webm"});
-                media_ref.current.recorder = media_recorder;
-
-                media_recorder.addEventListener("dataavailable", (e) => {
-                    if (e.data.size > 0) {
-                        media_ref.current.buffer.push(e.data);
-                    }
-                });
-
-                media_recorder.addEventListener("stop", (e) => {
-                    setRecordingStarted(false);
-
-                    if (media_ref.current.blob != null) {
-                        media_ref.current.blob = new Blob(
-                            [
-                                media_ref.current.blob,
-                                ...media_ref.current.buffer
-                            ]
-                        );
-                    } else {
-                        media_ref.current.blob = new Blob(media_ref.current.buffer);
-                    }
-
-                    media_ref.current.buffer = [];
-
-                    if (audio_ele_ref.current != null) {
-                        audio_ele_ref.current.src = URL.createObjectURL(
-                            media_ref.current.blob
-                        );
-                    }
-
-                    stop_streams();
-                    setRecordingFinished(true);
-                    //dispatch(entry_id_view_actions.set_recording(false));
-                });
-
-                media_recorder.addEventListener("pause", (e) => {
-                    setRecordingPaused(true);
-                });
-
-                media_recorder.addEventListener("start", (e) => {
-                    setRecordingStarted(true);
-                    //dispatch(entry_id_view_actions.set_recording(true));
-                });
-
-                media_recorder.addEventListener("resume", (e) => {
-                    setRecordingPaused(false);
-                });
-
-                media_recorder.addEventListener("error", (e) => {
-                    console.log("media recorder error", e);
-                });
-
-                return media_recorder;
             }
+
+            media_ref.current.stream = result;
+            const media_recorder = new MediaRecorder(result, {mimeType: "audio/webm"});
+            media_ref.current.recorder = media_recorder;
+
+            media_recorder.addEventListener("dataavailable", (e) => {
+                if (e.data.size > 0) {
+                    media_ref.current.buffer.push(e.data);
+                }
+            });
+
+            media_recorder.addEventListener("stop", (e) => {
+                setRecordingStarted(false);
+
+                if (media_ref.current.blob != null) {
+                    media_ref.current.blob = new Blob(
+                        [
+                            media_ref.current.blob,
+                            ...media_ref.current.buffer
+                        ]
+                    );
+                } else {
+                    media_ref.current.blob = new Blob(media_ref.current.buffer);
+                }
+
+                media_ref.current.buffer = [];
+
+                if (audio_ele_ref.current != null) {
+                    audio_ele_ref.current.src = URL.createObjectURL(
+                        media_ref.current.blob
+                    );
+                }
+
+                stop_streams();
+                setRecordingFinished(true);
+            });
+
+            media_recorder.addEventListener("pause", (e) => {
+                setRecordingPaused(true);
+            });
+
+            media_recorder.addEventListener("start", (e) => {
+                setRecordingStarted(true);
+            });
+
+            media_recorder.addEventListener("resume", (e) => {
+                setRecordingPaused(false);
+            });
+
+            media_recorder.addEventListener("error", (e) => {
+                console.log("media recorder error", e);
+            });
+
+            return media_recorder;
         }).catch(err => {
             if (err.name === "AbortError") {
                 setMsg("something caused an error. aborting");
@@ -173,9 +171,8 @@ const AudioEntry = ({}: AudioEntryProps) => {
                     }}>{recording_paused ? "Resume" : "Pause"}</button>
                 </div>
                 :
-                null
+                <audio ref={audio_ele_ref} controls/>
             }
-            <audio ref={audio_ele_ref} controls/>
         </div>
         <span>{msg}</span>
     </div>
