@@ -102,7 +102,7 @@ const Entry = () => {
         });
     }, [entry_date]);
 
-    return <FormProvider {...form}>
+    return <FormProvider<EntryForm> {...form} children={
         <form onSubmit={form.handleSubmit(onSubmit)}>
             <div className="top-0 sticky">
                 <input type="date" {...form.register("date")}/>
@@ -142,7 +142,7 @@ const Entry = () => {
                 </EntrySec>
             </div>
         </form>
-    </FormProvider>
+    }/>
 };
 
 export default Entry;

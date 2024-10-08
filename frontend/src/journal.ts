@@ -23,11 +23,16 @@ export interface EntryTagForm {
     value: string,
 }
 
+export interface EntryAudioForm {
+    src: URL
+}
+
 export interface EntryForm {
     date: string,
     title: string,
     contents: string,
     tags: EntryTagForm[],
+    audio: EntryAudioForm[]
 }
 
 export function blank_form(): EntryForm {
@@ -38,6 +43,7 @@ export function blank_form(): EntryForm {
         title: "",
         contents: "",
         tags: [],
+        audio: [],
     };
 }
 
@@ -55,7 +61,8 @@ export function entry_to_form(entry: JournalEntry): EntryForm {
         date: entry.date,
         title: entry.title ?? "",
         contents: entry.contents ?? "",
-        tags
+        tags,
+        audio: [],
     };
 }
 

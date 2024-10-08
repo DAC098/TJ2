@@ -1,10 +1,16 @@
 import { useContext, useEffect, useRef, useState } from "react"
+import { useFormContext, useFieldArray } from "react-hook-form";
+
+import { uuidv4 } from "../uuid";
 import { getUserMedia } from "../media";
+import { EntryForm } from "../journal";
 
-interface AudioEntryProps {}
+interface RecordAudioProps {
+    on_cancel: () => void,
+    on_created: (URL) => void,
+}
 
-const AudioEntry = ({}: AudioEntryProps) => {
-    let audio_ele_ref = useRef<HTMLAudioElement>(null);
+function RecordAudio({on_cancel, on_created}: RecordAudioProps) {
     let media_ref = useRef<{
         stream: MediaStream,
         recorder: MediaRecorder,
@@ -19,7 +25,6 @@ const AudioEntry = ({}: AudioEntryProps) => {
     let [msg, setMsg] = useState(" ");
     let [recording_started, setRecordingStarted] = useState(false);
     let [recording_paused, setRecordingPaused] = useState(false);
-    let [recording_finished, setRecordingFinished] = useState(false);
 
     const stop_streams = () => {
         if (media_ref.current.stream != null) {
@@ -63,16 +68,11 @@ const AudioEntry = ({}: AudioEntryProps) => {
                     media_ref.current.blob = new Blob(media_ref.current.buffer);
                 }
 
+                stop_streams();
+
                 media_ref.current.buffer = [];
 
-                if (audio_ele_ref.current != null) {
-                    audio_ele_ref.current.src = URL.createObjectURL(
-                        media_ref.current.blob
-                    );
-                }
-
-                stop_streams();
-                setRecordingFinished(true);
+                on_created(URL.createObjectURL(media_ref.current.blob));
             });
 
             media_recorder.addEventListener("pause", (e) => {
@@ -148,33 +148,62 @@ const AudioEntry = ({}: AudioEntryProps) => {
     }, []);
 
     return <div>
-        <div>
-            {!recording_finished ?
-                <div>
-                    <button type="button" disabled={false} onClick={() => {
-                        if (false) {
-                            return;
-                        }
+        <button type="button" onClick={() => {
+            on_cancel();
+        }}>Cancel</button>
+        <button type="button" onClick={() => {
+            if (recording_started) {
+                stop_recording();
+            } else {
+                start_recording();
+            }
+        }}>{recording_started ? "Stop" : "Start"}</button>
+        <button type="button" disabled={!recording_started} onClick={() => {
+            if (recording_paused) {
+                resume_recording();
+            } else {
+                pause_recording();
+            }
+        }}>{recording_paused ? "Resume" : "Pause"}</button>
+    </div>
+}
 
-                        if (recording_started) {
-                            stop_recording();
-                        } else {
-                            start_recording();
-                        }
-                    }}>{recording_started ? "Stop" : "Start"}</button>
-                    <button type="button" disabled={!recording_started} onClick={() => {
-                        if (recording_paused) {
-                            resume_recording();
-                        } else {
-                            pause_recording();
-                        }
-                    }}>{recording_paused ? "Resume" : "Pause"}</button>
-                </div>
+interface AudioEntryProps {}
+
+const AudioEntry = ({}: AudioEntryProps) => {
+    const [record_audio, set_record_audio] = useState(false);
+
+    const form = useFormContext<EntryForm>();
+    const audio = useFieldArray<EntryForm, "audio">({
+        control: form.control,
+        name: "audio"
+    });
+
+    return <div>
+        <div>
+            {record_audio ?
+                <RecordAudio on_cancel={() => {
+                    set_record_audio(false);
+                }} on_created={url => {
+                    audio.append({src: url});
+
+                    set_record_audio(false);
+                }}/>
                 :
-                <audio ref={audio_ele_ref} controls/>
+                <button type="button" onClick={() => {
+                    set_record_audio(true);
+                }}>
+                    Add
+                </button>
             }
         </div>
-        <span>{msg}</span>
+        <div>
+            {audio.fields.map((field, index) => {
+                console.log("audio field:", field);
+
+                return <audio key={field.id} src={field.src} controls/>
+            })}
+        </div>
     </div>
 }
 
