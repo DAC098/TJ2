@@ -4,6 +4,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Login from "./Login";
 import App from "./App";
 
+import "./media";
+
 document.addEventListener("DOMContentLoaded", () => {
     const root = document.getElementById("root");
     const renderer = createRoot(root);
