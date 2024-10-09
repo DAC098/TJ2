@@ -19,6 +19,7 @@ mod cookie;
 mod header;
 
 mod user;
+mod journal;
 
 mod router;
 

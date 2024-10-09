@@ -4,14 +4,14 @@ use axum::extract::{Path, Request};
 use axum::http::{StatusCode, Uri, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::StreamExt;
 use serde::{Serialize, Deserialize};
 use sqlx::{QueryBuilder, Row};
 
 use crate::state;
 use crate::db;
-use crate::db::ids::UserId;
 use crate::error::{self, Context};
+use crate::journal::{JournalTag, JournalEntry, JournalEntryFull};
 use crate::router::body;
 use crate::router::macros;
 
@@ -23,160 +23,6 @@ pub struct JournalEntryPartial {
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
     pub tags: HashMap<String, Option<String>>,
-}
-
-#[derive(Debug)]
-pub struct JournalEntry {
-    pub id: i64,
-    pub users_id: UserId,
-    pub date: NaiveDate,
-    pub title: Option<String>,
-    pub contents: Option<String>,
-    pub created: DateTime<Utc>,
-    pub updated: Option<DateTime<Utc>>,
-}
-
-impl JournalEntry {
-    async fn retrieve_date(conn: &mut db::DbConn, users_id: UserId, date: &NaiveDate) -> Result<Option<Self>, error::Error> {
-        let result = sqlx::query(
-            "\
-            select journal.id, \
-                   journal.users_id, \
-                   journal.entry_date, \
-                   journal.title, \
-                   journal.contents, \
-                   journal.created, \
-                   journal.updated \
-            from journal \
-            where journal.entry_date = ?1 and \
-                  journal.users_id = ?2"
-        )
-            .bind(date)
-            .bind(users_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .context("failed to retrieve journal entry by date")?;
-
-        if let Some(found) = result {
-            Ok(Some(JournalEntry {
-                id: found.get(0),
-                users_id: found.get(1),
-                date: found.get(2),
-                title: found.get(3),
-                contents: found.get(4),
-                created: found.get(5),
-                updated: found.get(6),
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct JournalEntryFull {
-    pub id: i64,
-    pub users_id: UserId,
-    pub date: NaiveDate,
-    pub title: Option<String>,
-    pub contents: Option<String>,
-    pub created: DateTime<Utc>,
-    pub updated: Option<DateTime<Utc>>,
-    pub tags: Vec<JournalTag>,
-}
-
-impl JournalEntryFull {
-    async fn retrieve_date(conn: &mut db::DbConn, users_id: UserId, date: &NaiveDate) -> Result<Option<Self>, error::Error> {
-        if let Some(found) = JournalEntry::retrieve_date(conn, users_id, date).await? {
-            let tags = JournalTag::retrieve_date(conn, users_id, date)
-                .await
-                .context("failed to retrieve tags for journal entry by date")?;
-
-            Ok(Some(JournalEntryFull {
-                id: found.id,
-                users_id: found.users_id,
-                date: found.date,
-                title: found.title,
-                contents: found.contents,
-                created: found.created,
-                updated: found.updated,
-                tags
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct JournalTag {
-    pub key: String,
-    pub value: Option<String>,
-    pub created: DateTime<Utc>,
-    pub updated: Option<DateTime<Utc>>,
-}
-
-impl JournalTag {
-    fn retrieve_journal_stream<'a>(
-        conn: &'a mut db::DbConn,
-        journal_id: i64
-    ) -> impl Stream<Item = Result<Self, sqlx::Error>> + 'a {
-        sqlx::query(
-            "\
-            select journal_tags.key, \
-                   journal_tags.value, \
-                   journal_tags.created, \
-                   journal_tags.updated \
-            from journal_tags \
-            where journal_tags.journal_id = ?1"
-        )
-            .bind(journal_id)
-            .fetch(&mut *conn)
-            .map(|res| res.map(|record| JournalTag {
-                key: record.get(0),
-                value: record.get(1),
-                created: record.get(2),
-                updated: record.get(3),
-            }))
-    }
-
-    fn retrieve_date_stream<'a>(
-        conn: &'a mut db::DbConn,
-        users_id: UserId,
-        date: &'a NaiveDate
-    ) -> impl Stream<Item = Result<Self, sqlx::Error>> + 'a {
-        sqlx::query(
-            "\
-            select journal_tags.key, \
-                   journal_tags.value, \
-                   journal_tags.created, \
-                   journal_tags.updated \
-            from journal_tags \
-                left join journal on \
-                    journal_tags.journal_id = journal.id \
-            where journal.entry_date = ?1 and \
-                  journal.users_id = ?2"
-        )
-            .bind(date)
-            .bind(users_id)
-            .fetch(&mut *conn)
-            .map(|res| res.map(|record| JournalTag {
-                key: record.get(0),
-                value: record.get(1),
-                created: record.get(2),
-                updated: record.get(3),
-            }))
-    }
-
-    async fn retrieve_date(conn: &mut db::DbConn, users_id: UserId, date: &NaiveDate) -> Result<Vec<Self>, error::Error> {
-        Self::retrieve_date_stream(conn, users_id, date)
-            .map_err(|err| error::Error::context_source(
-                "failed to retrieve tags",
-                err
-            ))
-            .try_collect()
-            .await
-    }
 }
 
 pub async fn retrieve_entries(
@@ -298,7 +144,11 @@ pub async fn retrieve_entry(
     let initiator = macros::require_initiator!(&mut conn, &headers, Some(uri));
 
     if let Some(date) = &date {
-        if let Some(entry) = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, date).await? {
+        let result = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, date)
+            .await
+            .context("failed to retrieve journal entry for date")?;
+
+        if let Some(entry) = result {
             tracing::debug!("entry: {entry:#?}");
 
             Ok(body::Json(entry).into_response())
@@ -446,8 +296,11 @@ pub async fn update_entry(
     let mut conn = state.begin_conn().await?;
 
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
+    let result = JournalEntry::retrieve_date(&mut conn, initiator.user.id, &date)
+        .await
+        .context("failed to retrieve journal entry by date")?;
 
-    let Some(entry) = JournalEntry::retrieve_date(&mut conn, initiator.user.id, &date).await? else {
+    let Some(entry) = result else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
@@ -605,8 +458,11 @@ pub async fn delete_entry(
     let mut conn = state.begin_conn().await?;
 
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
+    let result = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, &date)
+        .await
+        .context("failed to retrieve journal entry by date")?;
 
-    let Some(entry) = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, &date).await? else {
+    let Some(entry) = result else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
