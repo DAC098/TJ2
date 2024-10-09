@@ -9,7 +9,7 @@ use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 
 use crate::error::{self, Context};
-use crate::path::normalize_from;
+use crate::path::{metadata, normalize_from};
 
 pub mod meta;
 
@@ -106,6 +106,30 @@ impl Config {
             tracing::debug!("settings: {settings:#?}");
         }
 
+        let data_meta = metadata(&settings.storage).context(
+            "failed to retrieve metadata for settings.data"
+        )?.context(
+            "settings.data was not found"
+        )?;
+
+        if !data_meta.is_dir() {
+            return Err(error::Error::context(
+                "settings.data is not a directory"
+            ));
+        }
+
+        let storage_meta = metadata(&settings.storage).context(
+            "failed to retrieve metadata for settings.storage"
+        )?.context(
+            "settings.storage was not found"
+        )?;
+
+        if !storage_meta.is_dir() {
+            return Err(error::Error::context(
+                "settings.storage is not a directory"
+            ));
+        }
+
         if settings.listeners.is_empty() {
             return Err(error::Error::context(
                 "no server listeners have been specified in config files"
@@ -156,6 +180,7 @@ impl Config {
 pub struct SettingsShape {
     preload: Option<Vec<PathBuf>>,
     data: Option<PathBuf>,
+    storage: Option<PathBuf>,
     thread_pool: Option<usize>,
     blocking_pool: Option<usize>,
     listeners: Option<Vec<ListenerShape>>,
@@ -166,6 +191,7 @@ pub struct SettingsShape {
 #[derive(Debug)]
 pub struct Settings {
     pub data: PathBuf,
+    pub storage: PathBuf,
     pub thread_pool: usize,
     pub blocking_pool: usize,
     pub listeners: Vec<Listener>,
@@ -179,6 +205,12 @@ impl Settings {
             self.data = src.normalize(data);
 
             check_path(&self.data, src, dot.push(&"data"), false)?;
+        }
+
+        if let Some(storage) = settings.storage {
+            self.storage = src.normalize(storage);
+
+            check_path(&self.storage, src, dot.push(&"data"), false)?;
         }
 
         if let Some(thread_pool) = settings.thread_pool {
@@ -236,6 +268,7 @@ impl TryDefault for Settings {
     fn try_default() -> Result<Self, Self::Error> {
         Ok(Settings {
             data: get_cwd()?.join("data"),
+            storage: get_cwd()?.join("storage"),
             thread_pool: 1,
             blocking_pool: 1,
             listeners: Vec::new(),

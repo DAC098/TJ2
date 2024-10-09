@@ -176,28 +176,28 @@ macro_rules! uid_type {
 }
 
 macro_rules! set_type {
-    ($name:ident, $local:ty, $uid:ty) => {
+    ($name:ident, $id:ty, $uid:ty) => {
         #[derive(Debug, Clone)]
         pub struct $name {
-            local: $local,
+            id: $id,
             uid: $uid,
         }
 
         impl $name {
-            pub fn new(local: $local, uid: $uid) -> Self {
-                $name { local, uid }
+            pub fn new(id: $id, uid: $uid) -> Self {
+                $name { id, uid }
             }
 
-            pub fn local(&self) -> &$local {
-                &self.local
+            pub fn id(&self) -> &$id {
+                &self.id
             }
 
             pub fn uid(&self) -> &$uid {
                 &self.uid
             }
 
-            pub fn into_local(self) -> $local {
-                self.local
+            pub fn into_id(self) -> $id {
+                self.id
             }
 
             pub fn into_uid(self) -> $uid {
@@ -207,7 +207,7 @@ macro_rules! set_type {
 
         impl std::cmp::PartialEq for $name {
             fn eq(&self, other: &Self) -> bool {
-                self.local.eq(&other.local)
+                self.id.eq(&other.id)
             }
         }
 
@@ -221,13 +221,13 @@ macro_rules! set_type {
 
         impl std::cmp::Ord for $name {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.local.cmp(&other.local)
+                self.id.cmp(&other.id)
             }
         }
 
-        impl std::cmp::PartialEq<$local> for $name {
-            fn eq(&self, other: &$local) -> bool {
-                self.local.eq(other)
+        impl std::cmp::PartialEq<$id> for $name {
+            fn eq(&self, other: &$id) -> bool {
+                self.id.eq(other)
             }
         }
 
@@ -237,9 +237,9 @@ macro_rules! set_type {
             }
         }
 
-        impl From<$name> for $local {
-            fn from(value: $name) -> $local {
-                value.local
+        impl From<$name> for $id {
+            fn from(value: $name) -> $id {
+                value.id
             }
         }
 
@@ -249,9 +249,9 @@ macro_rules! set_type {
             }
         }
 
-        impl From<($local, $uid)> for $name {
-            fn from((local, uid): ($local, $uid)) -> Self {
-                $name { local, uid }
+        impl From<($id, $uid)> for $name {
+            fn from((id, uid): ($id, $uid)) -> Self {
+                $name { id, uid }
             }
         }
 
@@ -260,13 +260,13 @@ macro_rules! set_type {
             where
                 H: std::hash::Hasher
             {
-                self.local.hash(state);
+                self.id.hash(state);
             }
         }
 
         impl Display for $name {
             fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-                write!(f, "local: {} uid: {}", self.local, self.uid)
+                write!(f, "id: {} uid: {}", self.id, self.uid)
             }
         }
     }
@@ -275,3 +275,7 @@ macro_rules! set_type {
 id_type!(UserId);
 uid_type!(UserUid);
 set_type!(UserSet, UserId, UserUid);
+
+id_type!(JournalId);
+uid_type!(JournalUid);
+set_type!(JournalSet, JournalId, JournalUid);

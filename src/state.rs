@@ -28,6 +28,9 @@ impl SharedState {
                 files: config.settings.assets.files.clone(),
                 directories: config.settings.assets.directories.clone(),
             },
+            storage: Storage {
+                path: config.settings.storage.clone(),
+            },
             templates,
         })))
     }
@@ -70,6 +73,7 @@ impl FromRequestParts<SharedState> for SharedState {
 pub struct State {
     db_pool: db::DbPool,
     assets: Assets,
+    storage: Storage,
     templates: tera::Tera,
 }
 
@@ -98,5 +102,16 @@ impl Assets {
         }
 
         None
+    }
+}
+
+#[derive(Debug)]
+pub struct Storage {
+    path: PathBuf
+}
+
+impl Storage {
+    pub fn get_path(&self) -> &Path {
+        &self.path
     }
 }
