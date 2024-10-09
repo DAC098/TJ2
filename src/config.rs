@@ -106,10 +106,10 @@ impl Config {
             tracing::debug!("settings: {settings:#?}");
         }
 
-        let data_meta = metadata(&settings.storage).context(
+        let data_meta = metadata(&settings.data).context(
             "failed to retrieve metadata for settings.data"
         )?.context(
-            "settings.data was not found"
+            format!("settings.data was not found: {}", settings.data.display())
         )?;
 
         if !data_meta.is_dir() {
@@ -121,7 +121,7 @@ impl Config {
         let storage_meta = metadata(&settings.storage).context(
             "failed to retrieve metadata for settings.storage"
         )?.context(
-            "settings.storage was not found"
+            format!("settings.storage was not found: {}", settings.storage.display())
         )?;
 
         if !storage_meta.is_dir() {

@@ -44,7 +44,7 @@ impl User {
                    password, \
                    version \
             from users \
-            where username = ?1"
+            where id = ?1"
         ).bind(id)
             .fetch_optional(&mut *conn)
             .await
