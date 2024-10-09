@@ -18,6 +18,8 @@ mod state;
 mod cookie;
 mod header;
 
+mod user;
+
 mod router;
 
 use error::{Error, Context};

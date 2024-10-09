@@ -83,7 +83,7 @@ impl Type<Sqlite> for Token {
 #[derive(Debug, Clone)]
 pub struct Session {
     pub token: Token,
-    pub users_id: i64,
+    pub users_id: db::ids::UserId,
     pub dropped: bool,
     pub issued_on: DateTime<Utc>,
     pub expires_on: DateTime<Utc>,
@@ -92,16 +92,19 @@ pub struct Session {
 }
 
 pub struct SessionOptions {
-    pub users_id: i64,
+    pub users_id: db::ids::UserId,
     pub duration: Duration,
     pub authenticated: bool,
     pub verified: bool,
 }
 
 impl SessionOptions {
-    pub fn new(users_id: i64) -> Self {
+    pub fn new<I>(users_id: I) -> Self
+    where
+        I: Into<db::ids::UserId>
+    {
         SessionOptions {
-            users_id,
+            users_id: users_id.into(),
             duration: Duration::days(7),
             authenticated: false,
             verified: false,

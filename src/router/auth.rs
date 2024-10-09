@@ -5,13 +5,13 @@ use axum::http::{StatusCode, HeaderMap};
 use axum::body::Body;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 
-use crate::state;
 use crate::error::{self, Context};
 use crate::router::body;
 use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
+use crate::state;
+use crate::user;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
@@ -131,27 +131,19 @@ pub async fn request_login(
 
     tracing::debug!("login recieved: {login:#?}");
 
-    let maybe_user = sqlx::query("select * from users where username = ?1")
-        .bind(&login.username)
-        .fetch_optional(&mut *conn)
+    let maybe_user = user::User::retrieve_username(&mut *conn, &login.username)
         .await
         .context("database error when searching for login username")?;
 
-    let Some(found_user) = maybe_user else {
+    let Some(user) = maybe_user else {
         return Ok((
             StatusCode::NOT_FOUND,
             body::Json(LoginResult::Failed(LoginFailed::UsernameNotFound))
         ).into_response());
     };
 
-    let users_id: i64 = found_user.get(0);
-    //let user_uid: String = found_user.get(1);
-    //let username: String = found_user.get(2);
-    let password: String = found_user.get(3);
-    //let version: i64 = found_user.get(4);
-
     let argon_config = Argon2::default();
-    let parsed_hash = match PasswordHash::new(&password) {
+    let parsed_hash = match PasswordHash::new(&user.password) {
         Ok(hash) => hash,
         Err(err) => {
             tracing::debug!("argon2 PasswordHash error: {err:#?}");
@@ -169,7 +161,7 @@ pub async fn request_login(
         ).into_response());
     }
 
-    let mut options = SessionOptions::new(users_id);
+    let mut options = SessionOptions::new(user.id);
     options.authenticated = true;
     options.verified = true;
 

@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
-use sqlx::Row;
 
 use crate::db;
+use crate::user;
 
 pub mod session;
 pub use session::Session;
@@ -38,7 +38,7 @@ pub enum InitiatorError {
 
 #[derive(Debug)]
 pub struct Initiator {
-    pub users_id: i64,
+    pub user: user::User,
     pub session: Session,
 }
 
@@ -71,17 +71,12 @@ impl Initiator {
             return Err(InitiatorError::Unverified(session));
         }
 
-        let maybe_user = sqlx::query("select * from users where id = ?1")
-            .bind(session.users_id)
-            .fetch_optional(&mut *conn)
-            .await?;
-
-        let Some(user_row) = maybe_user else {
+        let Some(user) = user::User::retrieve_id(&mut *conn, session.users_id).await? else {
             return Err(InitiatorError::UserNotFound(session));
         };
 
         Ok(Initiator {
-            users_id: user_row.get(0),
+            user,
             session,
         })
     }

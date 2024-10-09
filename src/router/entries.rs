@@ -6,10 +6,11 @@ use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Serialize, Deserialize};
-use sqlx::{QueryBuilder, Row, Execute};
+use sqlx::{QueryBuilder, Row};
 
 use crate::state;
 use crate::db;
+use crate::db::ids::UserId;
 use crate::error::{self, Context};
 use crate::router::body;
 use crate::router::macros;
@@ -27,7 +28,7 @@ pub struct JournalEntryPartial {
 #[derive(Debug)]
 pub struct JournalEntry {
     pub id: i64,
-    pub users_id: i64,
+    pub users_id: UserId,
     pub date: NaiveDate,
     pub title: Option<String>,
     pub contents: Option<String>,
@@ -36,7 +37,7 @@ pub struct JournalEntry {
 }
 
 impl JournalEntry {
-    async fn retrieve_date(conn: &mut db::DbConn, users_id: i64, date: &NaiveDate) -> Result<Option<Self>, error::Error> {
+    async fn retrieve_date(conn: &mut db::DbConn, users_id: UserId, date: &NaiveDate) -> Result<Option<Self>, error::Error> {
         let result = sqlx::query(
             "\
             select journal.id, \
@@ -75,7 +76,7 @@ impl JournalEntry {
 #[derive(Debug, Serialize)]
 pub struct JournalEntryFull {
     pub id: i64,
-    pub users_id: i64,
+    pub users_id: UserId,
     pub date: NaiveDate,
     pub title: Option<String>,
     pub contents: Option<String>,
@@ -85,7 +86,7 @@ pub struct JournalEntryFull {
 }
 
 impl JournalEntryFull {
-    async fn retrieve_date(conn: &mut db::DbConn, users_id: i64, date: &NaiveDate) -> Result<Option<Self>, error::Error> {
+    async fn retrieve_date(conn: &mut db::DbConn, users_id: UserId, date: &NaiveDate) -> Result<Option<Self>, error::Error> {
         if let Some(found) = JournalEntry::retrieve_date(conn, users_id, date).await? {
             let tags = JournalTag::retrieve_date(conn, users_id, date)
                 .await
@@ -141,7 +142,7 @@ impl JournalTag {
 
     fn retrieve_date_stream<'a>(
         conn: &'a mut db::DbConn,
-        users_id: i64,
+        users_id: UserId,
         date: &'a NaiveDate
     ) -> impl Stream<Item = Result<Self, sqlx::Error>> + 'a {
         sqlx::query(
@@ -167,7 +168,7 @@ impl JournalTag {
             }))
     }
 
-    async fn retrieve_date(conn: &mut db::DbConn, users_id: i64, date: &NaiveDate) -> Result<Vec<Self>, error::Error> {
+    async fn retrieve_date(conn: &mut db::DbConn, users_id: UserId, date: &NaiveDate) -> Result<Vec<Self>, error::Error> {
         Self::retrieve_date_stream(conn, users_id, date)
             .map_err(|err| error::Error::context_source(
                 "failed to retrieve tags",
@@ -211,7 +212,7 @@ pub async fn retrieve_entries(
                 search_entries.id = journal_tags.journal_id \
         order by search_entries.entry_date desc"
     )
-        .bind(initiator.users_id)
+        .bind(initiator.user.id)
         .fetch(&mut *conn);
 
     let mut found = Vec::new();
@@ -297,7 +298,7 @@ pub async fn retrieve_entry(
     let initiator = macros::require_initiator!(&mut conn, &headers, Some(uri));
 
     if let Some(date) = &date {
-        if let Some(entry) = JournalEntryFull::retrieve_date(&mut conn, initiator.users_id, date).await? {
+        if let Some(entry) = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, date).await? {
             tracing::debug!("entry: {entry:#?}");
 
             Ok(body::Json(entry).into_response())
@@ -351,7 +352,7 @@ pub async fn create_entry(
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
 
     let entry_date = json.date;
-    let users_id = initiator.users_id;
+    let users_id = initiator.user.id;
     let title = opt_non_empty_str(json.title);
     let contents = opt_non_empty_str(json.contents);
     let created = Utc::now();
@@ -446,7 +447,7 @@ pub async fn update_entry(
 
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
 
-    let Some(entry) = JournalEntry::retrieve_date(&mut conn, initiator.users_id, &date).await? else {
+    let Some(entry) = JournalEntry::retrieve_date(&mut conn, initiator.user.id, &date).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
@@ -605,7 +606,7 @@ pub async fn delete_entry(
 
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
 
-    let Some(entry) = JournalEntryFull::retrieve_date(&mut conn, initiator.users_id, &date).await? else {
+    let Some(entry) = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, &date).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 

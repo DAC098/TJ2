@@ -14,8 +14,9 @@ use crate::error::{Error, Context};
 use crate::config::{Config, meta::get_cwd};
 use crate::path::metadata;
 
-mod ids;
 mod test_data;
+
+pub mod ids;
 
 pub type Db = Sqlite;
 pub type DbPool = SqlitePool;
