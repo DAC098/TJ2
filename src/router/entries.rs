@@ -263,7 +263,7 @@ pub async fn create_entry(
             .bind(&uid)
             .bind(journals_id)
             .bind(users_id)
-            .bind(&entry_date)
+            .bind(entry_date)
             .bind(&title)
             .bind(&contents)
             .bind(created)
@@ -296,7 +296,7 @@ pub async fn create_entry(
         tags.push(EntryTag {
             key: key.clone(),
             value: value.clone(),
-            created: created.clone(),
+            created,
             updated: None
         });
 
@@ -383,7 +383,7 @@ pub async fn update_entry(
             updated = ?5 \
         where id = ?1"
     )
-        .bind(&entry.id)
+        .bind(entry.id)
         .bind(entry_date)
         .bind(&title)
         .bind(&contents)
@@ -450,7 +450,7 @@ pub async fn update_entry(
             }
 
             let mut separated = upsert_tags.separated(", ");
-            separated.push_bind(&entry.id);
+            separated.push_bind(entry.id);
             separated.push_bind(key);
             separated.push_bind(value);
             separated.push_bind(updated);
@@ -473,7 +473,7 @@ pub async fn update_entry(
             let mut delete_tags: QueryBuilder<db::Db> = QueryBuilder::new(
                 "delete from entry_tags where entries_id = "
             );
-            delete_tags.push_bind(&entry.id);
+            delete_tags.push_bind(entry.id);
             delete_tags.push(" and key in (");
 
             let mut separated = delete_tags.separated(", ");

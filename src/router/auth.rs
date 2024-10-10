@@ -131,7 +131,7 @@ pub async fn request_login(
 
     tracing::debug!("login recieved: {login:#?}");
 
-    let maybe_user = user::User::retrieve_username(&mut *conn, &login.username)
+    let maybe_user = user::User::retrieve_username(&mut conn, &login.username)
         .await
         .context("database error when searching for login username")?;
 

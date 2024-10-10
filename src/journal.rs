@@ -150,10 +150,10 @@ pub struct EntryTag {
 }
 
 impl EntryTag {
-    pub fn retrieve_entry_stream<'a>(
-        conn: &'a mut db::DbConn,
+    pub fn retrieve_entry_stream(
+        conn: &mut db::DbConn,
         entry_id: EntryId
-    ) -> impl Stream<Item = Result<Self, sqlx::Error>> + 'a {
+    ) -> impl Stream<Item = Result<Self, sqlx::Error>> + '_ {
         sqlx::query(
             "\
             select entry_tags.key, \
