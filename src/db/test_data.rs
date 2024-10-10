@@ -11,7 +11,10 @@ use super::ids;
 
 use crate::error::{Error, Context};
 
-pub async fn create_rand_users(conn: &mut DbConn, rng: &mut ThreadRng) -> Result<(), Error> {
+pub async fn create_rand_users(
+    conn: &mut DbConn,
+    rng: &mut ThreadRng
+) -> Result<(), Error> {
     let password = "password";
 
     for _ in 0..10 {
@@ -21,7 +24,9 @@ pub async fn create_rand_users(conn: &mut DbConn, rng: &mut ThreadRng) -> Result
 
         tracing::debug!("create new user: id {users_id}");
 
-        create_data(conn, rng, users_id)
+        let journals_id = create_journal(conn, users_id).await?;
+
+        create_data(conn, rng, journals_id, users_id)
             .await
             .context("failed to create test data for rand user")?;
     }
@@ -29,7 +34,36 @@ pub async fn create_rand_users(conn: &mut DbConn, rng: &mut ThreadRng) -> Result
     Ok(())
 }
 
-pub async fn create_data(conn: &mut DbConn, rng: &mut ThreadRng, users_id: i64) -> Result<(), Error> {
+pub async fn create_journal(
+    conn: &mut DbConn,
+    users_id: ids::UserId,
+) -> Result<ids::JournalId, Error> {
+    let uid = ids::JournalUid::gen();
+    let created = Utc::now();
+
+    let result = sqlx::query(
+        "\
+        insert into journals (uid, users_id, name, created) values \
+        (?1, ?2, ?3, ?4) \
+        returning id"
+    )
+        .bind(uid)
+        .bind(users_id)
+        .bind("default")
+        .bind(created)
+        .fetch_one(conn)
+        .await
+        .context("failed to create default journal for user")?;
+
+    Ok(result.get(0))
+}
+
+pub async fn create_data(
+    conn: &mut DbConn,
+    rng: &mut ThreadRng,
+    journals_id: ids::JournalId,
+    users_id: ids::UserId,
+) -> Result<(), Error> {
     let today = Utc::now();
     let total_entries = rng.gen_range(50..=240) + 1;
 
@@ -40,7 +74,7 @@ pub async fn create_data(conn: &mut DbConn, rng: &mut ThreadRng, users_id: i64) 
 
         tracing::debug!("creating entry: {date}");
 
-        create_journal_entry(conn, rng, users_id, date).await?;
+        create_journal_entry(conn, rng, journals_id, users_id, date).await?;
     }
 
     tracing::info!("created {total_entries} entries");
@@ -48,20 +82,29 @@ pub async fn create_data(conn: &mut DbConn, rng: &mut ThreadRng, users_id: i64) 
     Ok(())
 }
 
-async fn create_journal_entry(conn: &mut DbConn, rng: &mut ThreadRng, users_id: i64, date: NaiveDate) -> Result<(), Error> {
+async fn create_journal_entry(
+    conn: &mut DbConn,
+    rng: &mut ThreadRng,
+    journals_id: ids::JournalId,
+    users_id: ids::UserId,
+    date: NaiveDate
+) -> Result<(), Error> {
     let dist = Bernoulli::from_ratio(6, 10)
         .context("failed to create Bernoulli distribution")?;
 
+    let uid = ids::EntryUid::gen();
     let created = gen_created(rng, date);
     let updated = gen_updated(rng, dist, date);
     let title = gen_entry_title(rng, dist);
 
     let result = sqlx::query(
         "\
-        insert into journal (users_id, title, entry_date, created, updated) \
-        values (?1, ?2, ?3, ?4, ?5) \
+        insert into entries (uid, journals_id, users_id, title, entry_date, created, updated) \
+        values (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
         returning id"
     )
+        .bind(uid)
+        .bind(journals_id)
         .bind(users_id)
         .bind(title)
         .bind(date)
@@ -71,19 +114,19 @@ async fn create_journal_entry(conn: &mut DbConn, rng: &mut ThreadRng, users_id: 
         .await
         .context("failed to insert new entry into journal")?;
 
-    let journal_id: i64 = result.get(0);
+    let entries_id: ids::EntryId = result.get(0);
 
-    for _ in 0..rng.gen_range(0..10) {
+    for _ in 0..rng.gen_range(0..5) {
         let created = Utc::now();
         let key = gen_tag_key(rng);
         let value = gen_tag_value(rng, dist);
 
         sqlx::query(
             "\
-            insert into journal_tags (journal_id, key, value, created) \
+            insert into entry_tags (entries_id, key, value, created) \
             values (?1, ?2, ?3, ?4)"
         )
-            .bind(journal_id)
+            .bind(entries_id)
             .bind(key)
             .bind(value)
             .bind(created)
@@ -95,7 +138,11 @@ async fn create_journal_entry(conn: &mut DbConn, rng: &mut ThreadRng, users_id: 
     Ok(())
 }
 
-async fn create_user(conn: &mut DbConn, username: &str, password: &str) -> Result<i64, Error> {
+async fn create_user(
+    conn: &mut DbConn,
+    username: &str,
+    password: &str
+) -> Result<ids::UserId, Error> {
     let uid = ids::UserUid::gen();
     let salt = SaltString::generate(&mut OsRng);
     let config = Argon2::default();

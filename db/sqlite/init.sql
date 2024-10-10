@@ -70,8 +70,21 @@ CREATE TABLE group_roles (
     FOREIGN KEY (role_id) REFERENCES authz_roles (id)
 );
 
-CREATE TABLE journal (
+CREATE TABLE journals (
     id INTEGER PRIMARY KEY NOT NULL,
+    uid TEXT NOT NULL UNIQUE,
+    users_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created DATETIME NOT NULL,
+    updated DATETIME,
+    UNIQUE (users_id, name),
+    FOREIGN KEY (users_id) REFERENCES users (id)
+);
+
+CREATE TABLE entries (
+    id INTEGER PRIMARY KEY NOT NULL,
+    uid TEXT NOT NULL UNIQUE,
+    journals_id INTEGER NOT NULL,
     users_id INTEGER NOT NULL,
     entry_date DATE NOT NULL,
     title TEXT,
@@ -79,15 +92,31 @@ CREATE TABLE journal (
     created DATETIME NOT NULL,
     updated DATETIME,
     UNIQUE (users_id, entry_date),
+    FOREIGN KEY (journals_id) REFERENCES journals (id),
     FOREIGN KEY (users_id) REFERENCES users (id)
 );
 
-CREATE TABLE journal_tags (
-    journal_id INTEGER NOT NULL,
+CREATE TABLE entry_tags (
+    entries_id INTEGER NOT NULL,
     key TEXT NOT NULL,
     value TEXT,
     created DATETIME NOT NULL,
     updated DATETIME,
-    PRIMARY KEY (journal_id, key),
-    FOREIGN KEY (journal_id) REFERENCES journal (id)
+    PRIMARY KEY (entries_id, key),
+    FOREIGN KEY (entries_id) REFERENCES entries (id)
+);
+
+CREATE TABLE file_entries (
+    id INTEGER PRIMARY KEY NOT NULL,
+    uid TEXT NOT NULL UNIQUE,
+    entries_id INTEGER NOT NULL,
+    type INTEGER NOT NULL DEFAULT 0,
+    name TEXT,
+    mime_type TEXT NOT NULL,
+    mime_subtype TEXT NOT NULL,
+    mime_parameter TEXT,
+    size INTEGER NOT NULL DEFAULT 0,
+    created DATETIME NOT NULL,
+    updated DATETIME,
+    FOREIGN KEY (entries_id) REFERENCES entries (id)
 );

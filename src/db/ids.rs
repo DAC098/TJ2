@@ -279,3 +279,7 @@ set_type!(UserSet, UserId, UserUid);
 id_type!(JournalId);
 uid_type!(JournalUid);
 set_type!(JournalSet, JournalId, JournalUid);
+
+id_type!(EntryId);
+uid_type!(EntryUid);
+set_type!(EntrySet, EntryId, EntryUid);

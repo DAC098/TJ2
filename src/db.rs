@@ -91,15 +91,15 @@ async fn init_database(conn: &mut SqliteConnection) -> Result<(), Error> {
     if maybe_found.is_none() {
         let mut rng = rand::thread_rng();
         let admin_id = create_admin_user(conn).await?;
-
-        test_data::create_data(conn, &mut rng, admin_id).await?;
+        let journals_id = test_data::create_journal(conn, admin_id).await?;
+        test_data::create_data(conn, &mut rng, journals_id, admin_id).await?;
         test_data::create_rand_users(conn, &mut rng).await?;
     }
 
     Ok(())
 }
 
-async fn create_admin_user(conn: &mut DbConn) -> Result<i64, Error> {
+async fn create_admin_user(conn: &mut DbConn) -> Result<ids::UserId, Error> {
     use argon2::Argon2;
     use argon2::password_hash::{PasswordHasher, SaltString};
     use argon2::password_hash::rand_core::OsRng;

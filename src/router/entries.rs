@@ -10,14 +10,18 @@ use sqlx::{QueryBuilder, Row};
 
 use crate::state;
 use crate::db;
+use crate::db::ids::{EntryId, EntryUid, JournalId, UserId};
 use crate::error::{self, Context};
-use crate::journal::{JournalTag, JournalEntry, JournalEntryFull};
+use crate::journal::{Journal, EntryTag, Entry, EntryFull};
 use crate::router::body;
 use crate::router::macros;
 
 #[derive(Debug, Serialize)]
-pub struct JournalEntryPartial {
-    pub id: i64,
+pub struct EntryPartial {
+    pub id: EntryId,
+    pub uid: EntryUid,
+    pub journals_id: JournalId,
+    pub users_id: UserId,
     pub title: Option<String>,
     pub date: NaiveDate,
     pub created: DateTime<Utc>,
@@ -39,35 +43,48 @@ pub async fn retrieve_entries(
         Some(req.uri().clone())
     );
 
+    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+        .await
+        .context("failed to retrieve default journal")?;
+
+    let Some(journal) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
     let mut fut_entries = sqlx::query(
         "\
         with search_entries as ( \
             select * \
-            from journal \
-            where journal.users_id = ?1 \
+            from entries \
+            where entries.users_id = ?1 and \
+                  entries.journals_id = ?2 \
         ) \
         select search_entries.id, \
+               search_entries.uid, \
+               search_entries.journals_id, \
+               search_entries.users_id, \
                search_entries.title, \
                search_entries.entry_date, \
                search_entries.created, \
                search_entries.updated, \
-               journal_tags.key, \
-               journal_tags.value
+               entry_tags.key, \
+               entry_tags.value
         from search_entries \
-            left join journal_tags on \
-                search_entries.id = journal_tags.journal_id \
+            left join entry_tags on \
+                search_entries.id = entry_tags.entries_id \
         order by search_entries.entry_date desc"
     )
         .bind(initiator.user.id)
+        .bind(journal.id)
         .fetch(&mut *conn);
 
     let mut found = Vec::new();
-    let mut current: Option<JournalEntryPartial> = None;
+    let mut current: Option<EntryPartial> = None;
 
     while let Some(try_record) = fut_entries.next().await {
         let record = try_record.context("failed to retrieve journal entry")?;
-        let key: Option<String> = record.get(5);
-        let value: Option<String> = record.get(6);
+        let key: Option<String> = record.get(8);
+        let value: Option<String> = record.get(9);
 
         if let Some(curr) = &mut current {
             let id = record.get(0);
@@ -83,12 +100,15 @@ pub async fn retrieve_entries(
                     HashMap::new()
                 };
 
-                let mut swapping = JournalEntryPartial {
+                let mut swapping = EntryPartial {
                     id,
-                    title: record.get(1),
-                    date: record.get(2),
-                    created: record.get(3),
-                    updated: record.get(4),
+                    uid: record.get(1),
+                    journals_id: record.get(2),
+                    users_id: record.get(3),
+                    title: record.get(4),
+                    date: record.get(5),
+                    created: record.get(6),
+                    updated: record.get(7),
                     tags
                 };
 
@@ -103,12 +123,15 @@ pub async fn retrieve_entries(
                 HashMap::new()
             };
 
-            current = Some(JournalEntryPartial {
+            current = Some(EntryPartial {
                 id: record.get(0),
-                title: record.get(1),
-                date: record.get(2),
-                created: record.get(3),
-                updated: record.get(4),
+                uid: record.get(1),
+                journals_id: record.get(2),
+                users_id: record.get(3),
+                title: record.get(4),
+                date: record.get(5),
+                created: record.get(6),
+                updated: record.get(7),
                 tags
             });
         }
@@ -139,25 +162,38 @@ pub async fn retrieve_entry(
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
+    let Some(date) = date else {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    };
+
     let mut conn = state.acquire_conn().await?;
 
     let initiator = macros::require_initiator!(&mut conn, &headers, Some(uri));
 
-    if let Some(date) = &date {
-        let result = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, date)
-            .await
-            .context("failed to retrieve journal entry for date")?;
+    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+        .await
+        .context("failed to retrieve default journal")?;
 
-        if let Some(entry) = result {
-            tracing::debug!("entry: {entry:#?}");
+    let Some(journal) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
 
-            Ok(body::Json(entry).into_response())
-        } else {
-            Ok(StatusCode::NOT_FOUND.into_response())
-        }
-    } else {
-        Ok(StatusCode::BAD_REQUEST.into_response())
-    }
+    let result = EntryFull::retrieve_date(
+        &mut conn,
+        journal.id,
+        initiator.user.id,
+        &date
+    )
+        .await
+        .context("failed to retrieve journal entry for date")?;
+
+    let Some(entry) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    tracing::debug!("entry: {entry:#?}");
+
+    Ok(body::Json(entry).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,19 +237,31 @@ pub async fn create_entry(
 
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
 
-    let entry_date = json.date;
+    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+        .await
+        .context("failed to retrieve default journal")?;
+
+    let Some(journal) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let uid = EntryUid::gen();
+    let journals_id = journal.id;
     let users_id = initiator.user.id;
+    let entry_date = json.date;
     let title = opt_non_empty_str(json.title);
     let contents = opt_non_empty_str(json.contents);
     let created = Utc::now();
 
-    let id: i64 = {
+    let id: EntryId = {
         let result = sqlx::query(
             "\
-            insert into journal (users_id, entry_date, title, contents, created) \
-            values (?1, ?2, ?3, ?4, ?5) \
+            insert into entries (uid, journals_id, users_id, entry_date, title, contents, created) \
+            values (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
             returning id"
         )
+            .bind(&uid)
+            .bind(journals_id)
             .bind(users_id)
             .bind(&entry_date)
             .bind(&title)
@@ -227,9 +275,9 @@ pub async fn create_entry(
     };
 
     let mut first = true;
-    let mut tags: Vec<JournalTag> = Vec::new();
+    let mut tags: Vec<EntryTag> = Vec::new();
     let mut query_builder: QueryBuilder<db::Db> = QueryBuilder::new(
-        "insert into journal_tags (journal_id, key, value, created) values "
+        "insert into entry_tags (entries_id, key, value, created) values "
     );
 
     for tag in json.tags {
@@ -245,7 +293,7 @@ pub async fn create_entry(
             query_builder.push(", (");
         }
 
-        tags.push(JournalTag {
+        tags.push(EntryTag {
             key: key.clone(),
             value: value.clone(),
             created: created.clone(),
@@ -270,10 +318,12 @@ pub async fn create_entry(
         .await
         .context("failed to commit changes to journal entry")?;
 
-    let entry = JournalEntryFull {
+    let entry = EntryFull {
         id,
-        date: entry_date,
+        uid,
+        journals_id,
         users_id,
+        date: entry_date,
         title,
         contents,
         created,
@@ -296,7 +346,20 @@ pub async fn update_entry(
     let mut conn = state.begin_conn().await?;
 
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
-    let result = JournalEntry::retrieve_date(&mut conn, initiator.user.id, &date)
+    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+        .await
+        .context("failed to retrieve default journal")?;
+
+    let Some(journal) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let result = Entry::retrieve_date(
+        &mut conn,
+        journal.id,
+        initiator.user.id,
+        &date
+    )
         .await
         .context("failed to retrieve journal entry by date")?;
 
@@ -313,7 +376,7 @@ pub async fn update_entry(
 
     sqlx::query(
         "\
-        update journal \
+        update entries \
         set entry_date = ?2, \
             title = ?3, \
             contents = ?4, \
@@ -330,11 +393,11 @@ pub async fn update_entry(
         .context("failed to update journal entry")?;
 
     let tags = {
-        let mut tags: Vec<JournalTag> = Vec::new();
-        let mut current_tags: HashMap<String, JournalTag> = HashMap::new();
+        let mut tags: Vec<EntryTag> = Vec::new();
+        let mut current_tags: HashMap<String, EntryTag> = HashMap::new();
 
         {
-            let mut tag_stream = JournalTag::retrieve_journal_stream(&mut conn, entry.id);
+            let mut tag_stream = EntryTag::retrieve_entry_stream(&mut conn, entry.id);
             while let Some(tag_result) = tag_stream.next().await {
                 let tag = tag_result.context("failed to retrieve journal tag")?;
 
@@ -346,7 +409,7 @@ pub async fn update_entry(
         let mut upsert_first = true;
         let mut upsert_tags: QueryBuilder<db::Db> = QueryBuilder::new(
             "\
-            insert into journal_tags (journal_id, key, value, created) values "
+            insert into entry_tags (entries_id, key, value, created) values "
         );
 
         for tag in json.tags {
@@ -369,7 +432,7 @@ pub async fn update_entry(
                     continue;
                 }
             } else {
-                tags.push(JournalTag {
+                tags.push(EntryTag {
                     key: key.clone(),
                     value: value.clone(),
                     created: updated,
@@ -408,7 +471,7 @@ pub async fn update_entry(
 
         if !current_tags.is_empty() {
             let mut delete_tags: QueryBuilder<db::Db> = QueryBuilder::new(
-                "delete from journal_tags where journal_id = "
+                "delete from entry_tags where entries_id = "
             );
             delete_tags.push_bind(&entry.id);
             delete_tags.push(" and key in (");
@@ -436,8 +499,10 @@ pub async fn update_entry(
         .await
         .context("failed commit changes to journal entry")?;
 
-    let entry = JournalEntryFull {
+    let entry = EntryFull {
         id: entry.id,
+        uid: entry.uid,
+        journals_id: entry.journals_id,
         users_id: entry.users_id,
         date: entry_date,
         title,
@@ -458,7 +523,20 @@ pub async fn delete_entry(
     let mut conn = state.begin_conn().await?;
 
     let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
-    let result = JournalEntryFull::retrieve_date(&mut conn, initiator.user.id, &date)
+    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+        .await
+        .context("failed to retrieve default journal")?;
+
+    let Some(journal) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let result = EntryFull::retrieve_date(
+        &mut conn,
+        journal.id,
+        initiator.user.id,
+        &date
+    )
         .await
         .context("failed to retrieve journal entry by date")?;
 
@@ -466,7 +544,7 @@ pub async fn delete_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let tags = sqlx::query("delete from journal_tags where journal_id = ?1")
+    let tags = sqlx::query("delete from entry_tags where entries_id = ?1")
         .bind(entry.id)
         .execute(&mut *conn)
         .await
@@ -477,7 +555,7 @@ pub async fn delete_entry(
         tracing::warn!("dangling tags for journal entry");
     }
 
-    let entry = sqlx::query("delete from journal where id = ?1")
+    let entry = sqlx::query("delete from entries where id = ?1")
         .bind(entry.id)
         .execute(&mut *conn)
         .await

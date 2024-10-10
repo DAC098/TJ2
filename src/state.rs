@@ -114,4 +114,6 @@ impl Storage {
     pub fn get_path(&self) -> &Path {
         &self.path
     }
+
+    //pub fn get_user_dir(&self, users_id: 
 }
