@@ -134,3 +134,9 @@ async fn create_admin_user(conn: &mut DbConn) -> Result<ids::UserId, Error> {
 
     Ok(result.get(0))
 }
+
+async fn create_default_permissions(_conn: &mut DbConn) -> Result<ids::RoleId, Error> {
+    // create the default permissions that will be created for the server
+    // when initialized
+    Ok(ids::RoleId::new(0).unwrap())
+}

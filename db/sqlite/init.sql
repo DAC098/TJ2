@@ -50,6 +50,7 @@ CREATE TABLE authz_permissions (
     role_id INTEGER NOT NULL,
     scope VARCHAR NOT NULL,
     ability VARCHAR NOT NULL,
+    ref_id INTEGER,
     PRIMARY KEY (role_id, scope, ability),
     FOREIGN KEY (role_id) REFERENCES authz_roles (id)
 );
