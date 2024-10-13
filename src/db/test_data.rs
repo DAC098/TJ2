@@ -33,6 +33,12 @@ pub async fn create(conn: &mut DbConn, rng: &mut ThreadRng) -> Result<(), Error>
             Ability::Read,
             Ability::Update,
             Ability::Delete,
+        ]),
+        (Scope::Entries, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
         ])
     ];
 
