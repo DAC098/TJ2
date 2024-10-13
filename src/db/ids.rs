@@ -3,8 +3,6 @@ use std::str::FromStr;
 
 use serde::{Serialize, Deserialize};
 
-use super::Db;
-
 pub const UID_SIZE: usize = 16;
 pub const UID_ALPHABET: [char; 63] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
@@ -12,8 +10,6 @@ pub const UID_ALPHABET: [char; 63] = [
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
     '_'
 ];
-
-pub trait RefId: sqlx::Type<Db> {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("provided integer is less than or equal to zero")]
@@ -50,7 +46,11 @@ macro_rules! id_type {
             }
         }
 
-        impl RefId for $name {}
+        impl AsRef<i64> for $name {
+            fn as_ref(&self) -> &i64 {
+                self.inner()
+            }
+        }
 
         impl TryFrom<i64> for $name {
             type Error = InvalidIdInteger;
@@ -281,6 +281,9 @@ macro_rules! set_type {
 id_type!(UserId);
 uid_type!(UserUid);
 set_type!(UserSet, UserId, UserUid);
+
+id_type!(GroupId);
+uid_type!(GroupUid);
 
 id_type!(JournalId);
 uid_type!(JournalUid);

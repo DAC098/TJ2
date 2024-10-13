@@ -15,6 +15,7 @@ use crate::error::{self, Context};
 use crate::journal::{Journal, EntryTag, Entry, EntryFull};
 use crate::router::body;
 use crate::router::macros;
+use crate::sec::authz::{Scope, Ability, has_permission_ref};
 
 #[derive(Debug, Serialize)]
 pub struct EntryPartial {
@@ -50,6 +51,19 @@ pub async fn retrieve_entries(
     let Some(journal) = result else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+
+    tracing::debug!(
+        "can view entries? {}",
+        has_permission_ref(
+            &mut conn,
+            initiator.user.id,
+            Scope::Journals,
+            Ability::Read,
+            journal.id
+        )
+            .await
+            .context("failed to retrieve permissions for user")?
+    );
 
     let mut fut_entries = sqlx::query(
         "\

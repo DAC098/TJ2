@@ -13,6 +13,7 @@ use sqlx::sqlite::{
 use crate::error::{Error, Context};
 use crate::config::{Config, meta::get_cwd};
 use crate::path::metadata;
+use crate::sec::authz::{Scope, Ability, Role, create_permissions, assign_user_role};
 
 mod test_data;
 
@@ -91,6 +92,12 @@ async fn init_database(conn: &mut SqliteConnection) -> Result<(), Error> {
     if maybe_found.is_none() {
         let mut rng = rand::thread_rng();
         let admin_id = create_admin_user(conn).await?;
+        let admin_role = create_default_roles(conn).await?;
+
+        assign_user_role(conn, admin_id, admin_role.id)
+            .await
+            .context("failed to assign admin to admin role")?;
+
         let journals_id = test_data::create_journal(conn, admin_id).await?;
         test_data::create_data(conn, &mut rng, journals_id, admin_id).await?;
         test_data::create_rand_users(conn, &mut rng).await?;
@@ -135,8 +142,36 @@ async fn create_admin_user(conn: &mut DbConn) -> Result<ids::UserId, Error> {
     Ok(result.get(0))
 }
 
-async fn create_default_permissions(_conn: &mut DbConn) -> Result<ids::RoleId, Error> {
-    // create the default permissions that will be created for the server
-    // when initialized
-    Ok(ids::RoleId::new(0).unwrap())
+async fn create_default_roles(conn: &mut DbConn) -> Result<Role, Error> {
+    let admin_role = Role::create(conn, "admin")
+        .await
+        .context("failed to create admin role")?;
+
+    let permissions = vec![
+        (Scope::Users, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete
+        ]),
+        (Scope::Journals, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
+        ]),
+        (Scope::Entries, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
+        ])
+    ];
+
+    create_permissions(conn, admin_role.id, permissions)
+        .await
+        .context("failed to create default permissions")?;
+
+    Ok(admin_role)
 }
+
