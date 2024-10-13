@@ -80,7 +80,8 @@ pub async fn has_permission(
                 authz_roles.id = user_roles.role_id \
         where (user_roles.user_id = $1 or group_users.user_id = $1) and \
             authz_permissions.scope = $2 and \
-            authz_permissions.ability = $3"
+            authz_permissions.ability = $3 and \
+            authz_permissions.ref_id = null"
     )
         .bind(users_id)
         .bind(scope)
@@ -122,7 +123,7 @@ where
         where (user_roles.users_id = ?1 or group_users.users_id = ?1) and \
             authz_permissions.scope = ?2 and \
             authz_permissions.ability = ?3 and \
-            (authz_permissions.ref_id = ?4 or authz_permissions.ref_id is null)"
+            authz_permissions.ref_id = ?4"
     )
         .bind(users_id)
         .bind(scope)
