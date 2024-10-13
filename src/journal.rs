@@ -17,6 +17,32 @@ pub struct Journal {
 }
 
 impl Journal {
+    pub async fn create(conn: &mut db::DbConn, users_id: UserId, name: &str) -> Result<Self, sqlx::Error> {
+        let uid = JournalUid::gen();
+        let created = Utc::now();
+
+        sqlx::query(
+            "\
+            insert into journals (uid, users_id, name, created) values \
+            (?1, ?2, ?3, ?4) \
+            returning id"
+        )
+            .bind(&uid)
+            .bind(users_id)
+            .bind(name)
+            .bind(created)
+            .fetch_one(conn)
+            .await
+            .map(|row| Self {
+                id: row.get(0),
+                uid,
+                users_id,
+                name: name.to_owned(),
+                created,
+                updated: None
+            })
+    }
+
     pub async fn retrieve_default(conn: &mut db::DbConn, users_id: UserId) -> Result<Option<Self>, sqlx::Error> {
         sqlx::query(
             "\

@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use sqlx::{Connection, ConnectOptions, Row};
+use sqlx::{Connection, ConnectOptions};
 use sqlx::sqlite::{
     Sqlite,
     SqlitePool,
@@ -14,6 +14,8 @@ use crate::error::{Error, Context};
 use crate::config::{Config, meta::get_cwd};
 use crate::path::metadata;
 use crate::sec::authz::{Scope, Ability, Role, create_permissions, assign_user_role};
+use crate::sec::password;
+use crate::user::User;
 
 mod test_data;
 
@@ -84,62 +86,33 @@ async fn init_database(conn: &mut SqliteConnection) -> Result<(), Error> {
             .context("failed to run sql query")?;
     }
 
-    let maybe_found = sqlx::query("select * from users where username = 'admin'")
-        .fetch_optional(&mut *conn)
+    let maybe_admin = User::retrieve_username(conn, "admin")
         .await
         .context("failed to check if admin user was found")?;
 
-    if maybe_found.is_none() {
+    if maybe_admin.is_none() {
         let mut rng = rand::thread_rng();
-        let admin_id = create_admin_user(conn).await?;
+        let admin = create_admin_user(conn).await?;
         let admin_role = create_default_roles(conn).await?;
 
-        assign_user_role(conn, admin_id, admin_role.id)
+        assign_user_role(conn, admin.id, admin_role.id)
             .await
             .context("failed to assign admin to admin role")?;
 
-        let journals_id = test_data::create_journal(conn, admin_id).await?;
-        test_data::create_data(conn, &mut rng, journals_id, admin_id).await?;
-        test_data::create_rand_users(conn, &mut rng).await?;
+        test_data::create_journal(conn, &mut rng, admin.id).await?;
+        test_data::create(conn, &mut rng).await?;
     }
 
     Ok(())
 }
 
-async fn create_admin_user(conn: &mut DbConn) -> Result<ids::UserId, Error> {
-    use argon2::Argon2;
-    use argon2::password_hash::{PasswordHasher, SaltString};
-    use argon2::password_hash::rand_core::OsRng;
+async fn create_admin_user(conn: &mut DbConn) -> Result<User, Error> {
+    let hash = password::create("password")
+        .context("failed to create admin password")?;
 
-    let uid = ids::UserUid::gen();
-    let password = b"password";
-    let salt = SaltString::generate(&mut OsRng);
-
-    let config = Argon2::default();
-    let password_hash = match config.hash_password(password, &salt) {
-        Ok(hashed) => hashed.to_string(),
-        Err(err) => {
-            tracing::debug!("argon2 hash_password error: {err:#?}");
-
-            return Err(Error::context("failed to hash admin password"));
-        }
-    };
-
-    let result = sqlx::query(
-        "\
-        insert into users (uid, username, password, version) values \
-        (?1, ?2, ?3, ?4) \
-        returning id"
-    )
-        .bind(uid)
-        .bind("admin")
-        .bind(&password_hash)
-        .bind(0)
-        .fetch_one(&mut *conn)
+    User::create(conn, "admin", &hash, 0)
         .await
-        .context("failed to create admin user")?;
-
-    Ok(result.get(0))
+        .context("failed to create admin user")
 }
 
 async fn create_default_roles(conn: &mut DbConn) -> Result<Role, Error> {

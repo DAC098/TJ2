@@ -14,10 +14,10 @@ CREATE TABLE groups (
 
 CREATE TABLE group_users (
     users_id INTEGER NOT NULL,
-    group_id INTEGER NOT NULL,
-    PRIMARY KEY (users_id, group_id),
+    groups_id INTEGER NOT NULL,
+    PRIMARY KEY (users_id, groups_id),
     FOREIGN KEY (users_id) REFERENCES users (id),
-    FOREIGN KEY (group_id) REFERENCES groups (id)
+    FOREIGN KEY (groups_id) REFERENCES groups (id)
 );
 
 CREATE TABLE authn_totp (
@@ -64,10 +64,10 @@ CREATE TABLE user_roles (
 );
 
 CREATE TABLE group_roles (
-    group_id INTEGER NOT NULL,
+    groups_id INTEGER NOT NULL,
     role_id INTEGER NOT NULL,
-    PRIMARY KEY (group_id, role_id),
-    FOREIGN KEY (group_id) REFERENCES groups (id),
+    PRIMARY KEY (groups_id, role_id),
+    FOREIGN KEY (groups_id) REFERENCES groups (id),
     FOREIGN KEY (role_id) REFERENCES authz_roles (id)
 );
 

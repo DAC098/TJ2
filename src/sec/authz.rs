@@ -114,9 +114,9 @@ where
             left join group_roles on \
                 authz_roles.id = group_roles.role_id \
             left join groups on \
-                group_roles.group_id = groups.id \
+                group_roles.groups_id = groups.id \
             left join group_users on \
-                groups.id = group_users.group_id \
+                groups.id = group_users.groups_id \
             left join user_roles on \
                 authz_roles.id = user_roles.role_id \
         where (user_roles.users_id = ?1 or group_users.users_id = ?1) and \

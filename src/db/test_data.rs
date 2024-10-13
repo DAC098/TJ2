@@ -1,8 +1,6 @@
-use argon2::Argon2;
-use argon2::password_hash::{PasswordHasher, SaltString};
 use chrono::{Days, DateTime, NaiveTime, NaiveDate, Utc};
 use rand::Rng;
-use rand::rngs::{OsRng, ThreadRng};
+use rand::rngs::ThreadRng;
 use rand::distributions::{Alphanumeric, Bernoulli};
 use sqlx::Row;
 
@@ -10,25 +8,49 @@ use super::DbConn;
 use super::ids;
 
 use crate::error::{Error, Context};
+use crate::journal::Journal;
+use crate::user::{User, Group, assign_user_group};
+use crate::sec::password;
+use crate::sec::authz::{Role, Scope, Ability, create_permissions, assign_group_role};
 
-pub async fn create_rand_users(
-    conn: &mut DbConn,
-    rng: &mut ThreadRng
-) -> Result<(), Error> {
+pub async fn create(conn: &mut DbConn, rng: &mut ThreadRng) -> Result<(), Error> {
     let password = "password";
+
+    let journalists_group = Group::create(conn, "journalists")
+        .await
+        .context("failed to create journalists group")?;
+    let journalists_role = Role::create(conn, "journalists")
+        .await
+        .context("failed to create journalists role")?;
+
+    assign_group_role(conn, journalists_group.id, journalists_role.id)
+        .await
+        .context("failed to assign journalists group to journalists role")?;
+
+    let permissions = vec![
+        (Scope::Journals, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
+        ])
+    ];
+
+    create_permissions(conn, journalists_role.id, permissions)
+        .await
+        .context("failed to create permissions for journalists role")?;
 
     for _ in 0..10 {
         let username = gen_username(rng);
+        let user = create_user(conn, &username, password).await?;
 
-        let users_id = create_user(conn, &username, password).await?;
+        tracing::debug!("create new user: {}", user.id);
 
-        tracing::debug!("create new user: id {users_id}");
-
-        let journals_id = create_journal(conn, users_id).await?;
-
-        create_data(conn, rng, journals_id, users_id)
+        assign_user_group(conn, user.id, journalists_group.id)
             .await
-            .context("failed to create test data for rand user")?;
+            .context("failed to assign test user to journalists group")?;
+
+        create_journal(conn, rng, user.id).await?;
     }
 
     Ok(())
@@ -36,34 +58,13 @@ pub async fn create_rand_users(
 
 pub async fn create_journal(
     conn: &mut DbConn,
-    users_id: ids::UserId,
-) -> Result<ids::JournalId, Error> {
-    let uid = ids::JournalUid::gen();
-    let created = Utc::now();
-
-    let result = sqlx::query(
-        "\
-        insert into journals (uid, users_id, name, created) values \
-        (?1, ?2, ?3, ?4) \
-        returning id"
-    )
-        .bind(uid)
-        .bind(users_id)
-        .bind("default")
-        .bind(created)
-        .fetch_one(conn)
-        .await
-        .context("failed to create default journal for user")?;
-
-    Ok(result.get(0))
-}
-
-pub async fn create_data(
-    conn: &mut DbConn,
     rng: &mut ThreadRng,
-    journals_id: ids::JournalId,
     users_id: ids::UserId,
 ) -> Result<(), Error> {
+    let journal = Journal::create(conn, users_id, "default")
+        .await
+        .context("failed to create journal for test user")?;
+
     let today = Utc::now();
     let total_entries = rng.gen_range(50..=240) + 1;
 
@@ -74,7 +75,7 @@ pub async fn create_data(
 
         tracing::debug!("creating entry: {date}");
 
-        create_journal_entry(conn, rng, journals_id, users_id, date).await?;
+        create_journal_entry(conn, rng, journal.id, users_id, date).await?;
     }
 
     tracing::info!("created {total_entries} entries");
@@ -142,34 +143,13 @@ async fn create_user(
     conn: &mut DbConn,
     username: &str,
     password: &str
-) -> Result<ids::UserId, Error> {
-    let uid = ids::UserUid::gen();
-    let salt = SaltString::generate(&mut OsRng);
-    let config = Argon2::default();
-    let password_hash = match config.hash_password(password.as_bytes(), &salt) {
-        Ok(hashed) => hashed.to_string(),
-        Err(err) => {
-            tracing::debug!("argon2 hash_password error: {err:#?}");
+) -> Result<User, Error> {
+    let hash = password::create(password)
+        .context("failed to create argon2 hash")?;
 
-            return Err(Error::context("failed to hash user password"))?;
-        }
-    };
-
-    let result = sqlx::query(
-        "\
-        insert into users (uid, username, password, version) \
-        values (?1, ?2, ?3, ?4) \
-        returning id"
-    )
-        .bind(uid)
-        .bind(username)
-        .bind(&password_hash)
-        .bind(0)
-        .fetch_one(&mut *conn)
+    User::create(conn, username, &hash, 0)
         .await
-        .context("failed to create user")?;
-
-    Ok(result.get(0))
+        .context("failed to create user")
 }
 
 fn gen_username(rng: &mut ThreadRng) -> String {
