@@ -1,4 +1,5 @@
-use sqlx::{QueryBuilder, Row, Type, Execute};
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use sqlx::{QueryBuilder, Row, Type};
 
 use crate::db;
 use crate::db::ids::{GroupId, UserId, RoleId, RoleUid};
@@ -12,6 +13,17 @@ pub enum Ability {
     Delete,
 }
 
+impl Display for Ability {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.write_str(match self {
+            Ability::Create => "Create",
+            Ability::Read => "Read",
+            Ability::Update => "Update",
+            Ability::Delete => "Delete",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Type)]
 #[sqlx(rename_all = "lowercase")]
 pub enum Scope {
@@ -19,6 +31,17 @@ pub enum Scope {
     Journals,
     Entries,
     Roles,
+}
+
+impl Display for Scope {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.write_str(match self {
+            Scope::Users => "Users",
+            Scope::Journals => "Journals",
+            Scope::Entries => "Entries",
+            Scope::Roles => "Roles",
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -73,15 +96,15 @@ pub async fn has_permission(
             left join group_roles on \
                 authz_roles.id = group_roles.role_id \
             left join groups on \
-                group_roles.group_id = groups.id \
+                group_roles.groups_id = groups.id \
             left join group_users on \
-                groups.id = group_users.group_id \
+                groups.id = group_users.groups_id \
             left join user_roles on \
                 authz_roles.id = user_roles.role_id \
-        where (user_roles.user_id = $1 or group_users.user_id = $1) and \
+        where (user_roles.users_id = $1 or group_users.users_id = $1) and \
             authz_permissions.scope = $2 and \
             authz_permissions.ability = $3 and \
-            authz_permissions.ref_id = null"
+            authz_permissions.ref_id is null"
     )
         .bind(users_id)
         .bind(scope)
@@ -155,13 +178,13 @@ pub async fn assign_user_role(
 
 pub async fn assign_group_role(
     conn: &mut db::DbConn,
-    group_id: GroupId,
+    groups_id: GroupId,
     role_id: RoleId,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "insert into group_roles (groups_id, role_id) values (?1, ?2)"
     )
-        .bind(group_id)
+        .bind(groups_id)
         .bind(role_id)
         .execute(&mut *conn)
         .await?;
@@ -209,9 +232,6 @@ where
     }
 
     let query = query_builder.build();
-    let sql = query.sql();
-
-    tracing::debug!("permissions sql: {sql}");
 
     query.execute(&mut *conn)
         .await?;

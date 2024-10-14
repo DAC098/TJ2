@@ -15,7 +15,36 @@ use crate::error::{self, Context};
 use crate::journal::{Journal, EntryTag, Entry, EntryFull};
 use crate::router::body;
 use crate::router::macros;
-use crate::sec::authz::{Scope, Ability, has_permission_ref};
+use crate::sec::authz::{Scope, Ability, has_permission, has_permission_ref};
+
+macro_rules! perm_check {
+    ($conn:expr, $initiator:expr, $journal:expr, $scope:expr, $ability:expr) => {
+        let perm_check = if $journal.users_id == $initiator.user.id {
+            has_permission(
+                $conn,
+                $initiator.user.id,
+                $scope,
+                $ability,
+            )
+                .await
+                .context("failed to retrieve permissiosn for user")?
+        } else {
+            has_permission_ref(
+                $conn,
+                $initiator.user.id,
+                $scope,
+                $ability,
+                $journal.id
+            )
+                .await
+                .context("failed to retrieve permissions for user")?
+        };
+
+        if !perm_check {
+            return Ok(StatusCode::UNAUTHORIZED.into_response());
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct EntryPartial {
@@ -52,18 +81,7 @@ pub async fn retrieve_entries(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    tracing::debug!(
-        "can view entries? {}",
-        has_permission_ref(
-            &mut conn,
-            initiator.user.id,
-            Scope::Journals,
-            Ability::Read,
-            journal.id
-        )
-            .await
-            .context("failed to retrieve permissions for user")?
-    );
+    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
 
     let mut fut_entries = sqlx::query(
         "\
@@ -192,6 +210,8 @@ pub async fn retrieve_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
+    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
+
     let result = EntryFull::retrieve_date(
         &mut conn,
         journal.id,
@@ -258,6 +278,8 @@ pub async fn create_entry(
     let Some(journal) = result else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+
+    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Create);
 
     let uid = EntryUid::gen();
     let journals_id = journal.id;
@@ -367,6 +389,8 @@ pub async fn update_entry(
     let Some(journal) = result else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+
+    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Update);
 
     let result = Entry::retrieve_date(
         &mut conn,
@@ -544,6 +568,8 @@ pub async fn delete_entry(
     let Some(journal) = result else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+
+    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Delete);
 
     let result = EntryFull::retrieve_date(
         &mut conn,
