@@ -293,5 +293,8 @@ id_type!(EntryId);
 uid_type!(EntryUid);
 set_type!(EntrySet, EntryId, EntryUid);
 
+id_type!(FileEntryId);
+uid_type!(FileEntryUid);
+
 id_type!(RoleId);
 uid_type!(RoleUid);

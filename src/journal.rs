@@ -4,7 +4,15 @@ use serde::Serialize;
 use sqlx::Row;
 
 use crate::db;
-use crate::db::ids::{EntryId, EntryUid, JournalId, JournalUid, UserId};
+use crate::db::ids::{
+    EntryId,
+    EntryUid,
+    FileEntryId,
+    FileEntryUid,
+    JournalId,
+    JournalUid,
+    UserId
+};
 
 #[derive(Debug)]
 pub struct Journal {
@@ -136,6 +144,7 @@ pub struct EntryFull {
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
     pub tags: Vec<EntryTag>,
+    pub audio: Vec<i64>,
 }
 
 impl EntryFull {
@@ -159,7 +168,8 @@ impl EntryFull {
                 contents: found.contents,
                 created: found.created,
                 updated: found.updated,
-                tags
+                tags,
+                audio: Vec::new()
             }))
         } else {
             Ok(None)
@@ -232,4 +242,23 @@ impl EntryTag {
             .try_collect()
             .await
     }
+}
+
+#[derive(Debug)]
+pub enum FileType {
+    Other,
+    Audio,
+}
+
+#[derive(Debug)]
+pub struct FileEntry {
+    pub id: FileEntryId,
+    pub uid: FileEntryUid,
+    pub entries_id: EntryId,
+    pub type_: FileType,
+    pub name: Option<String>,
+    pub mime: mime::Mime,
+    pub size: i64,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
 }

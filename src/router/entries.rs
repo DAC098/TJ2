@@ -10,7 +10,7 @@ use sqlx::{QueryBuilder, Row};
 
 use crate::state;
 use crate::db;
-use crate::db::ids::{EntryId, EntryUid, JournalId, UserId};
+use crate::db::ids::{EntryId, EntryUid, FileEntryId, FileEntryUid, JournalId, UserId};
 use crate::error::{self, Context};
 use crate::journal::{Journal, EntryTag, Entry, EntryFull};
 use crate::router::body;
@@ -235,13 +235,19 @@ pub struct EntryBody {
     date: NaiveDate,
     title: Option<String>,
     contents: Option<String>,
-    tags: Vec<EntryTagBody>,
+    tags: Vec<TagEntryBody>,
+    audio: Vec<AudioEntryBody>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct EntryTagBody {
+pub struct TagEntryBody {
     key: String,
     value: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AudioEntryBody {
+    id: Option<FileEntryId>
 }
 
 fn non_empty_str(given: String) -> Option<String> {
@@ -364,7 +370,8 @@ pub async fn create_entry(
         contents,
         created,
         updated: None,
-        tags
+        tags,
+        audio: Vec::new(),
     };
 
     Ok((
@@ -547,7 +554,8 @@ pub async fn update_entry(
         contents,
         created: entry.created,
         updated: Some(updated),
-        tags
+        tags,
+        audio: Vec::new(),
     };
 
     Ok(body::Json(entry).into_response())

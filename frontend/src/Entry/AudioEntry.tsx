@@ -7,7 +7,7 @@ import { EntryForm } from "../journal";
 
 interface RecordAudioProps {
     on_cancel: () => void,
-    on_created: (URL) => void,
+    on_created: (URL, Blob) => void,
 }
 
 function RecordAudio({on_cancel, on_created}: RecordAudioProps) {
@@ -72,7 +72,10 @@ function RecordAudio({on_cancel, on_created}: RecordAudioProps) {
 
                 media_ref.current.buffer = [];
 
-                on_created(URL.createObjectURL(media_ref.current.blob));
+                on_created(
+                    URL.createObjectURL(media_ref.current.blob),
+                    media_ref.current.blob
+                );
             });
 
             media_recorder.addEventListener("pause", (e) => {
@@ -184,8 +187,12 @@ const AudioEntry = ({}: AudioEntryProps) => {
             {record_audio ?
                 <RecordAudio on_cancel={() => {
                     set_record_audio(false);
-                }} on_created={url => {
-                    audio.append({src: url});
+                }} on_created={(url, blob) => {
+                    audio.append({
+                        type: "in-memory",
+                        src: url,
+                        data: blob
+                    });
 
                     set_record_audio(false);
                 }}/>

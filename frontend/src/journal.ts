@@ -2,6 +2,8 @@ import { res_as_json } from "./net";
 
 export interface JournalEntry {
     id: number,
+    uid: string,
+    journals_id: number,
     users_id: number,
     date: string,
     title: string | null,
@@ -9,6 +11,7 @@ export interface JournalEntry {
     created: string,
     updated: string,
     tags: JournalTag[],
+    audio: JournalAudio[],
 }
 
 export interface JournalTag {
@@ -18,14 +21,30 @@ export interface JournalTag {
     updated: string | null,
 }
 
+export interface JournalAudio {
+    id: number,
+
+}
+
 export interface EntryTagForm {
     key: string,
     value: string,
 }
 
-export interface EntryAudioForm {
+export interface InMemoryAudio {
+    type: "in-memory",
+    src: URL,
+    data: Blob
+}
+
+export interface ServerAudio {
+    type: "server",
     src: URL
 }
+
+export type EntryAudioForm =
+    InMemoryAudio |
+    ServerAudio;
 
 export interface EntryForm {
     date: string,
@@ -49,12 +68,16 @@ export function blank_form(): EntryForm {
 
 export function entry_to_form(entry: JournalEntry): EntryForm {
     let tags = [];
+    let audio = [];
 
     for (let tag of entry.tags) {
         tags.push({
             key: tag.key,
             value: tag.value ?? ""
         });
+    }
+
+    for (let audio of entry.audio) {
     }
 
     return {
