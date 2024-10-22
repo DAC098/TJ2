@@ -46,12 +46,22 @@ export type EntryAudioForm =
     InMemoryAudio |
     ServerAudio;
 
+export interface InMemoryVideo {
+    type: "in-memory",
+    src: URL,
+    data: Blob
+}
+
+export type EntryVideoForm =
+    InMemoryVideo;
+
 export interface EntryForm {
     date: string,
     title: string,
     contents: string,
     tags: EntryTagForm[],
     audio: EntryAudioForm[]
+    video: EntryVideoForm[],
 }
 
 export function blank_form(): EntryForm {

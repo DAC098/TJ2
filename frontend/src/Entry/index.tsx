@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 
 import AudioEntry from "./AudioEntry";
+import AudioVideoEntry from "./AudioVideoEntry";
 import TagEntry from "./TagEntry";
 import {
     JournalEntry,
@@ -136,6 +137,9 @@ const Entry = () => {
                 </EntrySec>
                 <EntrySec title={<EntrySecTitle title="Audio"/>}>
                     <AudioEntry/>
+                </EntrySec>
+                <EntrySec title={<EntrySecTitle title="Video"/>}>
+                    <AudioVideoEntry/>
                 </EntrySec>
                 <EntrySec title={<EntrySecTitle title="Tags"/>}>
                     <TagEntry/>
