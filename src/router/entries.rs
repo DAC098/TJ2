@@ -6,45 +6,20 @@ use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
 use futures::StreamExt;
 use serde::{Serialize, Deserialize};
-use sqlx::{QueryBuilder, Row};
+use sqlx::{QueryBuilder, Row, Execute};
 
 use crate::state;
 use crate::db;
 use crate::db::ids::{EntryId, EntryUid, FileEntryId, FileEntryUid, JournalId, UserId};
 use crate::error::{self, Context};
-use crate::journal::{Journal, EntryTag, Entry, EntryFull};
+use crate::journal::{Journal, EntryTag, Entry, EntryFull, FileEntry};
 use crate::router::body;
 use crate::router::macros;
-use crate::sec::authz::{Scope, Ability, has_permission, has_permission_ref};
+use crate::sec::authz::{Scope, Ability};
 
-macro_rules! perm_check {
-    ($conn:expr, $initiator:expr, $journal:expr, $scope:expr, $ability:expr) => {
-        let perm_check = if $journal.users_id == $initiator.user.id {
-            has_permission(
-                $conn,
-                $initiator.user.id,
-                $scope,
-                $ability,
-            )
-                .await
-                .context("failed to retrieve permissiosn for user")?
-        } else {
-            has_permission_ref(
-                $conn,
-                $initiator.user.id,
-                $scope,
-                $ability,
-                $journal.id
-            )
-                .await
-                .context("failed to retrieve permissions for user")?
-        };
+mod auth;
 
-        if !perm_check {
-            return Ok(StatusCode::UNAUTHORIZED.into_response());
-        }
-    }
-}
+pub mod files;
 
 #[derive(Debug, Serialize)]
 pub struct EntryPartial {
@@ -81,7 +56,7 @@ pub async fn retrieve_entries(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
+    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
 
     let mut fut_entries = sqlx::query(
         "\
@@ -210,7 +185,7 @@ pub async fn retrieve_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
+    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
 
     let result = EntryFull::retrieve_date(
         &mut conn,
@@ -230,13 +205,43 @@ pub async fn retrieve_entry(
     Ok(body::Json(entry).into_response())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClientData {
+    key: String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Attached<T, E> {
+    #[serde(flatten)]
+    inner: T,
+    attached: E,
+}
+
+impl<T, E> From<(T, E)> for Attached<T, E> {
+    fn from((inner, attached): (T, E)) -> Self {
+        Self { inner, attached }
+    }
+}
+
+pub type ResultFileEntry = Attached<FileEntry, ClientData>;
+pub type ResultEntryFull = EntryFull<ResultFileEntry>;
+
 #[derive(Debug, Deserialize)]
-pub struct EntryBody {
+pub struct NewEntryBody {
     date: NaiveDate,
     title: Option<String>,
     contents: Option<String>,
     tags: Vec<TagEntryBody>,
-    audio: Vec<AudioEntryBody>,
+    files: Vec<NewFileEntryBody>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatedEntryBody {
+    date: NaiveDate,
+    title: Option<String>,
+    contents: Option<String>,
+    tags: Vec<TagEntryBody>,
+    files: Vec<UpdatedFileEntryBody>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,8 +251,21 @@ pub struct TagEntryBody {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AudioEntryBody {
-    id: Option<FileEntryId>
+pub struct ExistingFileEntryBody {
+    id: FileEntryId,
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewFileEntryBody {
+    key: String,
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub enum UpdatedFileEntryBody {
+    New(NewFileEntryBody),
+    Existing(ExistingFileEntryBody),
 }
 
 fn non_empty_str(given: String) -> Option<String> {
@@ -271,7 +289,7 @@ fn opt_non_empty_str(given: Option<String>) -> Option<String> {
 pub async fn create_entry(
     state: state::SharedState,
     headers: HeaderMap,
-    body::Json(json): body::Json<EntryBody>,
+    body::Json(json): body::Json<NewEntryBody>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.begin_conn().await?;
 
@@ -285,7 +303,7 @@ pub async fn create_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Create);
+    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Create);
 
     let uid = EntryUid::gen();
     let journals_id = journal.id;
@@ -316,51 +334,176 @@ pub async fn create_entry(
         result.get(0)
     };
 
-    let mut first = true;
-    let mut tags: Vec<EntryTag> = Vec::new();
-    let mut query_builder: QueryBuilder<db::Db> = QueryBuilder::new(
-        "insert into entry_tags (entries_id, key, value, created) values "
-    );
+    let tags = if !json.tags.is_empty() {
+        let mut first = true;
+        let mut rtn: Vec<EntryTag> = Vec::new();
+        let mut query_builder: QueryBuilder<db::Db> = QueryBuilder::new(
+            "insert into entry_tags (entries_id, key, value, created) values "
+        );
 
-    for tag in json.tags {
-        let Some(key) = non_empty_str(tag.key) else {
-            continue;
-        };
-        let value = opt_non_empty_str(tag.value);
+        for tag in json.tags {
+            let Some(key) = non_empty_str(tag.key) else {
+                continue;
+            };
+            let value = opt_non_empty_str(tag.value);
 
-        if first {
-            query_builder.push("(");
-            first = false;
-        } else {
-            query_builder.push(", (");
+            if first {
+                query_builder.push("(");
+                first = false;
+            } else {
+                query_builder.push(", (");
+            }
+
+            rtn.push(EntryTag {
+                key: key.clone(),
+                value: value.clone(),
+                created,
+                updated: None
+            });
+
+            let mut separated = query_builder.separated(", ");
+            separated.push_bind(id);
+            separated.push_bind(key);
+            separated.push_bind(value);
+            separated.push_bind(created);
+            separated.push_unseparated(")");
         }
 
-        tags.push(EntryTag {
-            key: key.clone(),
-            value: value.clone(),
-            created,
-            updated: None
-        });
+        let query = query_builder.build();
 
-        let mut separated = query_builder.separated(", ");
-        separated.push_bind(id);
-        separated.push_bind(key);
-        separated.push_bind(value);
-        separated.push_bind(created);
-        separated.push_unseparated(")");
+        query.execute(&mut *conn)
+            .await
+            .context("failed to commit tags")?;
+
+        rtn
+    } else {
+        Vec::new()
+    };
+
+    let mut created_files = Vec::new();
+
+    let files = if !json.files.is_empty() {
+        let mut first = true;
+        let mut rtn: Vec<ResultFileEntry> = Vec::new();
+        let mut query_builder: QueryBuilder<db::Db> = QueryBuilder::new(
+            "insert into file_entries ( \
+                uid, \
+                entries_id, \
+                name, \
+                mime_type, \
+                mime_subtype, \
+                created \
+            ) values "
+        );
+
+        for file in json.files {
+            let uid = FileEntryUid::gen();
+            let name = opt_non_empty_str(file.name);
+            let mime_type = String::from("");
+            let mime_subtype = String::from("");
+            let created = created;
+
+            if first {
+                query_builder.push("(");
+                first = false;
+            } else {
+                query_builder.push(", (");
+            }
+
+            let file_entry = FileEntry {
+                id: FileEntryId::new(1).unwrap(),
+                uid: uid.clone(),
+                entries_id: id,
+                name: name.clone(),
+                mime_type: mime_type.clone(),
+                mime_subtype: mime_subtype.clone(),
+                mime_param: None,
+                size: 0,
+                created,
+                updated: None
+            };
+            let client_data = ClientData {
+                key: file.key
+            };
+
+            rtn.push(ResultFileEntry::from((file_entry, client_data)));
+
+            let mut separated = query_builder.separated(", ");
+            separated.push_bind(uid);
+            separated.push_bind(id);
+            separated.push_bind(name);
+            separated.push_bind(mime_type);
+            separated.push_bind(mime_subtype);
+            separated.push_bind(created);
+            separated.push_unseparated(")");
+        }
+
+        query_builder.push(" returning id");
+
+        let insert_query = query_builder.build();
+        let sql = insert_query.sql();
+
+        tracing::debug!("file insert query: \"{sql}\"");
+
+        let mut results = insert_query.fetch(&mut *conn);
+
+        for file_entry in &mut rtn {
+            let Some(ins_result) = results.next().await else {
+                return Err(error::Error::context("less than expected number of ids returned from database"));
+            };
+
+            let record = ins_result.context("failed to retrieve file entry id from insert")?;
+
+            let file_entry_id = record.get(0);
+            file_entry.inner.id = file_entry_id;
+
+            let file_path = state.storage()
+                .journal_file_entry(journal.id, file_entry_id);
+            let file_result = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file_path)
+                .await;
+
+            match file_result {
+                Ok(_) => created_files.push(file_path),
+                Err(err) => {
+                    let failed = files::drop_files(created_files).await;
+
+                    for (path, err) in failed {
+                        tracing::error!("failed to remove journal file: \"{}\" {err}", path.display());
+                    }
+
+                    return Err(error::Error::context_source(
+                        "failed to create file for journal entry",
+                        err
+                    ));
+                }
+            }
+        }
+
+        rtn
+    } else {
+        Vec::new()
+    };
+
+    let commit_result = conn.commit()
+        .await;
+
+    if let Err(err) = commit_result {
+        let failed = files::drop_files(created_files).await;
+
+        for (path, err) in failed {
+            tracing::error!("failed to remove journal file: \"{}\" {err}", path.display());
+        }
+
+        return Err(error::Error::context_source(
+            "failed to commit changes to journal entry",
+            err
+        ));
     }
 
-    let query = query_builder.build();
-
-    query.execute(&mut *conn)
-        .await
-        .context("failed to commit tags")?;
-
-    conn.commit()
-        .await
-        .context("failed to commit changes to journal entry")?;
-
-    let entry = EntryFull {
+    let entry = ResultEntryFull {
         id,
         uid,
         journals_id,
@@ -371,7 +514,7 @@ pub async fn create_entry(
         created,
         updated: None,
         tags,
-        audio: Vec::new(),
+        files,
     };
 
     Ok((
@@ -384,7 +527,7 @@ pub async fn update_entry(
     state: state::SharedState,
     headers: HeaderMap,
     Path(EntryDate { date }): Path<EntryDate>,
-    body::Json(json): body::Json<EntryBody>,
+    body::Json(json): body::Json<UpdatedEntryBody>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.begin_conn().await?;
 
@@ -397,7 +540,7 @@ pub async fn update_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Update);
+    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Update);
 
     let result = Entry::retrieve_date(
         &mut conn,
@@ -443,6 +586,7 @@ pub async fn update_entry(
 
         {
             let mut tag_stream = EntryTag::retrieve_entry_stream(&mut conn, entry.id);
+
             while let Some(tag_result) = tag_stream.next().await {
                 let tag = tag_result.context("failed to retrieve journal tag")?;
 
@@ -544,7 +688,7 @@ pub async fn update_entry(
         .await
         .context("failed commit changes to journal entry")?;
 
-    let entry = EntryFull {
+    let entry = ResultEntryFull {
         id: entry.id,
         uid: entry.uid,
         journals_id: entry.journals_id,
@@ -555,7 +699,7 @@ pub async fn update_entry(
         created: entry.created,
         updated: Some(updated),
         tags,
-        audio: Vec::new(),
+        files: Vec::new(),
     };
 
     Ok(body::Json(entry).into_response())
@@ -577,7 +721,7 @@ pub async fn delete_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Delete);
+    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Delete);
 
     let result = EntryFull::retrieve_date(
         &mut conn,
@@ -603,20 +747,87 @@ pub async fn delete_entry(
         tracing::warn!("dangling tags for journal entry");
     }
 
-    let entry = sqlx::query("delete from entries where id = ?1")
+    let _files = sqlx::query("delete from file_entries where entries_id = ?1")
         .bind(entry.id)
         .execute(&mut *conn)
         .await
-        .context("failed to delete journal entry")?
+        .context("failed to delete files for journal entry")?
         .rows_affected();
 
-    if entry != 1 {
-        tracing::warn!("did not find journal entry?");
+    let marked_files = if !entry.files.is_empty() {
+        let files_dir = state.storage().journal_files(journal.id);
+        let result = files::mark_remove(&files_dir,entry.files).await;
+
+        match result {
+            Ok(successful) => successful,
+            Err((processed, err)) => {
+                let failed = files::unmark_remove(processed).await;
+
+                for (path, err) in failed {
+                    tracing::error!("failed to unmark journal file: \"{}\" {err}", path.display());
+                }
+
+                return Err(error::Error::context_source(
+                    "failed to mark files for removal",
+                    err
+                ));
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let entry_result = sqlx::query("delete from entries where id = ?1")
+        .bind(entry.id)
+        .execute(&mut *conn)
+        .await;
+
+    match entry_result {
+        Ok(execed) => {
+            let entry = execed.rows_affected();
+
+            if entry != 1 {
+                tracing::warn!("did not find journal entry?");
+            }
+        }
+        Err(err) => {
+            if !marked_files.is_empty() {
+                let failed = files::unmark_remove(marked_files).await;
+
+                for (path, err) in failed {
+                    tracing::error!("failed to unmark journal file: \"{}\" {err}", path.display());
+                }
+            }
+
+            return Err(error::Error::context_source(
+                "failed to delete entry for journal",
+                err
+            ));
+        }
     }
 
-    conn.commit()
-        .await
-        .context("failed to commit changes to journal")?;
+    if let Err(err) = conn.commit().await {
+        if !marked_files.is_empty() {
+            let failed = files::unmark_remove(marked_files).await;
 
-    Ok(body::Json(entry).into_response())
+            for (path, err) in failed {
+                tracing::error!("failed to unmark journal file: \"{}\" {err}", path.display());
+            }
+        }
+
+        Err(error::Error::context_source(
+            "failed to commit changes to journal",
+            err
+        ))
+    } else {
+        if !marked_files.is_empty() {
+            let failed = files::drop_marked(marked_files).await;
+
+            for (path, err) in failed {
+                tracing::error!("failed to removed marked journal file: \"{}\" {err}", path.display());
+            }
+        }
+
+        Ok(StatusCode::OK.into_response())
+    }
 }

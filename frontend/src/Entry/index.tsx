@@ -2,9 +2,8 @@ import { useState, useEffect, JSX } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 
-import AudioEntry from "./AudioEntry";
-import AudioVideoEntry from "./AudioVideoEntry";
 import TagEntry from "./TagEntry";
+import FileEntry from "./FileEntry";
 import {
     JournalEntry,
     JournalTag,
@@ -16,7 +15,8 @@ import {
     retrieve_entry,
     create_entry,
     update_entry,
-    delete_entry
+    delete_entry,
+    upload_data,
 } from "../journal";
 
 interface EntrySecProps {
@@ -53,25 +53,93 @@ const Entry = () => {
 
     let [loading, setLoading] = useState(true);
 
-    const onSubmit: SubmitHandler<EntryForm> = (data, event) => {
+    const create_and_upload = async (entry: EntryForm): Promise<[boolean, JournalEntry]> => {
+        let mapped = {};
+        let promise = create_entry(entry);
+
+        if (entry.files.length !== 0) {
+            for (let file of entry.files) {
+                if (file.type == "server") {
+                    continue;
+                }
+
+                mapped[file.key] = file;
+            }
+        }
+
+        let failed = false;
+        let result = await promise;
+
+        console.log("created entry:", result);
+
+        if (result.files.length !== 0 ) {
+            let promises = [];
+
+            for (let file_entry of result.files) {
+                let ref = mapped[file_entry.attached.key];
+
+                if (ref == null) {
+                    console.log("file key not known to client", file_entry.attached.key);
+
+                    continue;
+                }
+
+                let prom = upload_data(result.date, file_entry, ref)
+                    .then(success => {
+                        if (success) {
+                            console.log("uploaded file", file_entry.id);
+                        } else {
+                            failed = true;
+                        }
+                    });
+
+                promises.push(prom);
+            }
+
+            let prom_results = await Promise.allSettled(promises);
+
+            for (let prom of prom_results) {
+                switch (prom.status) {
+                case "fulfilled":
+                    console.log("file uploaded", prom.value);
+
+                    break;
+                case "rejected":
+                    console.log("file failed", prom.reason);
+
+                    failed = true;
+
+                    break;
+                }
+            }
+        }
+
+        return [failed, result];
+    };
+
+    const onSubmit: SubmitHandler<EntryForm> = async (data, event) => {
         console.log(data);
 
         if (entry_date == null || entry_date == "new") {
-            create_entry(data).then(result => {
-                console.log("created entry:", result);
+            try {
+                let [failed, result] = await create_and_upload(data);
 
-                form.reset(entry_to_form(result));
+                if (!failed) {
+                    form.reset(entry_to_form(result));
 
-                navigate(`/entries/${result.date}`);
-            }).catch(err => {
+                    navigate(`/entries/${result.date}`);
+                }
+            } catch(err) {
                 console.error("failed to create entry:", err);
-            });
+            }
         } else {
-            update_entry(entry_date, data).then(result => {
+            try {
+                let result = await update_entry(entry_date, data);
+
                 console.log("updated entry:", result);
-            }).catch(err => {
+            } catch(err) {
                 console.error("failed to update entry:", err);
-            });
+            }
         }
     };
 
@@ -82,8 +150,6 @@ const Entry = () => {
 
         if (form_date == entry_date) {
             console.log("form date is same as entry, assume entry was just created");
-
-            return;
         }
 
         if (entry_date == null || entry_date == "new") {
@@ -110,12 +176,12 @@ const Entry = () => {
                 <button type="submit">Save</button>
                 {entry_date != null && entry_date !== "new" ?
                     <button type="button" onClick={() => {
-                        delete_entry(entry_date).then(result => {
-                            console.log("deleted entry:", result);
+                        delete_entry(entry_date).then(() => {
+                            console.log("deleted entry");
 
                             navigate("/entries");
                         }).catch(err => {
-                            console.error("failed to delete journal entry");
+                            console.error("failed to delete journal entry:", err);
                         });
                     }}>Delete</button>
                     :
@@ -135,11 +201,8 @@ const Entry = () => {
                 <EntrySec title={<EntrySecTitle title="Contents"/>}>
                     <textarea {...form.register("contents")}/>
                 </EntrySec>
-                <EntrySec title={<EntrySecTitle title="Audio"/>}>
-                    <AudioEntry/>
-                </EntrySec>
-                <EntrySec title={<EntrySecTitle title="Video"/>}>
-                    <AudioVideoEntry/>
+                <EntrySec title={<EntrySecTitle title="Files"/>}>
+                    <FileEntry entry_date={entry_date}/>
                 </EntrySec>
                 <EntrySec title={<EntrySecTitle title="Tags"/>}>
                     <TagEntry/>

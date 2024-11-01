@@ -9,9 +9,9 @@ export interface JournalEntry {
     title: string | null,
     contents: string | null,
     created: string,
-    updated: string,
+    updated: string | null,
     tags: JournalTag[],
-    audio: JournalAudio[],
+    files: JournalFile[],
 }
 
 export interface JournalTag {
@@ -21,9 +21,22 @@ export interface JournalTag {
     updated: string | null,
 }
 
-export interface JournalAudio {
+export interface JournalFile {
     id: number,
+    uid: string,
+    entries_id: number,
+    name: string | null,
+    mime_type: string,
+    mime_subtype: string,
+    mime_param: string | null,
+    size: number,
+    created: string,
+    updated: string | null,
+    attached?: JournalClientData,
+}
 
+export interface JournalClientData {
+    key: string
 }
 
 export interface EntryTagForm {
@@ -31,37 +44,66 @@ export interface EntryTagForm {
     value: string,
 }
 
-export interface InMemoryAudio {
+export interface InMemoryFile {
     type: "in-memory",
+    key: string,
     src: URL,
-    data: Blob
+    data: Blob,
+    name: string,
+    mime_type: string,
+    mime_subtype: string,
+    mime_param: string | null
 }
 
-export interface ServerAudio {
+export interface ServerFile {
     type: "server",
-    src: URL
+    _id: number,
+    uid: string,
+    name: string,
+    mime_type: string,
+    mime_subtype: string,
+    mime_param: string | null,
+    created: string,
+    updated: string | null
 }
 
-export type EntryAudioForm =
-    InMemoryAudio |
-    ServerAudio;
-
-export interface InMemoryVideo {
-    type: "in-memory",
+export interface LocalFile {
+    type: "local",
+    key: string,
     src: URL,
-    data: Blob
+    name: string,
+    data: File,
 }
 
-export type EntryVideoForm =
-    InMemoryVideo;
+export type EntryFileForm =
+    InMemoryFile |
+    ServerFile;
 
 export interface EntryForm {
     date: string,
     title: string,
     contents: string,
     tags: EntryTagForm[],
-    audio: EntryAudioForm[]
-    video: EntryVideoForm[],
+    files: EntryFileForm[],
+}
+
+function pad_num(num: number): string {
+    if (num < 10) {
+        return "0" + num.toString(10);
+    } else {
+        return num.toString(10);
+    }
+}
+
+export function timestamp_name() {
+    let now = new Date();
+    let month = pad_num(now.getMonth() + 1);
+    let day = pad_num(now.getDate());
+    let hour = pad_num(now.getHours());
+    let minute = pad_num(now.getMinutes());
+    let second = pad_num(now.getSeconds());
+
+    return `${now.getFullYear()}-${month}-${day}_${hour}-${minute}-${second}`;
 }
 
 export function blank_form(): EntryForm {
@@ -72,13 +114,13 @@ export function blank_form(): EntryForm {
         title: "",
         contents: "",
         tags: [],
-        audio: [],
+        files: [],
     };
 }
 
 export function entry_to_form(entry: JournalEntry): EntryForm {
     let tags = [];
-    let audio = [];
+    let files = [];
 
     for (let tag of entry.tags) {
         tags.push({
@@ -87,7 +129,18 @@ export function entry_to_form(entry: JournalEntry): EntryForm {
         });
     }
 
-    for (let audio of entry.audio) {
+    for (let file of entry.files) {
+        files.push({
+            type: "server",
+            _id: file.id,
+            uid: file.uid,
+            name: file.name,
+            mime_type: file.mime_type,
+            mime_subtype: file.mime_subtype,
+            mime_param: file.mime_param,
+            created: file.created,
+            updated: file.updated,
+        });
     }
 
     return {
@@ -95,7 +148,7 @@ export function entry_to_form(entry: JournalEntry): EntryForm {
         title: entry.title ?? "",
         contents: entry.contents ?? "",
         tags,
-        audio: [],
+        files,
     };
 }
 
@@ -125,7 +178,29 @@ export async function retrieve_entry(date: string): Promise<JournalEntry | null>
 }
 
 export async function create_entry(entry: EntryForm) {
-    let body = JSON.stringify(entry);
+    let sending = {
+        date: entry.date,
+        title: entry.title,
+        contents: entry.contents,
+        tags: entry.tags,
+        files: [],
+    };
+
+    for (let file of entry.files) {
+        if (file.type == "server") {
+            sending.files.push({
+                id: file._id,
+                name: file.name,
+            });
+        } else {
+            sending.files.push({
+                key: file.key,
+                name: file.name,
+            });
+        }
+    }
+
+    let body = JSON.stringify(sending);
     let res = await fetch("/entries", {
         method: "POST",
         headers: {
@@ -168,6 +243,39 @@ export async function delete_entry(date: string) {
     if (res.status !== 200) {
         throw new Error("failed to delete entry");
     }
+}
 
-    return await res_as_json<JournalEntry>(res);
+export async function upload_data(
+    date: string,
+    file_entry: JournalFile,
+    ref: LocalFile | InMemoryFile
+): Promise<boolean> {
+    try {
+        let path = `/entries/${date}/${file_entry.id}`;
+
+        console.log(ref);
+
+        switch (ref.type) {
+        case "in-memory":
+        case "local":
+            let result = await fetch(path, {
+                method: "PUT",
+                headers: {
+                    "content-type": ref.data.type,
+                    "content-length": ref.data.size.toString(10),
+                },
+                body: ref.data
+            });
+
+            if (result.status !== 200) {
+                return false;
+            } else {
+                return true;
+            }
+        }
+    } catch(err) {
+        console.log("failed to upload data", err);
+
+        return false;
+    }
 }

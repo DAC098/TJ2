@@ -33,7 +33,7 @@ pub async fn connect(config: &Config) -> Result<SqlitePool, Error> {
 
     let connect_options = SqliteConnectOptions::from_str(&db_url)
         .context("invalid sqlite url")?
-        .journal_mode(SqliteJournalMode::Wal);
+        .journal_mode(SqliteJournalMode::Truncate);
 
     if let Some(meta) = metadata(&db_path).context("failed to retrieve metadata for db file")? {
         if !meta.is_file() {

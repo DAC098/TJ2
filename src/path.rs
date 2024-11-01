@@ -1,3 +1,4 @@
+use std::ffi::{OsString, OsStr};
 use std::fs::Metadata;
 use std::io::ErrorKind;
 use std::path::{PathBuf, Path, Component};
@@ -7,6 +8,19 @@ where
     P: AsRef<Path>
 {
     match path.as_ref().metadata() {
+        Ok(m) => Ok(Some(m)),
+        Err(err) => match err.kind() {
+            ErrorKind::NotFound => Ok(None),
+            _ => Err(err)
+        }
+    }
+}
+
+pub async fn tokio_metadata<P>(path: P) -> Result<Option<Metadata>, std::io::Error>
+where
+    P: AsRef<Path>
+{
+    match tokio::fs::metadata(path).await {
         Ok(m) => Ok(Some(m)),
         Err(err) => match err.kind() {
             ErrorKind::NotFound => Ok(None),
@@ -94,4 +108,28 @@ where
     }
 
     rtn
+}
+
+pub fn add_extension<E>(path: &PathBuf, ext: E) -> Option<PathBuf>
+where
+    E: AsRef<OsStr>
+{
+    add_ext(path, ext.as_ref())
+}
+
+pub fn add_ext(path: &PathBuf, ext: &OsStr) -> Option<PathBuf> {
+    let file_name = match path.file_name() {
+        None => return None,
+        Some(value) => value
+    };
+
+    let mut new_name = OsString::with_capacity(file_name.len() + ext.len() + 1);
+    new_name.push(file_name);
+    new_name.push(OsStr::new("."));
+    new_name.push(ext);
+
+    let mut copy = path.clone();
+    copy.set_file_name(new_name);
+
+    Some(copy)
 }

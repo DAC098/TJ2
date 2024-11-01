@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use chrono::{NaiveDate, DateTime, Utc};
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
@@ -133,7 +135,10 @@ impl Entry {
 }
 
 #[derive(Debug, Serialize)]
-pub struct EntryFull {
+pub struct EntryFull<Files = FileEntry>
+where
+    Files: Serialize,
+{
     pub id: EntryId,
     pub uid: EntryUid,
     pub journals_id: JournalId,
@@ -144,7 +149,7 @@ pub struct EntryFull {
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
     pub tags: Vec<EntryTag>,
-    pub audio: Vec<i64>,
+    pub files: Vec<Files>,
 }
 
 impl EntryFull {
@@ -156,6 +161,8 @@ impl EntryFull {
     ) -> Result<Option<Self>, sqlx::Error> {
         if let Some(found) = Entry::retrieve_date(conn, journals_id, users_id, date).await? {
             let tags = EntryTag::retrieve_date(conn, users_id, date)
+                .await?;
+            let files = FileEntry::retrieve_entry(conn, found.id)
                 .await?;
 
             Ok(Some(Self {
@@ -169,7 +176,7 @@ impl EntryFull {
                 created: found.created,
                 updated: found.updated,
                 tags,
-                audio: Vec::new()
+                files,
             }))
         } else {
             Ok(None)
@@ -244,21 +251,139 @@ impl EntryTag {
     }
 }
 
-#[derive(Debug)]
-pub enum FileType {
-    Other,
-    Audio,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct FileEntry {
     pub id: FileEntryId,
     pub uid: FileEntryUid,
     pub entries_id: EntryId,
-    pub type_: FileType,
     pub name: Option<String>,
-    pub mime: mime::Mime,
+    pub mime_type: String,
+    pub mime_subtype: String,
+    pub mime_param: Option<String>,
     pub size: i64,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
+}
+
+impl FileEntry {
+    pub fn retrieve_entry_stream(
+        conn: &mut db::DbConn,
+        entries_id: EntryId
+    ) -> impl Stream<Item = Result<Self, sqlx::Error>> + '_ {
+        sqlx::query(
+            "\
+            select file_entries.id, \
+                   file_entries.uid, \
+                   file_entries.entries_id, \
+                   file_entries.name, \
+                   file_entries.mime_type, \
+                   file_entries.mime_subtype, \
+                   file_entries.mime_parameter, \
+                   file_entries.size, \
+                   file_entries.created, \
+                   file_entries.updated \
+            from file_entries \
+            where file_entries.entries_id = ?1"
+        )
+            .bind(entries_id)
+            .fetch(&mut *conn)
+            .map(|res| res.map(|record| Self {
+                id: record.get(0),
+                uid: record.get(1),
+                entries_id: record.get(2),
+                name: record.get(3),
+                mime_type: record.get(4),
+                mime_subtype: record.get(5),
+                mime_param: record.get(6),
+                size: record.get(7),
+                created: record.get(8),
+                updated: record.get(9),
+            }))
+    }
+
+    pub async fn retrieve_file_entry(
+        conn: &mut db::DbConn,
+        date: &NaiveDate,
+        file_entry_id: FileEntryId
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query(
+            "\
+            select file_entries.id, \
+                   file_entries.uid, \
+                   file_entries.entries_id, \
+                   file_entries.name, \
+                   file_entries.mime_type, \
+                   file_entries.mime_subtype, \
+                   file_entries.mime_parameter, \
+                   file_entries.size, \
+                   file_entries.created, \
+                   file_entries.updated \
+            from file_entries \
+                left join entries on \
+                    file_entries.entries_id = entries.id \
+            where entries.entry_date = ?1 and \
+                  file_entries.id = ?2"
+        )
+            .bind(date)
+            .bind(file_entry_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map(|result| result.map(|record| Self {
+                id: record.get(0),
+                uid: record.get(1),
+                entries_id: record.get(2),
+                name: record.get(3),
+                mime_type: record.get(4),
+                mime_subtype: record.get(5),
+                mime_param: record.get(6),
+                size: record.get(7),
+                created: record.get(8),
+                updated: record.get(9),
+            }))
+    }
+
+    pub async fn retrieve_entry(
+        conn: &mut db::DbConn,
+        entries_id: EntryId
+    ) -> Result<Vec<Self>, sqlx::Error> {
+        Self::retrieve_entry_stream(conn, entries_id)
+            .try_collect()
+            .await
+    }
+
+    pub fn get_mime(&self) -> mime::Mime {
+        let parse = if let Some(param) = &self.mime_param {
+            format!("{}/{};{param}", self.mime_type, self.mime_subtype)
+        } else {
+            format!("{}/{}", self.mime_type, self.mime_subtype)
+        };
+
+        mime::Mime::from_str(&parse)
+            .expect("failed to parse MIME from database")
+    }
+
+    pub async fn update(&self, conn: &mut db::DbConn) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "\
+            update file_entries \
+            set name = ?2, \
+                mime_type = ?3, \
+                mime_subtype = ?4, \
+                mime_parameter = ?5, \
+                size = ?6, \
+                updated = ?7 \
+            where file_entries.id = ?1"
+        )
+            .bind(self.id)
+            .bind(&self.name)
+            .bind(&self.mime_type)
+            .bind(&self.mime_subtype)
+            .bind(&self.mime_param)
+            .bind(self.size)
+            .bind(self.updated)
+            .execute(&mut *conn)
+            .await?;
+
+        Ok(())
+    }
 }

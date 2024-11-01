@@ -1,6 +1,7 @@
 /target
 /data
 /node_modules
+/storage
 
 /certs/localhost.ecdsa.*
 /certs/localhost.rsa.*

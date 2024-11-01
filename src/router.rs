@@ -76,6 +76,8 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/entries/:date", get(entries::retrieve_entry)
             .patch(entries::update_entry)
             .delete(entries::delete_entry))
+        .route("/entries/:date/:file_entry_id", get(entries::files::retrieve_file)
+            .put(entries::files::upload_file))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())

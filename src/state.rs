@@ -12,6 +12,7 @@ use sqlx::pool::PoolConnection;
 use crate::config;
 use crate::error::{self, Context};
 use crate::db;
+use crate::db::ids::{JournalId, FileEntryId};
 use crate::templates;
 
 #[derive(Debug, Clone)]
@@ -45,6 +46,10 @@ impl SharedState {
 
     pub fn db(&self) -> &db::DbPool {
         &self.0.db_pool
+    }
+
+    pub fn storage(&self) -> &Storage {
+        &self.0.storage
     }
 
     pub async fn acquire_conn(&self) -> Result<PoolConnection<db::Db>, error::Error> {
@@ -115,5 +120,18 @@ impl Storage {
         &self.path
     }
 
-    //pub fn get_user_dir(&self, users_id: 
+    pub fn journal_files(
+        &self,
+        journal_id: JournalId
+    ) -> PathBuf {
+        self.path.join(format!("journals/{journal_id}/files"))
+    }
+
+    pub fn journal_file_entry(
+        &self,
+        journal_id: JournalId,
+        file_entry_id: FileEntryId
+    ) -> PathBuf {
+        self.path.join(format!("journals/{journal_id}/files/{file_entry_id}.file"))
+    }
 }
