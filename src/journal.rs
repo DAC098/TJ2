@@ -35,7 +35,7 @@ impl Journal {
             "\
             insert into journals (uid, users_id, name, created) values \
             ($1, $2, $3, $4) \
-            returing id",
+            returning id",
             &[&uid, &users_id, &name, &created]
         )
             .await

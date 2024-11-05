@@ -15,7 +15,11 @@ use sqlx::sqlite::{
 use crate::error::{Error, Context};
 use crate::config::{Config, meta::get_cwd};
 use crate::path::metadata;
-use crate::sec::authz::{Scope, Ability, Role, create_permissions, assign_user_role};
+use crate::sec::authz::{
+    Scope, Ability, Role,
+    create_permissions,
+    assign_user_role,
+};
 use crate::sec::password;
 use crate::user::User;
 
@@ -162,7 +166,7 @@ pub type PgJson<T> = types::Json<T>;
 pub type ParamsVec<'a> = Vec<&'a (dyn ToSql + Sync)>;
 pub type ParamsArray<'a, const N: usize> = [&'a (dyn ToSql + Sync); N];
 
-pub fn from_config(config: &Config) -> Result<Pool, Error> {
+pub async fn from_config(config: &Config) -> Result<Pool, Error> {
     let mut pg_config = PgConfig::new();
 
     pg_config.user(config.settings.db.user.as_str());
@@ -180,10 +184,89 @@ pub fn from_config(config: &Config) -> Result<Pool, Error> {
 
     let manager = Manager::from_config(pg_config, NoTls, manager_config);
 
-    Pool::builder(manager)
+    let pool = Pool::builder(manager)
         .max_size(4)
         .build()
-        .context("failed to create postgresql connection pool")
+        .context("failed to create postgresql connection pool")?;
+
+    check_database(&pool).await?;
+
+    Ok(pool)
+}
+
+pub async fn check_database(pool: &Pool) -> Result<(), Error> {
+    let mut conn = pool.get()
+        .await
+        .context("failed to retrieve database connection")?;
+
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
+
+    let maybe_admin = User::retrieve_username_pg(&transaction, "admin")
+        .await
+        .context("failed to check if admin user was found")?;
+
+    if maybe_admin.is_none() {
+        let mut rng = rand::thread_rng();
+        let admin = create_admin_user_pg(&transaction).await?;
+        let admin_role = create_default_roles_pg(&transaction).await?;
+
+        admin_role.assign_user(&transaction, admin.id)
+            .await
+            .context("failed to assign admin to admin role")?;
+
+        test_data::create_journal_pg(&transaction, &mut rng, admin.id).await?;
+        test_data::create_pg(&transaction, &mut rng).await?;
+    }
+
+    transaction.commit()
+        .await
+        .context("failed to commit transaction")?;
+
+    Ok(())
+}
+
+async fn create_admin_user_pg(conn: &impl GenericClient) -> Result<User, Error> {
+    let hash = password::create("password")
+        .context("failed to create admin password")?;
+
+    User::create_pg(conn, "admin", &hash, 0)
+        .await
+        .context("failed to create admin user")
+}
+
+async fn create_default_roles_pg(conn: &impl GenericClient) -> Result<Role, Error> {
+    let admin_role = Role::create_pg(conn, "admin")
+        .await
+        .context("failed to create admin role")?;
+
+    let permissions = vec![
+        (Scope::Users, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete
+        ]),
+        (Scope::Journals, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
+        ]),
+        (Scope::Entries, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
+        ])
+    ];
+
+    admin_role.assign_permissions(conn, &permissions)
+        .await
+        .context("failed to create default permissions")?;
+
+    Ok(admin_role)
 }
 
 pub fn push_param<'a, T>(params: &mut ParamsVec<'a>, v: &'a T) -> usize

@@ -303,3 +303,5 @@ uid_type!(FileEntryUid);
 
 id_type!(RoleId);
 uid_type!(RoleUid);
+
+id_type!(PermissionId);

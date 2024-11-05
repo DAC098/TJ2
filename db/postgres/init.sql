@@ -3,7 +3,7 @@ create table users (
     uid varchar not null unique,
     username varchar not null unique,
     password varchar not null,
-    version int not null default 0
+    version bigint not null default 0
 );
 
 create table groups (
@@ -43,11 +43,12 @@ create table authz_roles (
 );
 
 create table authz_permissions (
+    id bigint primary key generated always as identity,
     role_id bigint not null references authz_roles (id),
     scope varchar not null,
     ability varchar not null,
     ref_id bigint,
-    primary key (role_id, scope, ability, ref_id)
+    unique (role_id, scope, ability, ref_id)
 );
 
 create table user_roles (

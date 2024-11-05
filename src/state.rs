@@ -20,7 +20,7 @@ pub struct SharedState(Arc<State>);
 
 impl SharedState {
     pub async fn new(config: &config::Config) -> Result<Self, error::Error> {
-        let db_pool_pg = db::from_config(config)?;
+        let db_pool_pg = db::from_config(config).await?;
         let db_pool = db::connect(config).await?;
         let templates = templates::initialize(config)?;
 

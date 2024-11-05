@@ -114,6 +114,9 @@ async fn init(config: config::Config) -> Result<(), Error> {
         .close()
         .await;
 
+    state.db_pg()
+        .close();
+
     Ok(())
 }
 

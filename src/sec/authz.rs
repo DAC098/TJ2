@@ -1,8 +1,17 @@
-use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::fmt::{Write, Display, Formatter, Result as FmtResult};
+use std::str::FromStr;
+
+use bytes::BytesMut;
+use postgres_types as pg_types;
 use sqlx::{QueryBuilder, Row, Type};
 
 use crate::db;
-use crate::db::ids::{GroupId, UserId, RoleId, RoleUid};
+use crate::db::ids::{GroupId, UserId, RoleId, RoleUid, PermissionId};
+use crate::error::BoxDynError;
+
+#[derive(Debug, thiserror::Error)]
+#[error("the provided string is not a valid Ability")]
+pub struct InvalidAbility;
 
 #[derive(Debug, Clone, Type)]
 #[sqlx(rename_all = "lowercase")]
@@ -30,6 +39,49 @@ impl Display for Ability {
     }
 }
 
+impl FromStr for Ability {
+    type Err = InvalidAbility;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Create" => Ok(Ability::Create),
+            "Read" => Ok(Ability::Read),
+            "Update" => Ok(Ability::Update),
+            "Delete" => Ok(Ability::Delete),
+            _ => Err(InvalidAbility)
+        }
+    }
+}
+
+impl<'a> pg_types::FromSql<'a> for Ability {
+    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
+        let v = <&str as pg_types::FromSql>::from_sql(ty, raw)?;
+
+        Ok(Self::from_str(v)?)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&str as pg_types::FromSql>::accepts(ty)
+    }
+}
+
+impl pg_types::ToSql for Ability {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        self.as_str()
+            .to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&str as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the provided string is not a valid scope")]
+pub struct InvalidScope;
+
 #[derive(Debug, Clone, Type)]
 #[sqlx(rename_all = "lowercase")]
 pub enum Scope {
@@ -56,8 +108,48 @@ impl Display for Scope {
     }
 }
 
+impl FromStr for Scope {
+    type Err = InvalidScope;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Users" => Ok(Scope::Users),
+            "Journals" => Ok(Scope::Journals),
+            "Entries" => Ok(Scope::Entries),
+            "Roles" => Ok(Scope::Roles),
+            _ => Err(InvalidScope),
+        }
+    }
+}
+
+impl<'a> pg_types::FromSql<'a> for Scope {
+    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
+        let v = <&str as pg_types::FromSql>::from_sql(ty, raw)?;
+
+        Ok(Self::from_str(v)?)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&str as pg_types::FromSql>::accepts(ty)
+    }
+}
+
+impl pg_types::ToSql for Scope {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        self.as_str()
+            .to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&str as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
 #[derive(Debug)]
 pub struct Permission {
+    pub id: PermissionId,
     pub role_id: RoleId,
     pub scope: Scope,
     pub ability: Ability,
@@ -108,6 +200,21 @@ impl Role {
                 uid,
                 name: name.to_owned()
             })
+    }
+
+    pub async fn assign_user(&self, conn: &impl db::GenericClient, users_id: UserId) -> Result<(), db::PgError> {
+        assign_user_role_pg(conn, self.id, users_id).await
+    }
+
+    pub async fn assign_group(&self, conn: &impl db::GenericClient, groups_id: GroupId) -> Result<(), db::PgError> {
+        assign_group_role_pg(conn, self.id, groups_id).await
+    }
+
+    pub async fn assign_permissions<'a, I>(&self, conn: &impl db::GenericClient, list: I) -> Result<(), db::PgError>
+    where
+        I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>
+    {
+        create_permissions_pg(conn, self.id, list).await
     }
 }
 
@@ -207,7 +314,7 @@ where
             authz_permissions.scope = $2 and \
             authz_permissions.ability = $3 and \
             authz_permissions.ref_id = $4",
-        &[&users_id, &scope.as_str(), &ability.as_str(), id]
+        &[&users_id, &scope, &ability, id]
     ).await?;
 
     Ok(result > 0)
@@ -258,8 +365,8 @@ where
 
 pub async fn assign_user_role_pg(
     conn: &impl db::GenericClient,
-    users_id: UserId,
     role_id: RoleId,
+    users_id: UserId,
 ) -> Result<(), db::PgError> {
     conn.execute(
         "insert into user_roles (users_id, role_id) values ($1, $2)",
@@ -287,8 +394,8 @@ pub async fn assign_user_role(
 
 pub async fn assign_group_role_pg(
     conn: &impl db::GenericClient,
-    groups_id: GroupId,
     role_id: RoleId,
+    groups_id: GroupId,
 ) -> Result<(), db::PgError> {
     conn.execute(
         "insert into group_roles (groups_id, role_id) values ($1, $2)",
@@ -314,18 +421,49 @@ pub async fn assign_group_role(
     Ok(())
 }
 
-pub async fn create_permissions_pg<I>(
+pub async fn create_permissions_pg<'a, I>(
     conn: &impl db::GenericClient,
     id: RoleId,
     list: I
 ) -> Result<(), db::PgError>
 where
-    I: IntoIterator<Item = (Scope, Vec<Ability>)>
+    I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>
 {
+    let mut top_first = true;
     let mut params: db::ParamsVec<'_> = vec![&id];
     let mut query = String::from(
         "insert into authz_permissions (role_id, scope, ability) values "
     );
+
+    for (scope, abilities) in list {
+        let mut first = true;
+
+        if top_first {
+            top_first = false;
+        } else {
+            query.push_str(", ");
+        }
+
+        for ability in abilities {
+            if first {
+                first = false;
+            } else {
+                query.push_str(", ");
+            }
+
+            write!(
+                &mut query,
+                "($1, ${}, ${})",
+                db::push_param(&mut params, scope),
+                db::push_param(&mut params, ability),
+            ).unwrap();
+        }
+    }
+
+    tracing::debug!("query: \"{query}\"");
+
+    conn.execute(query.as_str(), &params)
+        .await?;
 
     Ok(())
 }
