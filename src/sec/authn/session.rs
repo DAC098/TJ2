@@ -3,12 +3,14 @@ use std::borrow::Cow;
 use axum::http::HeaderMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use bytes::BytesMut;
 use chrono::Duration;
 use chrono::{DateTime, Utc};
 use rand::RngCore;
 use sqlx::{Row, Type, Encode, Decode, Sqlite};
 use sqlx::encode::IsNull;
 use sqlx::sqlite::{SqliteTypeInfo, SqliteValueRef, SqliteArgumentValue};
+use postgres_types as pg_types;
 
 use crate::error::{self, Context, BoxDynError};
 use crate::db;
@@ -80,6 +82,35 @@ impl Type<Sqlite> for Token {
     }
 }
 
+impl pg_types::ToSql for Token {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        self.0.as_slice()
+            .to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&[u8] as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
+impl<'a> pg_types::FromSql<'a> for Token {
+    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
+        let v = <Vec<u8> as pg_types::FromSql>::from_sql(ty, raw)?;
+
+        let Ok(bytes) = v.try_into() else {
+            return Err("invalid sql value for Token. expected bytea with 48 bytes".into());
+        };
+
+        Ok(Token(bytes))
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&[u8] as pg_types::FromSql>::accepts(ty)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Session {
     pub token: Token,
@@ -113,6 +144,51 @@ impl SessionOptions {
 }
 
 impl Session {
+    pub async fn create_pg(conn: &impl db::GenericClient, options: SessionOptions) -> Result<Self, error::Error> {
+        let users_id = options.users_id;
+        let dropped = false;
+        let issued_on = Utc::now();
+        let expires_on = issued_on.checked_add_signed(options.duration)
+            .context("failed to add duration to expires_on")?;
+        let authenticated = options.authenticated;
+        let verified = options.verified;
+        let mut attempts = 3usize;
+        let mut token: Token;
+
+        loop {
+            attempts -= 1;
+            token = Token::new()
+                .context("failed to create token")?;
+
+            let result = conn.execute(
+                "\
+                insert into authn_sessions (token, users_id, issued_on, expires_on, authenticated, verified) values \
+                ($1, $2, $3, $4, $5, $6)",
+                &[&token, &users_id, &issued_on, &expires_on, &authenticated, &verified]
+            )
+                .await
+                .context("failed to insert session")?;
+
+            if result == 0 {
+                if attempts == 0 {
+                    return Err(error::Error::context("failed to insert session"));
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(Self {
+            token,
+            users_id,
+            dropped,
+            issued_on,
+            expires_on,
+            authenticated,
+            verified,
+        })
+    }
+
     pub async fn create(conn: &mut db::DbConn, options: SessionOptions) -> Result<Self, error::Error> {
         let mut token: Token;
         let users_id = options.users_id;
@@ -180,6 +256,36 @@ impl Session {
         })
     }
 
+    pub async fn retrieve_token_pg(conn: &impl db::GenericClient, token: &Token) -> Result<Option<Self>, db::PgError> {
+        let maybe = conn.query_opt(
+            "\
+            select token, \
+                   users_id, \
+                   dropped, \
+                   issued_on, \
+                   expires_on, \
+                   authenticated, \
+                   verified \
+            from authn_sessions \
+            where token = $1",
+            &[token]
+        ).await?;
+
+        if let Some(row) = maybe {
+            Ok(Some(Self {
+                token: row.get(0),
+                users_id: row.get(1),
+                dropped: row.get(2),
+                issued_on: row.get(3),
+                expires_on: row.get(4),
+                authenticated: row.get(5),
+                verified: row.get(6),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn retrieve_token(conn: &mut db::DbConn, token: &Token) -> Result<Option<Self>, sqlx::Error> {
         let maybe = sqlx::query("select * from authn_sessions where token = ?1")
             .bind(token)
@@ -199,6 +305,15 @@ impl Session {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn delete_pg(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+        let result = conn.execute(
+            "delete from authn_sessions where token = $1",
+            &[&self.token]
+        ).await?;
+
+        Ok(result == 1)
     }
 
     pub async fn delete(&self, conn: &mut db::DbConn) -> Result<(), sqlx::Error> {

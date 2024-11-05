@@ -13,6 +13,28 @@ pub struct User {
 }
 
 impl User {
+    pub async fn retrieve_username_pg(conn: &impl db::GenericClient, username: &str) -> Result<Option<Self>, db::PgError> {
+        conn.query_opt(
+            "\
+            select id, \
+                   uid, \
+                   username, \
+                   password, \
+                   version \
+            from users \
+            where username = $1",
+            &[&username]
+        )
+            .await
+            .map(|maybe| maybe.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                username: row.get(2),
+                password: row.get(3),
+                version: row.get(4),
+            }))
+    }
+
     pub async fn retrieve_username(conn: &mut db::DbConn, username: &str) -> Result<Option<Self>, sqlx::Error> {
         sqlx::query(
             "\
@@ -25,6 +47,28 @@ impl User {
             where username = ?1"
         ).bind(username)
             .fetch_optional(&mut *conn)
+            .await
+            .map(|maybe| maybe.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                username: row.get(2),
+                password: row.get(3),
+                version: row.get(4),
+            }))
+    }
+
+    pub async fn retrieve_id_pg(conn: &impl db::GenericClient, id: UserId) -> Result<Option<Self>, db::PgError> {
+        conn.query_opt(
+            "\
+            select id, \
+                   uid, \
+                   username, \
+                   password, \
+                   version \
+            from users \
+            where id = $1",
+            &[&id]
+        )
             .await
             .map(|maybe| maybe.map(|row| Self {
                 id: row.get(0),
@@ -55,6 +99,26 @@ impl User {
                 password: row.get(3),
                 version: row.get(4),
             }))
+    }
+
+    pub async fn create_pg(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Self, db::PgError> {
+        let uid = UserUid::gen();
+
+        conn.query_one(
+            "\
+            insert into users (uid, username, password, version) \
+            values ($1, $2, $3, $4) \
+            returning id",
+            &[&uid, &username, &hash, &version]
+        )
+            .await
+            .map(|row| Self {
+                id: row.get(0),
+                uid,
+                username: username.to_owned(),
+                password: hash.to_owned(),
+                version
+            })
     }
 
     pub async fn create(conn: &mut db::DbConn, username: &str, hash: &str, version: i64) -> Result<Self, sqlx::Error> {
@@ -90,6 +154,24 @@ pub struct Group {
 }
 
 impl Group {
+    pub async fn create_pg(conn: &impl db::GenericClient, name: &str) -> Result<Self, db::PgError> {
+        let uid = GroupUid::gen();
+
+        conn.query_one(
+            "\
+            insert into groups (uid, name) values \
+            ($1, $2) \
+            returning id",
+            &[&name, &uid]
+        )
+            .await
+            .map(|row| Self {
+                id: row.get(0),
+                uid,
+                name: name.to_owned(),
+            })
+    }
+
     pub async fn create(conn: &mut db::DbConn, name: &str) -> Result<Self, sqlx::Error> {
         let uid = GroupUid::gen();
 
@@ -109,6 +191,22 @@ impl Group {
                 name: name.to_owned(),
             })
     }
+}
+
+pub async fn assign_user_group_pg(
+    conn: &impl db::GenericClient,
+    users_id: UserId,
+    groups_id: GroupId
+) -> Result<(), db::PgError> {
+    conn.execute(
+        "\
+        insert into group_users (users_id, groups_id) values \
+        ($1, $2)",
+        &[&users_id, &groups_id]
+    )
+        .await?;
+
+    Ok(())
 }
 
 pub async fn assign_user_group(

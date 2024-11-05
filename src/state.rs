@@ -20,10 +20,12 @@ pub struct SharedState(Arc<State>);
 
 impl SharedState {
     pub async fn new(config: &config::Config) -> Result<Self, error::Error> {
+        let db_pool_pg = db::from_config(config)?;
         let db_pool = db::connect(config).await?;
         let templates = templates::initialize(config)?;
 
         Ok(SharedState(Arc::new(State {
+            db_pool_pg,
             db_pool,
             assets: Assets {
                 files: config.settings.assets.files.clone(),
@@ -42,6 +44,10 @@ impl SharedState {
 
     pub fn templates(&self) -> &tera::Tera {
         &self.0.templates
+    }
+
+    pub fn db_pg(&self) -> &db::Pool {
+        &self.0.db_pool_pg
     }
 
     pub fn db(&self) -> &db::DbPool {
@@ -76,6 +82,7 @@ impl FromRequestParts<SharedState> for SharedState {
 
 #[derive(Debug)]
 pub struct State {
+    db_pool_pg: db::Pool,
     db_pool: db::DbPool,
     assets: Assets,
     storage: Storage,

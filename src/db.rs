@@ -1,5 +1,7 @@
+use std::fmt::Debug;
 use std::str::FromStr;
 
+use serde::{Serialize, Deserialize};
 use sqlx::{Connection, ConnectOptions};
 use sqlx::sqlite::{
     Sqlite,
@@ -148,9 +150,62 @@ async fn create_default_roles(conn: &mut DbConn) -> Result<Role, Error> {
     Ok(admin_role)
 }
 
-use deadpool_postgres::Object;
+use tokio_postgres::{Config as PgConfig, NoTls};
+use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod, Object};
 
-pub use deadpool_postgres::GenericClient;
+pub use deadpool_postgres::{Pool, GenericClient};
 pub use tokio_postgres::Error as PgError;
+pub use tokio_postgres::types::{self, ToSql};
 
+pub type PgJson<T> = types::Json<T>;
 
+pub type ParamsVec<'a> = Vec<&'a (dyn ToSql + Sync)>;
+pub type ParamsArray<'a, const N: usize> = [&'a (dyn ToSql + Sync); N];
+
+pub fn from_config(config: &Config) -> Result<Pool, Error> {
+    let mut pg_config = PgConfig::new();
+
+    pg_config.user(config.settings.db.user.as_str());
+    pg_config.host(config.settings.db.host.as_str());
+    pg_config.port(config.settings.db.port);
+    pg_config.dbname(config.settings.db.dbname.as_str());
+
+    if let Some(password) = &config.settings.db.password {
+        pg_config.password(password.as_str());
+    }
+
+    let manager_config = ManagerConfig {
+        recycling_method: RecyclingMethod::Fast
+    };
+
+    let manager = Manager::from_config(pg_config, NoTls, manager_config);
+
+    Pool::builder(manager)
+        .max_size(4)
+        .build()
+        .context("failed to create postgresql connection pool")
+}
+
+pub fn push_param<'a, T>(params: &mut ParamsVec<'a>, v: &'a T) -> usize
+where
+    T: ToSql + Sync
+{
+    params.push(v);
+    params.len()
+}
+
+#[inline]
+pub fn de_from_sql<'a, T>(value: PgJson<T>) -> T
+where
+    T: Deserialize<'a>
+{
+    value.0
+}
+
+#[inline]
+pub fn ser_to_sql<'a, T> (value: &'a T) -> PgJson<&'a T>
+where
+    T: Serialize + Debug
+{
+    types::Json(value)
+}
