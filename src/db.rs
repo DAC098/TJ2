@@ -148,3 +148,9 @@ async fn create_default_roles(conn: &mut DbConn) -> Result<Role, Error> {
     Ok(admin_role)
 }
 
+use deadpool_postgres::Object;
+
+pub use deadpool_postgres::GenericClient;
+pub use tokio_postgres::Error as PgError;
+
+

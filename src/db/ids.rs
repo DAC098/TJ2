@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::str::FromStr;
 
+use postgres_types::{ToSql, FromSql};
 use serde::{Serialize, Deserialize};
 
 pub const UID_SIZE: usize = 16;
@@ -26,9 +27,11 @@ macro_rules! id_type {
             Clone, Copy,
             PartialEq, Eq, PartialOrd, Ord, Hash,
             sqlx::Type,
+            ToSql, FromSql,
             Serialize, Deserialize,
         )]
         #[sqlx(transparent)]
+        #[postgres(transparent)]
         #[serde(try_from = "i64", into = "i64")]
         pub struct $name(i64);
 
@@ -101,9 +104,11 @@ macro_rules! uid_type {
             Clone,
             PartialEq, Eq, PartialOrd, Ord, Hash,
             sqlx::Type,
+            ToSql, FromSql,
             Serialize, Deserialize,
         )]
         #[sqlx(transparent)]
+        #[postgres(transparent)]
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
 
