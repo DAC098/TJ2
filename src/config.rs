@@ -186,6 +186,7 @@ pub struct SettingsShape {
     listeners: Option<Vec<ListenerShape>>,
     assets: Option<AssetsShape>,
     templates: Option<TemplatesShape>,
+    db: Option<DbShape>,
 }
 
 #[derive(Debug)]
@@ -197,6 +198,7 @@ pub struct Settings {
     pub listeners: Vec<Listener>,
     pub assets: Assets,
     pub templates: Templates,
+    pub db: Db,
 }
 
 impl Settings {
@@ -258,6 +260,10 @@ impl Settings {
             self.templates.merge(src, dot.push(&"templates"), templates)?;
         }
 
+        if let Some(db) = settings.db {
+            self.db.merge(src, dot.push(&"db"), db)?;
+        }
+
         Ok(())
     }
 }
@@ -274,6 +280,7 @@ impl TryDefault for Settings {
             listeners: Vec::new(),
             assets: Assets::default(),
             templates: Templates::try_default()?,
+            db: Db::default()
         })
     }
 }
@@ -449,5 +456,61 @@ impl TryDefault for Templates {
         Ok(Templates {
             directory: get_cwd()?.join("templates")
         })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DbShape {
+    user: Option<String>,
+    password: Option<String>,
+    host: Option<String>,
+    port: Option<u16>,
+    dbname: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct Db {
+    pub user: String,
+    pub password: Option<String>,
+    pub host: String,
+    pub port: u16,
+    pub dbname: String,
+}
+
+impl Db {
+    fn merge(&mut self, _src: &SrcFile<'_>, _dot: DotPath<'_>, db: DbShape) -> Result<(), error::Error> {
+        if let Some(user) = db.user {
+            self.user = user;
+        }
+
+        if let Some(password) = db.password {
+            self.password = Some(password);
+        }
+
+        if let Some(host) = db.host {
+            self.host = host;
+        }
+
+        if let Some(port) = db.port {
+            self.port = port;
+        }
+
+        if let Some(dbname) = db.dbname {
+            self.dbname = dbname;
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for Db {
+    fn default() -> Self {
+        Self {
+            user: "postgres".to_owned(),
+            password: None,
+            host: "localhost".to_owned(),
+            port: 5432,
+            dbname: "tj2".to_owned(),
+        }
     }
 }
