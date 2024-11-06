@@ -7,7 +7,6 @@ use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
 use futures::StreamExt;
 use serde::{Serialize, Deserialize};
-use sqlx::{QueryBuilder, Row, Execute};
 
 use crate::state;
 use crate::db;
@@ -446,7 +445,7 @@ pub async fn create_entry(
 
         tracing::debug!("file insert query: \"{query}\"");
 
-        let mut results = transaction.query_raw(query.as_str(), params)
+        let results = transaction.query_raw(query.as_str(), params)
             .await
             .context("failed to insert files")?;
 
@@ -589,7 +588,7 @@ pub async fn update_entry(
         let mut current_tags: HashMap<String, EntryTag> = HashMap::new();
 
         {
-            let mut tag_stream = EntryTag::retrieve_entry_stream_pg(&transaction, entry.id)
+            let tag_stream = EntryTag::retrieve_entry_stream_pg(&transaction, entry.id)
                 .await
                 .context("failed to retrieve entry tags")?;
 

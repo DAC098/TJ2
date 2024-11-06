@@ -6,8 +6,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use sqlx::Transaction;
-use sqlx::pool::PoolConnection;
 
 use crate::config;
 use crate::error::{self, Context};
@@ -21,12 +19,10 @@ pub struct SharedState(Arc<State>);
 impl SharedState {
     pub async fn new(config: &config::Config) -> Result<Self, error::Error> {
         let db_pool_pg = db::from_config(config).await?;
-        let db_pool = db::connect(config).await?;
         let templates = templates::initialize(config)?;
 
         Ok(SharedState(Arc::new(State {
             db_pool_pg,
-            db_pool,
             assets: Assets {
                 files: config.settings.assets.files.clone(),
                 directories: config.settings.assets.directories.clone(),
@@ -73,7 +69,6 @@ impl FromRequestParts<SharedState> for SharedState {
 #[derive(Debug)]
 pub struct State {
     db_pool_pg: db::Pool,
-    db_pool: db::DbPool,
     assets: Assets,
     storage: Storage,
     templates: tera::Tera,
