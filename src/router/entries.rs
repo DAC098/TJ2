@@ -42,13 +42,13 @@ pub async fn retrieve_entries(
 
     let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator_pg!(
+    let initiator = macros::require_initiator!(
         &conn,
         req.headers(),
         Some(req.uri().clone())
     );
 
-    let result = Journal::retrieve_default_pg(&conn, initiator.user.id)
+    let result = Journal::retrieve_default(&conn, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -56,7 +56,7 @@ pub async fn retrieve_entries(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check_pg!(&conn, initiator, journal, Scope::Entries, Ability::Read);
+    auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
     let params: db::ParamsArray<'_, 2> = [&initiator.user.id, &journal.id];
     let entries = conn.query_raw(
@@ -178,9 +178,9 @@ pub async fn retrieve_entry(
 
     let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator_pg!(&conn, &headers, Some(uri));
+    let initiator = macros::require_initiator!(&conn, &headers, Some(uri));
 
-    let result = Journal::retrieve_default_pg(&conn, initiator.user.id)
+    let result = Journal::retrieve_default(&conn, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -188,9 +188,9 @@ pub async fn retrieve_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check_pg!(&conn, initiator, journal, Scope::Entries, Ability::Read);
+    auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
-    let result = EntryFull::retrieve_date_pg(
+    let result = EntryFull::retrieve_date(
         &conn,
         journal.id,
         initiator.user.id,
@@ -299,9 +299,9 @@ pub async fn create_entry(
         .await
         .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator_pg!(&transaction, &headers, None::<Uri>);
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
 
-    let result = Journal::retrieve_default_pg(&transaction, initiator.user.id)
+    let result = Journal::retrieve_default(&transaction, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -309,7 +309,7 @@ pub async fn create_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check_pg!(&transaction, initiator, journal, Scope::Entries, Ability::Create);
+    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Create);
 
     let uid = EntryUid::gen();
     let journals_id = journal.id;
@@ -538,8 +538,8 @@ pub async fn update_entry(
         .await
         .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator_pg!(&transaction, &headers, None::<Uri>);
-    let result = Journal::retrieve_default_pg(&transaction, initiator.user.id)
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
+    let result = Journal::retrieve_default(&transaction, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -547,9 +547,9 @@ pub async fn update_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check_pg!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
+    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
 
-    let result = Entry::retrieve_date_pg(
+    let result = Entry::retrieve_date(
         &transaction,
         journal.id,
         initiator.user.id,
@@ -588,7 +588,7 @@ pub async fn update_entry(
         let mut current_tags: HashMap<String, EntryTag> = HashMap::new();
 
         {
-            let tag_stream = EntryTag::retrieve_entry_stream_pg(&transaction, entry.id)
+            let tag_stream = EntryTag::retrieve_entry_stream(&transaction, entry.id)
                 .await
                 .context("failed to retrieve entry tags")?;
 
@@ -740,8 +740,8 @@ pub async fn delete_entry(
         .await
         .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator_pg!(&transaction, &headers, None::<Uri>);
-    let result = Journal::retrieve_default_pg(&transaction, initiator.user.id)
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
+    let result = Journal::retrieve_default(&transaction, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -749,9 +749,9 @@ pub async fn delete_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check_pg!(&transaction, initiator, journal, Scope::Entries, Ability::Delete);
+    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Delete);
 
-    let result = EntryFull::retrieve_date_pg(
+    let result = EntryFull::retrieve_date(
         &transaction,
         journal.id,
         initiator.user.id,

@@ -168,9 +168,9 @@ pub async fn retrieve_file(
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator_pg!(&conn, &headers, None::<&'static str>);
+    let initiator = macros::require_initiator!(&conn, &headers, None::<&'static str>);
 
-    let result = Journal::retrieve_default_pg(&conn, initiator.user.id)
+    let result = Journal::retrieve_default(&conn, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -178,9 +178,9 @@ pub async fn retrieve_file(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check_pg!(&conn, initiator, journal, Scope::Entries, Ability::Read);
+    auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
-    let result = FileEntry::retrieve_file_entry_pg(&conn, &date, file_entry_id)
+    let result = FileEntry::retrieve_file_entry(&conn, &date, file_entry_id)
         .await
         .context("failed to retrieve journal entry file")?;
 
@@ -218,9 +218,9 @@ pub async fn upload_file(
         .await
         .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator_pg!(&transaction, &headers, None::<&'static str>);
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<&'static str>);
 
-    let result = Journal::retrieve_default_pg(&transaction, initiator.user.id)
+    let result = Journal::retrieve_default(&transaction, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -230,9 +230,9 @@ pub async fn upload_file(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check_pg!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
+    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
 
-    let result = FileEntry::retrieve_file_entry_pg(&transaction, &date, file_entry_id)
+    let result = FileEntry::retrieve_file_entry(&transaction, &date, file_entry_id)
         .await
         .context("failed to retrieve journal entry file")?;
 
@@ -274,7 +274,7 @@ pub async fn upload_file(
     file_entry.updated = Some(Utc::now());
 
     // update the database record
-    if let Err(err) = file_entry.update_pg(&transaction).await {
+    if let Err(err) = file_entry.update(&transaction).await {
         if let Err((_file_update, clean_err)) = file_update.clean().await {
             error::log_prefix_error("failed to clean file update", &clean_err);
         }

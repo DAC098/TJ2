@@ -53,12 +53,12 @@ pub async fn login(
     Query(query): Query<LoginQuery>,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    let conn = state.db_pg()
+    let conn = state.db()
         .get()
         .await
         .context("failed to retrieve database connection")?;
 
-    let result = Initiator::from_headers_pg(&conn, &headers)
+    let result = Initiator::from_headers(&conn, &headers)
         .await;
 
     match result {
@@ -124,7 +124,7 @@ pub async fn request_login(
     state: state::SharedState,
     body::Json(login): body::Json<LoginRequest>,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.db_pg()
+    let mut conn = state.db()
         .get()
         .await
         .context("failed to retrieve database connection")?;
@@ -135,7 +135,7 @@ pub async fn request_login(
 
     tracing::debug!("login recieved: {login:#?}");
 
-    let maybe_user = user::User::retrieve_username_pg(&transaction, &login.username)
+    let maybe_user = user::User::retrieve_username(&transaction, &login.username)
         .await
         .context("database error when searching for login username")?;
 
@@ -169,7 +169,7 @@ pub async fn request_login(
     options.authenticated = true;
     options.verified = true;
 
-    let session = Session::create_pg(&transaction, options)
+    let session = Session::create(&transaction, options)
         .await
         .context("failed to create session for login")?;
 
@@ -189,7 +189,7 @@ pub async fn request_logout(
     state: state::SharedState,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.db_pg()
+    let mut conn = state.db()
         .get()
         .await
         .context("failed to retrieve database connection")?;
@@ -198,9 +198,9 @@ pub async fn request_logout(
         .await
         .context("failed to create transaction")?;
 
-    match Initiator::from_headers_pg(&transaction, &headers).await {
+    match Initiator::from_headers(&transaction, &headers).await {
         Ok(initiator) => {
-            initiator.session.delete_pg(&transaction)
+            initiator.session.delete(&transaction)
                 .await
                 .context("failed to delete session from database")?;
         }
@@ -209,7 +209,7 @@ pub async fn request_logout(
             InitiatorError::Unauthenticated(session) |
             InitiatorError::Unverified(session) |
             InitiatorError::SessionExpired(session) => {
-                session.delete_pg(&transaction)
+                session.delete(&transaction)
                     .await
                     .context("failed to delete session from database")?;
             }

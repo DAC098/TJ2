@@ -60,21 +60,21 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
         .await
         .context("failed to create transaction")?;
 
-    let maybe_admin = User::retrieve_username_pg(&transaction, "admin")
+    let maybe_admin = User::retrieve_username(&transaction, "admin")
         .await
         .context("failed to check if admin user was found")?;
 
     if maybe_admin.is_none() {
         let mut rng = rand::thread_rng();
-        let admin = create_admin_user_pg(&transaction).await?;
-        let admin_role = create_default_roles_pg(&transaction).await?;
+        let admin = create_admin_user(&transaction).await?;
+        let admin_role = create_default_roles(&transaction).await?;
 
         admin_role.assign_user(&transaction, admin.id)
             .await
             .context("failed to assign admin to admin role")?;
 
-        test_data::create_journal_pg(&transaction, &mut rng, admin.id).await?;
-        test_data::create_pg(&transaction, &mut rng).await?;
+        test_data::create_journal(&transaction, &mut rng, admin.id).await?;
+        test_data::create(&transaction, &mut rng).await?;
     }
 
     transaction.commit()
@@ -84,17 +84,17 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
     Ok(())
 }
 
-async fn create_admin_user_pg(conn: &impl GenericClient) -> Result<User, Error> {
+async fn create_admin_user(conn: &impl GenericClient) -> Result<User, Error> {
     let hash = password::create("password")
         .context("failed to create admin password")?;
 
-    User::create_pg(conn, "admin", &hash, 0)
+    User::create(conn, "admin", &hash, 0)
         .await
         .context("failed to create admin user")
 }
 
-async fn create_default_roles_pg(conn: &impl GenericClient) -> Result<Role, Error> {
-    let admin_role = Role::create_pg(conn, "admin")
+async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> {
+    let admin_role = Role::create(conn, "admin")
         .await
         .context("failed to create admin role")?;
 

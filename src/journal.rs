@@ -26,7 +26,7 @@ pub struct Journal {
 }
 
 impl Journal {
-    pub async fn create_pg(conn: &impl GenericClient, users_id: UserId, name: &str) -> Result<Self, PgError> {
+    pub async fn create(conn: &impl GenericClient, users_id: UserId, name: &str) -> Result<Self, PgError> {
         let uid = JournalUid::gen();
         let created = Utc::now();
 
@@ -48,7 +48,7 @@ impl Journal {
             })
     }
 
-    pub async fn retrieve_default_pg(conn: &impl GenericClient, users_id: UserId) -> Result<Option<Self>, PgError> {
+    pub async fn retrieve_default(conn: &impl GenericClient, users_id: UserId) -> Result<Option<Self>, PgError> {
         conn.query_opt(
             "\
             select journals.id, \
@@ -88,7 +88,7 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub async fn retrieve_date_pg(
+    pub async fn retrieve_date(
         conn: &impl GenericClient,
         journals_id: JournalId,
         users_id: UserId,
@@ -145,15 +145,15 @@ where
 }
 
 impl EntryFull {
-    pub async fn retrieve_date_pg(
+    pub async fn retrieve_date(
         conn: &impl GenericClient,
         journals_id: JournalId,
         users_id: UserId,
         date: &NaiveDate,
     ) -> Result<Option<Self>, PgError> {
-        if let Some(found) = Entry::retrieve_date_pg(conn, journals_id, users_id, date).await ? {
-            let tags_fut = EntryTag::retrieve_entry_pg(conn, found.id);
-            let files_fut = FileEntry::retrieve_entry_pg(conn, found.id);
+        if let Some(found) = Entry::retrieve_date(conn, journals_id, users_id, date).await ? {
+            let tags_fut = EntryTag::retrieve_entry(conn, found.id);
+            let files_fut = FileEntry::retrieve_entry(conn, found.id);
 
             match tokio::join!(tags_fut, files_fut) {
                 (Ok(tags), Ok(files)) => Ok(Some(Self {
@@ -197,7 +197,7 @@ impl EntryTag {
         })
     }
 
-    pub async fn retrieve_entry_stream_pg(
+    pub async fn retrieve_entry_stream(
         conn: &impl GenericClient,
         entry_id: EntryId
     ) -> Result<impl TryStream<Item = Result<Self, PgError>>, PgError> {
@@ -217,8 +217,8 @@ impl EntryTag {
             .map(|result| result.map(Self::map_row))
     }
 
-    pub async fn retrieve_entry_pg(conn: &impl GenericClient, entries_id: EntryId) -> Result<Vec<Self>, PgError> {
-        let stream = Self::retrieve_entry_stream_pg(conn, entries_id).await?;
+    pub async fn retrieve_entry(conn: &impl GenericClient, entries_id: EntryId) -> Result<Vec<Self>, PgError> {
+        let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
         let mut rtn = Vec::new();
 
         futures::pin_mut!(stream);
@@ -246,7 +246,7 @@ pub struct FileEntry {
 }
 
 impl FileEntry {
-    pub async fn retrieve_entry_stream_pg(
+    pub async fn retrieve_entry_stream(
         conn: &impl GenericClient,
         entries_id: &EntryId
     ) -> Result<impl Stream<Item = Result<Self, PgError>>, PgError> {
@@ -283,7 +283,7 @@ impl FileEntry {
             })))
     }
 
-    pub async fn retrieve_file_entry_pg(
+    pub async fn retrieve_file_entry(
         conn: &impl GenericClient,
         date: &NaiveDate,
         file_entry_id: FileEntryId
@@ -322,11 +322,11 @@ impl FileEntry {
             }))
     }
 
-    pub async fn retrieve_entry_pg(
+    pub async fn retrieve_entry(
         conn: &impl GenericClient,
         entries_id: EntryId
     ) -> Result<Vec<Self>, PgError> {
-        let stream = Self::retrieve_entry_stream_pg(conn, &entries_id).await?;
+        let stream = Self::retrieve_entry_stream(conn, &entries_id).await?;
         let mut rtn = Vec::new();
 
         futures::pin_mut!(stream);
@@ -349,7 +349,7 @@ impl FileEntry {
             .expect("failed to parse MIME from database")
     }
 
-    pub async fn update_pg(&self, conn: &impl GenericClient) -> Result<(), PgError> {
+    pub async fn update(&self, conn: &impl GenericClient) -> Result<(), PgError> {
         conn.execute(
             "\
             update file_entries \

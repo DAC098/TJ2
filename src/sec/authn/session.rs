@@ -123,7 +123,7 @@ impl SessionOptions {
 }
 
 impl Session {
-    pub async fn create_pg(conn: &impl db::GenericClient, options: SessionOptions) -> Result<Self, error::Error> {
+    pub async fn create(conn: &impl db::GenericClient, options: SessionOptions) -> Result<Self, error::Error> {
         let users_id = options.users_id;
         let dropped = false;
         let issued_on = Utc::now();
@@ -168,7 +168,7 @@ impl Session {
         })
     }
 
-    pub async fn retrieve_token_pg(conn: &impl db::GenericClient, token: &Token) -> Result<Option<Self>, db::PgError> {
+    pub async fn retrieve_token(conn: &impl db::GenericClient, token: &Token) -> Result<Option<Self>, db::PgError> {
         let maybe = conn.query_opt(
             "\
             select token, \
@@ -198,7 +198,7 @@ impl Session {
         }
     }
 
-    pub async fn delete_pg(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+    pub async fn delete(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
         let result = conn.execute(
             "delete from authn_sessions where token = $1",
             &[&self.token]

@@ -7,17 +7,17 @@ use super::{GenericClient, ids};
 
 use crate::error::{Error, Context};
 use crate::journal::Journal;
-use crate::user::{User, Group, assign_user_group_pg};
+use crate::user::{User, Group, assign_user_group};
 use crate::sec::password;
 use crate::sec::authz::{Role, Scope, Ability};
 
-pub async fn create_pg(conn: &impl GenericClient, rng: &mut ThreadRng) -> Result<(), Error> {
+pub async fn create(conn: &impl GenericClient, rng: &mut ThreadRng) -> Result<(), Error> {
     let password = "password";
 
-    let journalists_group = Group::create_pg(conn, "journalists")
+    let journalists_group = Group::create(conn, "journalists")
         .await
         .context("failed to create journalists group")?;
-    let journalists_role = Role::create_pg(conn, "journalists")
+    let journalists_role = Role::create(conn, "journalists")
         .await
         .context("failed to create journalists role")?;
 
@@ -46,26 +46,26 @@ pub async fn create_pg(conn: &impl GenericClient, rng: &mut ThreadRng) -> Result
 
     for _ in 0..10 {
         let username = gen_username(rng);
-        let user = create_user_pg(conn, &username, password).await?;
+        let user = create_user(conn, &username, password).await?;
 
         tracing::debug!("create new user: {}", user.id);
 
-        assign_user_group_pg(conn, user.id, journalists_group.id)
+        assign_user_group(conn, user.id, journalists_group.id)
             .await
             .context("failed to assign test user to journalists group")?;
 
-        create_journal_pg(conn, rng, user.id).await?;
+        create_journal(conn, rng, user.id).await?;
     }
 
     Ok(())
 }
 
-pub async fn create_journal_pg(
+pub async fn create_journal(
     conn: &impl GenericClient,
     rng: &mut ThreadRng,
     users_id: ids::UserId
 ) -> Result<(), Error> {
-    let journal = Journal::create_pg(conn, users_id, "default")
+    let journal = Journal::create(conn, users_id, "default")
         .await
         .context("failed to create journal for test user")?;
 
@@ -79,7 +79,7 @@ pub async fn create_journal_pg(
 
         tracing::debug!("creating entry: {date}");
 
-        create_journal_entry_pg(conn, rng, journal.id, users_id, date).await?;
+        create_journal_entry(conn, rng, journal.id, users_id, date).await?;
     }
 
     tracing::info!("created {total_entries} entries");
@@ -87,7 +87,7 @@ pub async fn create_journal_pg(
     Ok(())
 }
 
-async fn create_journal_entry_pg(
+async fn create_journal_entry(
     conn: &impl GenericClient,
     rng: &mut ThreadRng,
     journals_id: ids::JournalId,
@@ -140,7 +140,7 @@ async fn create_journal_entry_pg(
     Ok(())
 }
 
-async fn create_user_pg(
+async fn create_user(
     conn: &impl GenericClient,
     username: &str,
     password: &str,
@@ -148,7 +148,7 @@ async fn create_user_pg(
     let hash = password::create(password)
         .context("failed to create argon2 hash")?;
 
-    User::create_pg(conn, username, &hash, 0)
+    User::create(conn, username, &hash, 0)
         .await
         .context("failed to create user")
 }

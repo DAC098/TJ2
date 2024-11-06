@@ -11,7 +11,7 @@ pub struct User {
 }
 
 impl User {
-    pub async fn retrieve_username_pg(conn: &impl db::GenericClient, username: &str) -> Result<Option<Self>, db::PgError> {
+    pub async fn retrieve_username(conn: &impl db::GenericClient, username: &str) -> Result<Option<Self>, db::PgError> {
         conn.query_opt(
             "\
             select id, \
@@ -33,7 +33,7 @@ impl User {
             }))
     }
 
-    pub async fn retrieve_id_pg(conn: &impl db::GenericClient, id: UserId) -> Result<Option<Self>, db::PgError> {
+    pub async fn retrieve_id(conn: &impl db::GenericClient, id: UserId) -> Result<Option<Self>, db::PgError> {
         conn.query_opt(
             "\
             select id, \
@@ -55,7 +55,7 @@ impl User {
             }))
     }
 
-    pub async fn create_pg(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Self, db::PgError> {
+    pub async fn create(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Self, db::PgError> {
         let uid = UserUid::gen();
 
         conn.query_one(
@@ -84,7 +84,7 @@ pub struct Group {
 }
 
 impl Group {
-    pub async fn create_pg(conn: &impl db::GenericClient, name: &str) -> Result<Self, db::PgError> {
+    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Self, db::PgError> {
         let uid = GroupUid::gen();
 
         conn.query_one(
@@ -103,7 +103,7 @@ impl Group {
     }
 }
 
-pub async fn assign_user_group_pg(
+pub async fn assign_user_group(
     conn: &impl db::GenericClient,
     users_id: UserId,
     groups_id: GroupId

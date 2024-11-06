@@ -110,7 +110,7 @@ async fn init(config: config::Config) -> Result<(), Error> {
 
     tracing::info!("closing database connections");
 
-    state.db_pg()
+    state.db()
         .close();
 
     Ok(())

@@ -69,7 +69,7 @@ impl Initiator {
         Ok(session)
     }
 
-    pub async fn from_headers_pg(
+    pub async fn from_headers(
         conn: &impl db::GenericClient,
         headers: &HeaderMap
     ) -> Result<Self, InitiatorError> {
@@ -77,13 +77,13 @@ impl Initiator {
 
         tracing::debug!("retrieving session for {token}");
 
-        let Some(session) = Session::retrieve_token_pg(conn, &token).await? else {
+        let Some(session) = Session::retrieve_token(conn, &token).await? else {
             return Err(InitiatorError::SessionNotFound);
         };
 
         let session = Self::validate_session(session)?;
 
-        let Some(user) = user::User::retrieve_id_pg(conn, session.users_id).await? else {
+        let Some(user) = user::User::retrieve_id(conn, session.users_id).await? else {
             return Err(InitiatorError::UserNotFound(session));
         };
 

@@ -1,7 +1,7 @@
-macro_rules! perm_check_pg {
+macro_rules! perm_check {
     ($conn:expr, $initiator:expr, $journal:expr, $scope:expr, $ability:expr) => {
         let perm_check = if $journal.users_id == $initiator.user.id {
-            crate::sec::authz::has_permission_pg(
+            crate::sec::authz::has_permission(
                 $conn,
                 $initiator.user.id,
                 $scope,
@@ -10,7 +10,7 @@ macro_rules! perm_check_pg {
                 .await
                 .context("failed to retrieve permissiosn for user")?
         } else {
-            crate::sec::authz::has_permission_ref_pg(
+            crate::sec::authz::has_permission_ref(
                 $conn,
                 $initiator.user.id,
                 $scope,
@@ -27,4 +27,4 @@ macro_rules! perm_check_pg {
     }
 }
 
-pub(crate) use perm_check_pg;
+pub(crate) use perm_check;

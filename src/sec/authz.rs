@@ -161,7 +161,7 @@ pub struct Role {
 }
 
 impl Role {
-    pub async fn create_pg(conn: &impl db::GenericClient, name: &str) -> Result<Self, db::PgError> {
+    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Self, db::PgError> {
         let uid = RoleUid::gen();
 
         conn.query_one(
@@ -180,22 +180,22 @@ impl Role {
     }
 
     pub async fn assign_user(&self, conn: &impl db::GenericClient, users_id: UserId) -> Result<(), db::PgError> {
-        assign_user_role_pg(conn, self.id, users_id).await
+        assign_user_role(conn, self.id, users_id).await
     }
 
     pub async fn assign_group(&self, conn: &impl db::GenericClient, groups_id: GroupId) -> Result<(), db::PgError> {
-        assign_group_role_pg(conn, self.id, groups_id).await
+        assign_group_role(conn, self.id, groups_id).await
     }
 
     pub async fn assign_permissions<'a, I>(&self, conn: &impl db::GenericClient, list: I) -> Result<(), db::PgError>
     where
         I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>
     {
-        create_permissions_pg(conn, self.id, list).await
+        create_permissions(conn, self.id, list).await
     }
 }
 
-pub async fn has_permission_pg(
+pub async fn has_permission(
     conn: &impl db::GenericClient,
     users_id: UserId,
     scope: Scope,
@@ -225,7 +225,7 @@ pub async fn has_permission_pg(
     Ok(result > 0)
 }
 
-pub async fn has_permission_ref_pg<'a, T>(
+pub async fn has_permission_ref<'a, T>(
     conn: &impl db::GenericClient,
     users_id: UserId,
     scope: Scope,
@@ -261,7 +261,7 @@ where
     Ok(result > 0)
 }
 
-pub async fn assign_user_role_pg(
+pub async fn assign_user_role(
     conn: &impl db::GenericClient,
     role_id: RoleId,
     users_id: UserId,
@@ -274,7 +274,7 @@ pub async fn assign_user_role_pg(
     Ok(())
 }
 
-pub async fn assign_group_role_pg(
+pub async fn assign_group_role(
     conn: &impl db::GenericClient,
     role_id: RoleId,
     groups_id: GroupId,
@@ -287,7 +287,7 @@ pub async fn assign_group_role_pg(
     Ok(())
 }
 
-pub async fn create_permissions_pg<'a, I>(
+pub async fn create_permissions<'a, I>(
     conn: &impl db::GenericClient,
     id: RoleId,
     list: I

@@ -18,11 +18,11 @@ pub struct SharedState(Arc<State>);
 
 impl SharedState {
     pub async fn new(config: &config::Config) -> Result<Self, error::Error> {
-        let db_pool_pg = db::from_config(config).await?;
+        let db_pool = db::from_config(config).await?;
         let templates = templates::initialize(config)?;
 
         Ok(SharedState(Arc::new(State {
-            db_pool_pg,
+            db_pool,
             assets: Assets {
                 files: config.settings.assets.files.clone(),
                 directories: config.settings.assets.directories.clone(),
@@ -42,8 +42,8 @@ impl SharedState {
         &self.0.templates
     }
 
-    pub fn db_pg(&self) -> &db::Pool {
-        &self.0.db_pool_pg
+    pub fn db(&self) -> &db::Pool {
+        &self.0.db_pool
     }
 
     pub fn storage(&self) -> &Storage {
@@ -51,7 +51,7 @@ impl SharedState {
     }
 
     pub async fn db_conn(&self) -> Result<db::Object, error::Error> {
-        self.0.db_pool_pg.get()
+        self.0.db_pool.get()
             .await
             .context("failed to retrieve database connection")
     }
@@ -68,7 +68,7 @@ impl FromRequestParts<SharedState> for SharedState {
 
 #[derive(Debug)]
 pub struct State {
-    db_pool_pg: db::Pool,
+    db_pool: db::Pool,
     assets: Assets,
     storage: Storage,
     templates: tera::Tera,

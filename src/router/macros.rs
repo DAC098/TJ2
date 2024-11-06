@@ -1,6 +1,6 @@
-macro_rules! require_initiator_pg {
+macro_rules! require_initiator {
     ($conn:expr, $headers:expr, $uri:expr) => {
-        match crate::sec::authn::Initiator::from_headers_pg($conn, $headers).await {
+        match crate::sec::authn::Initiator::from_headers($conn, $headers).await {
             Ok(value) => value,
             Err(err) => match err {
                 crate::sec::authn::InitiatorError::HeaderStr(err) =>
@@ -31,7 +31,7 @@ macro_rules! require_initiator_pg {
     }
 }
 
-pub(crate) use require_initiator_pg;
+pub(crate) use require_initiator;
 
 macro_rules! res_if_html {
     ($templates:expr, $headers:expr) => {
