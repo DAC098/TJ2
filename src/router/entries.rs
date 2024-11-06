@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use axum::extract::{Path, Request};
 use axum::http::{StatusCode, Uri, HeaderMap};
@@ -40,15 +41,15 @@ pub async fn retrieve_entries(
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), req.headers());
 
-    let mut conn = state.acquire_conn().await?;
+    let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator!(
-        &mut conn,
+    let initiator = macros::require_initiator_pg!(
+        &conn,
         req.headers(),
         Some(req.uri().clone())
     );
 
-    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+    let result = Journal::retrieve_default_pg(&conn, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -56,15 +57,16 @@ pub async fn retrieve_entries(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
+    auth::perm_check_pg!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
-    let mut fut_entries = sqlx::query(
+    let params: db::ParamsArray<'_, 2> = [&initiator.user.id, &journal.id];
+    let entries = conn.query_raw(
         "\
         with search_entries as ( \
             select * \
             from entries \
-            where entries.users_id = ?1 and \
-                  entries.journals_id = ?2 \
+            where entries.users_id = $1 and \
+                  entries.journals_id = $2 \
         ) \
         select search_entries.id, \
                search_entries.uid, \
@@ -79,16 +81,18 @@ pub async fn retrieve_entries(
         from search_entries \
             left join entry_tags on \
                 search_entries.id = entry_tags.entries_id \
-        order by search_entries.entry_date desc"
+        order by search_entries.entry_date desc",
+        params
     )
-        .bind(initiator.user.id)
-        .bind(journal.id)
-        .fetch(&mut *conn);
+        .await
+        .context("failed to retrieve journal entries")?;
+
+    futures::pin_mut!(entries);
 
     let mut found = Vec::new();
     let mut current: Option<EntryPartial> = None;
 
-    while let Some(try_record) = fut_entries.next().await {
+    while let Some(try_record) = entries.next().await {
         let record = try_record.context("failed to retrieve journal entry")?;
         let key: Option<String> = record.get(8);
         let value: Option<String> = record.get(9);
@@ -173,11 +177,11 @@ pub async fn retrieve_entry(
         return Ok(StatusCode::BAD_REQUEST.into_response());
     };
 
-    let mut conn = state.acquire_conn().await?;
+    let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator!(&mut conn, &headers, Some(uri));
+    let initiator = macros::require_initiator_pg!(&conn, &headers, Some(uri));
 
-    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+    let result = Journal::retrieve_default_pg(&conn, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -185,10 +189,10 @@ pub async fn retrieve_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Read);
+    auth::perm_check_pg!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
-    let result = EntryFull::retrieve_date(
-        &mut conn,
+    let result = EntryFull::retrieve_date_pg(
+        &conn,
         journal.id,
         initiator.user.id,
         &date
@@ -291,11 +295,14 @@ pub async fn create_entry(
     headers: HeaderMap,
     body::Json(json): body::Json<NewEntryBody>,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.begin_conn().await?;
+    let mut conn = state.db_conn().await?;
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
+    let initiator = macros::require_initiator_pg!(&transaction, &headers, None::<Uri>);
 
-    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+    let result = Journal::retrieve_default_pg(&transaction, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -303,7 +310,7 @@ pub async fn create_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Create);
+    auth::perm_check_pg!(&transaction, initiator, journal, Scope::Entries, Ability::Create);
 
     let uid = EntryUid::gen();
     let journals_id = journal.id;
@@ -314,20 +321,13 @@ pub async fn create_entry(
     let created = Utc::now();
 
     let id: EntryId = {
-        let result = sqlx::query(
+        let result = transaction.query_one(
             "\
             insert into entries (uid, journals_id, users_id, entry_date, title, contents, created) \
-            values (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-            returning id"
+            values ($1, $2, $3, $4, $5, $6, $7) \
+            returning id",
+            &[&uid, &journals_id, &users_id, &entry_date, &title, &contents, &created]
         )
-            .bind(&uid)
-            .bind(journals_id)
-            .bind(users_id)
-            .bind(entry_date)
-            .bind(&title)
-            .bind(&contents)
-            .bind(created)
-            .fetch_one(&mut *conn)
             .await
             .context("failed to insert entry into database")?;
 
@@ -337,9 +337,6 @@ pub async fn create_entry(
     let tags = if !json.tags.is_empty() {
         let mut first = true;
         let mut rtn: Vec<EntryTag> = Vec::new();
-        let mut query_builder: QueryBuilder<db::Db> = QueryBuilder::new(
-            "insert into entry_tags (entries_id, key, value, created) values "
-        );
 
         for tag in json.tags {
             let Some(key) = non_empty_str(tag.key) else {
@@ -347,31 +344,35 @@ pub async fn create_entry(
             };
             let value = opt_non_empty_str(tag.value);
 
-            if first {
-                query_builder.push("(");
-                first = false;
-            } else {
-                query_builder.push(", (");
-            }
-
             rtn.push(EntryTag {
-                key: key.clone(),
-                value: value.clone(),
+                key,
+                value,
                 created,
                 updated: None
             });
-
-            let mut separated = query_builder.separated(", ");
-            separated.push_bind(id);
-            separated.push_bind(key);
-            separated.push_bind(value);
-            separated.push_bind(created);
-            separated.push_unseparated(")");
         }
 
-        let query = query_builder.build();
+        let mut params: db::ParamsVec<'_> = vec![&id, &created];
+        let mut query = String::from(
+            "insert into entry_tags (entries_id, key, value, created) values "
+        );
 
-        query.execute(&mut *conn)
+        for tag in &rtn {
+            if first {
+                first = false;
+            } else {
+                query.push_str(", ");
+            }
+
+            write!(
+                &mut query,
+                "($1, ${}, ${}, $2)",
+                db::push_param(&mut params, &tag.key),
+                db::push_param(&mut params, &tag.value)
+            ).unwrap();
+        }
+
+        transaction.execute(query.as_str(), params.as_slice())
             .await
             .context("failed to commit tags")?;
 
@@ -385,16 +386,6 @@ pub async fn create_entry(
     let files = if !json.files.is_empty() {
         let mut first = true;
         let mut rtn: Vec<ResultFileEntry> = Vec::new();
-        let mut query_builder: QueryBuilder<db::Db> = QueryBuilder::new(
-            "insert into file_entries ( \
-                uid, \
-                entries_id, \
-                name, \
-                mime_type, \
-                mime_subtype, \
-                created \
-            ) values "
-        );
 
         for file in json.files {
             let uid = FileEntryUid::gen();
@@ -403,20 +394,14 @@ pub async fn create_entry(
             let mime_subtype = String::from("");
             let created = created;
 
-            if first {
-                query_builder.push("(");
-                first = false;
-            } else {
-                query_builder.push(", (");
-            }
 
             let file_entry = FileEntry {
                 id: FileEntryId::new(1).unwrap(),
-                uid: uid.clone(),
+                uid,
                 entries_id: id,
-                name: name.clone(),
-                mime_type: mime_type.clone(),
-                mime_subtype: mime_subtype.clone(),
+                name,
+                mime_type,
+                mime_subtype,
                 mime_param: None,
                 size: 0,
                 created,
@@ -427,25 +412,46 @@ pub async fn create_entry(
             };
 
             rtn.push(ResultFileEntry::from((file_entry, client_data)));
-
-            let mut separated = query_builder.separated(", ");
-            separated.push_bind(uid);
-            separated.push_bind(id);
-            separated.push_bind(name);
-            separated.push_bind(mime_type);
-            separated.push_bind(mime_subtype);
-            separated.push_bind(created);
-            separated.push_unseparated(")");
         }
 
-        query_builder.push(" returning id");
+        let mut params: db::ParamsVec<'_> = vec![&id, &created];
+        let mut query = String::from(
+            "insert into file_entries ( \
+                uid, \
+                entries_id, \
+                name, \
+                mime_type, \
+                mime_subtype, \
+                created \
+            ) values "
+        );
 
-        let insert_query = query_builder.build();
-        let sql = insert_query.sql();
+        for entry in &rtn {
+            if first {
+                first = false;
+            } else {
+                query.push_str(", (");
+            }
 
-        tracing::debug!("file insert query: \"{sql}\"");
+            write!(
+                &mut query,
+                "(${}, $1, ${}, ${}, ${}, $2)",
+                db::push_param(&mut params, &entry.inner.uid),
+                db::push_param(&mut params, &entry.inner.name),
+                db::push_param(&mut params, &entry.inner.mime_type),
+                db::push_param(&mut params, &entry.inner.mime_subtype),
+            ).unwrap();
+        }
 
-        let mut results = insert_query.fetch(&mut *conn);
+        query.push_str(" returning id");
+
+        tracing::debug!("file insert query: \"{query}\"");
+
+        let mut results = transaction.query_raw(query.as_str(), params)
+            .await
+            .context("failed to insert files")?;
+
+        futures::pin_mut!(results);
 
         for file_entry in &mut rtn {
             let Some(ins_result) = results.next().await else {
@@ -487,7 +493,7 @@ pub async fn create_entry(
         Vec::new()
     };
 
-    let commit_result = conn.commit()
+    let commit_result = transaction.commit()
         .await;
 
     if let Err(err) = commit_result {
@@ -529,10 +535,13 @@ pub async fn update_entry(
     Path(EntryDate { date }): Path<EntryDate>,
     body::Json(json): body::Json<UpdatedEntryBody>,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.begin_conn().await?;
+    let mut conn = state.db_conn().await?;
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
-    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+    let initiator = macros::require_initiator_pg!(&transaction, &headers, None::<Uri>);
+    let result = Journal::retrieve_default_pg(&transaction, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -540,10 +549,10 @@ pub async fn update_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Update);
+    auth::perm_check_pg!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
 
-    let result = Entry::retrieve_date(
-        &mut conn,
+    let result = Entry::retrieve_date_pg(
+        &transaction,
         journal.id,
         initiator.user.id,
         &date
@@ -562,30 +571,30 @@ pub async fn update_entry(
     let contents = opt_non_empty_str(json.contents);
     let updated = Utc::now();
 
-    sqlx::query(
+    transaction.execute(
         "\
         update entries \
-        set entry_date = ?2, \
-            title = ?3, \
-            contents = ?4, \
-            updated = ?5 \
-        where id = ?1"
+        set entry_date = $2, \
+            title = $3, \
+            contents = $4, \
+            updated = $5 \
+        where id = $1",
+        &[&entry.id, &entry_date, &title, &contents, &updated]
     )
-        .bind(entry.id)
-        .bind(entry_date)
-        .bind(&title)
-        .bind(&contents)
-        .bind(updated)
-        .execute(&mut *conn)
         .await
         .context("failed to update journal entry")?;
 
     let tags = {
         let mut tags: Vec<EntryTag> = Vec::new();
+        let mut unchanged: Vec<EntryTag> = Vec::new();
         let mut current_tags: HashMap<String, EntryTag> = HashMap::new();
 
         {
-            let mut tag_stream = EntryTag::retrieve_entry_stream(&mut conn, entry.id);
+            let mut tag_stream = EntryTag::retrieve_entry_stream_pg(&transaction, entry.id)
+                .await
+                .context("failed to retrieve entry tags")?;
+
+            futures::pin_mut!(tag_stream);
 
             while let Some(tag_result) = tag_stream.next().await {
                 let tag = tag_result.context("failed to retrieve journal tag")?;
@@ -593,13 +602,6 @@ pub async fn update_entry(
                 current_tags.insert(tag.key.clone(), tag);
             }
         }
-
-        let mut changed = false;
-        let mut upsert_first = true;
-        let mut upsert_tags: QueryBuilder<db::Db> = QueryBuilder::new(
-            "\
-            insert into entry_tags (entries_id, key, value, created) values "
-        );
 
         for tag in json.tags {
             let Some(key) = non_empty_str(tag.key) else {
@@ -613,12 +615,8 @@ pub async fn update_entry(
                     found.updated = Some(updated);
 
                     tags.push(found);
-
-                    changed = true;
                 } else {
-                    tags.push(found);
-
-                    continue;
+                    unchanged.push(found);
                 }
             } else {
                 tags.push(EntryTag {
@@ -627,64 +625,78 @@ pub async fn update_entry(
                     created: updated,
                     updated: None,
                 });
-
-                changed = true;
             }
-
-            if upsert_first {
-                upsert_tags.push("(");
-                upsert_first = false;
-            } else {
-                upsert_tags.push(", (");
-            }
-
-            let mut separated = upsert_tags.separated(", ");
-            separated.push_bind(entry.id);
-            separated.push_bind(key);
-            separated.push_bind(value);
-            separated.push_bind(updated);
-            separated.push_unseparated(")");
         }
 
-        if changed {
-            upsert_tags.push(" on conflict do update set \
+        if !tags.is_empty() {
+            let mut first = true;
+            let mut params: db::ParamsVec<'_> = vec![&entry.id, &updated];
+            let mut query = String::from(
+                "insert into entry_tags (entries_id, key, value, created) values "
+            );
+
+            for tag in &tags {
+
+                if first {
+                    first = false;
+                } else {
+                    query.push_str(", ");
+                }
+
+                write!(
+                    &mut query,
+                    "($1, ${}, ${}, $2)",
+                    db::push_param(&mut params, &tag.key),
+                    db::push_param(&mut params, &tag.value),
+                ).unwrap();
+            }
+
+            query.push_str(" on conflict do update set \
                 value = EXCLUDED.value, \
                 updated = EXCLUDED.created");
 
-            let upsert_query = upsert_tags.build();
-
-            upsert_query.execute(&mut *conn)
+            transaction.execute(query.as_str(), params.as_slice())
                 .await
                 .context("failed to upsert tags for journal")?;
         }
 
         if !current_tags.is_empty() {
-            let mut delete_tags: QueryBuilder<db::Db> = QueryBuilder::new(
-                "delete from entry_tags where entries_id = "
+            let mut first = true;
+            let mut params: db::ParamsVec<'_> = vec![&entry.id];
+            let mut query = String::from(
+                "delete from entry_tags where entries_id = $1 and key in ("
             );
-            delete_tags.push_bind(entry.id);
-            delete_tags.push(" and key in (");
 
-            let mut separated = delete_tags.separated(", ");
+            for (key, _) in &current_tags {
+                if first {
+                    first = false;
 
-            for (key, _) in current_tags {
-                separated.push_bind(key);
+                    write!(
+                        &mut query,
+                        "{}",
+                        db::push_param(&mut params, key)
+                    ).unwrap();
+                } else {
+                    write!(
+                        &mut query,
+                        ",{}",
+                        db::push_param(&mut params, key)
+                    ).unwrap();
+                }
             }
 
-            separated.push_unseparated(")");
+            query.push_str(")");
 
-            let delete_query = delete_tags.build();
-
-            delete_query.execute(&mut *conn)
+            transaction.execute(query.as_str(), params.as_slice())
                 .await
-                .context("failed to delete tags for journal")?
-                .rows_affected();
+                .context("failed to delete tags for journal")?;
         }
 
+        tags.extend(unchanged);
         tags
     };
 
-    conn.commit()
+    transaction.commit()
         .await
         .context("failed commit changes to journal entry")?;
 
@@ -710,10 +722,13 @@ pub async fn delete_entry(
     headers: HeaderMap,
     Path(EntryDate { date }): Path<EntryDate>,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.begin_conn().await?;
+    let mut conn = state.db_conn().await?;
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator!(&mut conn, &headers, None::<Uri>);
-    let result = Journal::retrieve_default(&mut conn, initiator.user.id)
+    let initiator = macros::require_initiator_pg!(&transaction, &headers, None::<Uri>);
+    let result = Journal::retrieve_default_pg(&transaction, initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -721,10 +736,10 @@ pub async fn delete_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check!(&mut conn, initiator, journal, Scope::Entries, Ability::Delete);
+    auth::perm_check_pg!(&transaction, initiator, journal, Scope::Entries, Ability::Delete);
 
-    let result = EntryFull::retrieve_date(
-        &mut conn,
+    let result = EntryFull::retrieve_date_pg(
+        &transaction,
         journal.id,
         initiator.user.id,
         &date
@@ -736,23 +751,23 @@ pub async fn delete_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let tags = sqlx::query("delete from entry_tags where entries_id = ?1")
-        .bind(entry.id)
-        .execute(&mut *conn)
+    let tags = transaction.execute(
+        "delete from entry_tags where entries_id = $1",
+        &[&entry.id]
+    )
         .await
-        .context("failed to delete tags for journal entry")?
-        .rows_affected();
+        .context("failed to delete tags for journal entry")?;
 
     if tags != entry.tags.len() as u64 {
         tracing::warn!("dangling tags for journal entry");
     }
 
-    let _files = sqlx::query("delete from file_entries where entries_id = ?1")
-        .bind(entry.id)
-        .execute(&mut *conn)
+    let _files = transaction.execute(
+        "delete from file_entries where entries_id = $1",
+        &[&entry.id]
+    )
         .await
-        .context("failed to delete files for journal entry")?
-        .rows_affected();
+        .context("failed to delete files for journal entry")?;
 
     let marked_files = if !entry.files.is_empty() {
         let files_dir = state.storage().journal_files(journal.id);
@@ -777,16 +792,14 @@ pub async fn delete_entry(
         Vec::new()
     };
 
-    let entry_result = sqlx::query("delete from entries where id = ?1")
-        .bind(entry.id)
-        .execute(&mut *conn)
-        .await;
+    let entry_result = transaction.execute(
+        "delete from entries where id = $1",
+        &[&entry.id]
+    ).await;
 
     match entry_result {
         Ok(execed) => {
-            let entry = execed.rows_affected();
-
-            if entry != 1 {
+            if execed != 1 {
                 tracing::warn!("did not find journal entry?");
             }
         }
@@ -806,7 +819,7 @@ pub async fn delete_entry(
         }
     }
 
-    if let Err(err) = conn.commit().await {
+    if let Err(err) = transaction.commit().await {
         if !marked_files.is_empty() {
             let failed = files::unmark_remove(marked_files).await;
 

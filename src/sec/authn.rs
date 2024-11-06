@@ -34,6 +34,9 @@ pub enum InitiatorError {
 
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+
+    #[error(transparent)]
+    DbPg(#[from] db::PgError),
 }
 
 #[derive(Debug)]
@@ -43,20 +46,15 @@ pub struct Initiator {
 }
 
 impl Initiator {
-    pub async fn from_headers(
-        conn: &mut db::DbConn,
-        headers: &HeaderMap,
-    ) -> Result<Self, InitiatorError> {
+    fn get_token(headers: &HeaderMap) -> Result<session::Token, InitiatorError> {
         let Some(session_id) = session::find_session_id(headers)? else {
             return Err(InitiatorError::SessionIdNotFound);
         };
 
-        let token = session::Token::from_base64(session_id)?;
+        Ok(session::Token::from_base64(session_id)?)
+    }
 
-        let Some(session) = Session::retrieve_token(conn, &token).await? else {
-            return Err(InitiatorError::SessionNotFound);
-        };
-
+    fn validate_session(session: session::Session) -> Result<session::Session, InitiatorError> {
         let now = chrono::Utc::now();
 
         if session.expires_on < now {
@@ -70,6 +68,43 @@ impl Initiator {
         if !session.verified {
             return Err(InitiatorError::Unverified(session));
         }
+
+        Ok(session)
+    }
+
+    pub async fn from_headers_pg(
+        conn: &impl db::GenericClient,
+        headers: &HeaderMap
+    ) -> Result<Self, InitiatorError> {
+        let token = Self::get_token(headers)?;
+
+        let Some(session) = Session::retrieve_token_pg(conn, &token).await? else {
+            return Err(InitiatorError::SessionNotFound);
+        };
+
+        let session = Self::validate_session(session)?;
+
+        let Some(user) = user::User::retrieve_id_pg(conn, session.users_id).await? else {
+            return Err(InitiatorError::UserNotFound(session));
+        };
+
+        Ok(Initiator {
+            user,
+            session
+        })
+    }
+
+    pub async fn from_headers(
+        conn: &mut db::DbConn,
+        headers: &HeaderMap,
+    ) -> Result<Self, InitiatorError> {
+        let token = Self::get_token(headers)?;
+
+        let Some(session) = Session::retrieve_token(conn, &token).await? else {
+            return Err(InitiatorError::SessionNotFound);
+        };
+
+        let session = Self::validate_session(session)?;
 
         let Some(user) = user::User::retrieve_id(&mut *conn, session.users_id).await? else {
             return Err(InitiatorError::UserNotFound(session));

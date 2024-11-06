@@ -75,7 +75,7 @@ impl Journal {
             })
     }
 
-    pub async fn retrieve_defualt_pg(conn: &impl GenericClient, users_id: UserId) -> Result<Option<Self>, PgError> {
+    pub async fn retrieve_default_pg(conn: &impl GenericClient, users_id: UserId) -> Result<Option<Self>, PgError> {
         conn.query_opt(
             "\
             select journals.id, \

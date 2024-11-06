@@ -53,12 +53,12 @@ pub async fn login(
     Query(query): Query<LoginQuery>,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.db()
-        .acquire()
+    let conn = state.db_pg()
+        .get()
         .await
         .context("failed to retrieve database connection")?;
 
-    let result = Initiator::from_headers(&mut conn, &headers)
+    let result = Initiator::from_headers_pg(&conn, &headers)
         .await;
 
     match result {
@@ -110,6 +110,12 @@ pub async fn login(
                     err
                 ))
             }
+            InitiatorError::DbPg(err) => {
+                Err(error::Error::context_source(
+                    "database error when retrieving session",
+                    err
+                ))
+            }
         }
     }
 }
@@ -124,14 +130,18 @@ pub async fn request_login(
     state: state::SharedState,
     body::Json(login): body::Json<LoginRequest>,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.db()
-        .begin()
+    let mut conn = state.db_pg()
+        .get()
         .await
         .context("failed to retrieve database connection")?;
 
+    let transaction = conn.transaction()
+        .await
+        .context("failedto create transaction")?;
+
     tracing::debug!("login recieved: {login:#?}");
 
-    let maybe_user = user::User::retrieve_username(&mut conn, &login.username)
+    let maybe_user = user::User::retrieve_username_pg(&transaction, &login.username)
         .await
         .context("database error when searching for login username")?;
 
@@ -165,13 +175,13 @@ pub async fn request_login(
     options.authenticated = true;
     options.verified = true;
 
-    let session = Session::create(&mut conn, options)
+    let session = Session::create_pg(&transaction, options)
         .await
         .context("failed to create session for login")?;
 
     let session_cookie = session.build_cookie();
 
-    conn.commit()
+    transaction.commit()
         .await
         .context("failed to commit transaction for login")?;
 
@@ -185,26 +195,33 @@ pub async fn request_logout(
     state: state::SharedState,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    let mut conn = state.db()
-        .begin()
+    let mut conn = state.db_pg()
+        .get()
         .await
-        .context("failed to retrieve database transaction")?;
+        .context("failed to retrieve database connection")?;
 
-    match Initiator::from_headers(&mut conn, &headers).await {
-        Ok(initiator) => initiator.session.delete(&mut conn)
-            .await
-            .context("failed to delete session from database")?,
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
+
+    match Initiator::from_headers_pg(&transaction, &headers).await {
+        Ok(initiator) => {
+            initiator.session.delete_pg(&transaction)
+                .await
+                .context("failed to delete session from database")?;
+        }
         Err(err) => match err{
             InitiatorError::UserNotFound(session) |
             InitiatorError::Unauthenticated(session) |
             InitiatorError::Unverified(session) |
-            InitiatorError::SessionExpired(session) =>
-                session.delete(&mut conn)
+            InitiatorError::SessionExpired(session) => {
+                session.delete_pg(&transaction)
                     .await
-                    .context("failed to delete session from database")?,
+                    .context("failed to delete session from database")?;
+            }
             InitiatorError::HeaderStr(_err) => {}
             InitiatorError::Token(_err) => {}
-            InitiatorError::Db(err) =>
+            InitiatorError::DbPg(err) =>
                 return Err(error::Error::context_source(
                     "database error when retrieving session",
                     err
@@ -213,7 +230,7 @@ pub async fn request_logout(
         }
     }
 
-    conn.commit()
+    transaction.commit()
         .await
         .context("failed to commit transaction")?;
 

@@ -155,9 +155,9 @@ async fn create_default_roles(conn: &mut DbConn) -> Result<Role, Error> {
 }
 
 use tokio_postgres::{Config as PgConfig, NoTls};
-use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod, Object};
+use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
 
-pub use deadpool_postgres::{Pool, GenericClient};
+pub use deadpool_postgres::{Pool, GenericClient, Object};
 pub use tokio_postgres::Error as PgError;
 pub use tokio_postgres::types::{self, ToSql};
 
