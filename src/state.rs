@@ -50,10 +50,6 @@ impl SharedState {
         &self.0.db_pool_pg
     }
 
-    pub fn db(&self) -> &db::DbPool {
-        &self.0.db_pool
-    }
-
     pub fn storage(&self) -> &Storage {
         &self.0.storage
     }
@@ -62,18 +58,6 @@ impl SharedState {
         self.0.db_pool_pg.get()
             .await
             .context("failed to retrieve database connection")
-    }
-
-    pub async fn acquire_conn(&self) -> Result<PoolConnection<db::Db>, error::Error> {
-        self.0.db_pool.acquire()
-            .await
-            .context("failed to retrieve database connection")
-    }
-
-    pub async fn begin_conn(&self) -> Result<Transaction<'_, db::Db>, error::Error> {
-        self.0.db_pool.begin()
-            .await
-            .context("failed to retrieve transactional database connection")
     }
 }
 

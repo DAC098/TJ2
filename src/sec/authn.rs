@@ -33,9 +33,6 @@ pub enum InitiatorError {
     Token(#[from] session::InvalidBase64),
 
     #[error(transparent)]
-    Db(#[from] sqlx::Error),
-
-    #[error(transparent)]
     DbPg(#[from] db::PgError),
 }
 
@@ -78,6 +75,8 @@ impl Initiator {
     ) -> Result<Self, InitiatorError> {
         let token = Self::get_token(headers)?;
 
+        tracing::debug!("retrieving session for {token}");
+
         let Some(session) = Session::retrieve_token_pg(conn, &token).await? else {
             return Err(InitiatorError::SessionNotFound);
         };
@@ -91,28 +90,6 @@ impl Initiator {
         Ok(Initiator {
             user,
             session
-        })
-    }
-
-    pub async fn from_headers(
-        conn: &mut db::DbConn,
-        headers: &HeaderMap,
-    ) -> Result<Self, InitiatorError> {
-        let token = Self::get_token(headers)?;
-
-        let Some(session) = Session::retrieve_token(conn, &token).await? else {
-            return Err(InitiatorError::SessionNotFound);
-        };
-
-        let session = Self::validate_session(session)?;
-
-        let Some(user) = user::User::retrieve_id(&mut *conn, session.users_id).await? else {
-            return Err(InitiatorError::UserNotFound(session));
-        };
-
-        Ok(Initiator {
-            user,
-            session,
         })
     }
 }

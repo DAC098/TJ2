@@ -104,12 +104,6 @@ pub async fn login(
                     err
                 ))
             }
-            InitiatorError::Db(err) => {
-                Err(error::Error::context_source(
-                    "database error when retrieving session",
-                    err
-                ))
-            }
             InitiatorError::DbPg(err) => {
                 Err(error::Error::context_source(
                     "database error when retrieving session",

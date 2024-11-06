@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fmt;
 
 use axum::http::HeaderMap;
 use base64::Engine as _;
@@ -7,9 +8,6 @@ use bytes::BytesMut;
 use chrono::Duration;
 use chrono::{DateTime, Utc};
 use rand::RngCore;
-use sqlx::{Row, Type, Encode, Decode, Sqlite};
-use sqlx::encode::IsNull;
-use sqlx::sqlite::{SqliteTypeInfo, SqliteValueRef, SqliteArgumentValue};
 use postgres_types as pg_types;
 
 use crate::error::{self, Context, BoxDynError};
@@ -54,31 +52,13 @@ impl Token {
     }
 }
 
-impl<'a> Encode<'a, Sqlite> for &'a Token {
-    fn encode_by_ref(&self, buf: &mut Vec<SqliteArgumentValue<'a>>) -> Result<IsNull, BoxDynError> {
-        let buf_cow = Cow::Borrowed(self.0.as_slice());
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
 
-        buf.push(SqliteArgumentValue::Blob(buf_cow));
-
-        Ok(IsNull::No)
-    }
-}
-
-impl<'a> Decode<'a, Sqlite> for Token {
-    fn decode(value: SqliteValueRef<'a>) -> Result<Self, BoxDynError> {
-        let slice = <&[u8] as Decode<Sqlite>>::decode(value)?;
-
-        let Ok(result) = TryFrom::try_from(slice) else {
-            return Err("invalid blob received from database for token".into());
-        };
-
-        Ok(Token(result))
-    }
-}
-
-impl Type<Sqlite> for Token {
-    fn type_info() -> SqliteTypeInfo {
-        <&[u8] as Type<Sqlite>>::type_info()
+        Ok(())
     }
 }
 
@@ -189,73 +169,6 @@ impl Session {
         })
     }
 
-    pub async fn create(conn: &mut db::DbConn, options: SessionOptions) -> Result<Self, error::Error> {
-        let mut token: Token;
-        let users_id = options.users_id;
-        let dropped = false;
-        let issued_on = Utc::now();
-        let expires_on = issued_on.checked_add_signed(options.duration)
-            .context("failed to add duration to expires_on")?;
-        let authenticated = options.authenticated;
-        let verified = options.verified;
-        let mut attempts = 3usize;
-
-        loop {
-            attempts -= 1;
-            token = Token::new()
-                .context("failed to create token")?;
-
-            let result = sqlx::query(
-                "\
-                insert into authn_sessions (token, users_id, issued_on, expires_on, authenticated, verified) \
-                values (?1, ?2, ?3, ?4, ?5, ?6)"
-            )
-                .bind(&token)
-                .bind(users_id)
-                .bind(issued_on)
-                .bind(expires_on)
-                .bind(authenticated)
-                .bind(verified)
-                .execute(&mut *conn)
-                .await;
-
-            if let Err(err) = result {
-                match err {
-                    sqlx::Error::Database(ref db) => {
-                        if attempts == 0 {
-                            return Err(error::Error::context_source("failed to insert session", err));
-                        }
-
-                        tracing::debug!("database error: kind: {:?}\n{err:#?}", db.kind());
-
-                        if !matches!(db.kind(), sqlx::error::ErrorKind::UniqueViolation) {
-                            return Err(error::Error::context_source("failed to insert session", err));
-                        }
-
-                        // for sqlite the constraint method will always return
-                        // so we have to do checks on the string
-                        if !db.message().ends_with("authn_sessions.token") {
-                            return Err(error::Error::context_source("failed to insert session", err));
-                        }
-                    },
-                    err => return Err(error::Error::context_source("failed to insert session", err))
-                }
-            } else {
-                break;
-            }
-        }
-
-        Ok(Session {
-            token,
-            users_id,
-            dropped,
-            issued_on,
-            expires_on,
-            authenticated,
-            verified,
-        })
-    }
-
     pub async fn retrieve_token_pg(conn: &impl db::GenericClient, token: &Token) -> Result<Option<Self>, db::PgError> {
         let maybe = conn.query_opt(
             "\
@@ -286,27 +199,6 @@ impl Session {
         }
     }
 
-    pub async fn retrieve_token(conn: &mut db::DbConn, token: &Token) -> Result<Option<Self>, sqlx::Error> {
-        let maybe = sqlx::query("select * from authn_sessions where token = ?1")
-            .bind(token)
-            .fetch_optional(&mut *conn)
-            .await?;
-
-        if let Some(row) = maybe {
-            Ok(Some(Session {
-                token: row.get(0),
-                users_id: row.get(1),
-                dropped: row.get(2),
-                issued_on: row.get(3),
-                expires_on: row.get(4),
-                authenticated: row.get(5),
-                verified: row.get(6),
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
     pub async fn delete_pg(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
         let result = conn.execute(
             "delete from authn_sessions where token = $1",
@@ -314,15 +206,6 @@ impl Session {
         ).await?;
 
         Ok(result == 1)
-    }
-
-    pub async fn delete(&self, conn: &mut db::DbConn) -> Result<(), sqlx::Error> {
-        sqlx::query("delete from authn_sessions where token = ?1")
-            .bind(&self.token)
-            .execute(&mut *conn)
-            .await?;
-
-        Ok(())
     }
 
     pub fn build_cookie(&self) -> cookie::SetCookie {

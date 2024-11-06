@@ -394,7 +394,6 @@ pub async fn create_entry(
             let mime_subtype = String::from("");
             let created = created;
 
-
             let file_entry = FileEntry {
                 id: FileEntryId::new(1).unwrap(),
                 uid,
@@ -430,7 +429,7 @@ pub async fn create_entry(
             if first {
                 first = false;
             } else {
-                query.push_str(", (");
+                query.push_str(", ");
             }
 
             write!(
@@ -651,7 +650,7 @@ pub async fn update_entry(
                 ).unwrap();
             }
 
-            query.push_str(" on conflict do update set \
+            query.push_str(" on conflict (entries_id, key) do update set \
                 value = EXCLUDED.value, \
                 updated = EXCLUDED.created");
 
@@ -661,6 +660,20 @@ pub async fn update_entry(
         }
 
         if !current_tags.is_empty() {
+            let keys: Vec<String> = current_tags.into_keys()
+                .collect();
+
+            transaction.execute(
+                "\
+                delete from entry_tags \
+                where entries_id = $1 and \
+                      key = any($2)",
+                &[&entry.id, &keys]
+            )
+                .await
+                .context("failed to delete tags for journal")?;
+
+            /*
             let mut first = true;
             let mut params: db::ParamsVec<'_> = vec![&entry.id];
             let mut query = String::from(
@@ -690,6 +703,7 @@ pub async fn update_entry(
             transaction.execute(query.as_str(), params.as_slice())
                 .await
                 .context("failed to delete tags for journal")?;
+                */
         }
 
         tags.extend(unchanged);

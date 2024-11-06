@@ -39,14 +39,13 @@ async fn retrieve_root(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), &headers);
-
     let conn = state.db_pg()
         .get()
         .await
         .context("failed to retrieve database connection")?;
 
     macros::require_initiator_pg!(&conn, &headers, Some(uri));
+    macros::res_if_html!(state.templates(), &headers);
 
     Ok(body::Json(RootJson {
         message: String::from("okay")

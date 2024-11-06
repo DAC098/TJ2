@@ -159,8 +159,8 @@ impl Entry {
                    entries.updated \
             from entries \
             where entries.journals_id = $1 and \
-                  entries.entry_date = $2 and \
-                  entries.users_id = $3",
+                  entries.entry_date = $3 and \
+                  entries.users_id = $2",
             &[&journals_id, &users_id, date]
         )
             .await
@@ -476,12 +476,12 @@ impl FileEntry {
                    file_entries.name, \
                    file_entries.mime_type, \
                    file_entries.mime_subtype, \
-                   file_entries.mime_parameter, \
+                   file_entries.mime_param, \
                    file_entries.size, \
                    file_entries.created, \
                    file_entries.updated \
             from file_entries \
-            where file_entries.entries_id = ?1",
+            where file_entries.entries_id = $1",
             params
         )
             .await
@@ -547,7 +547,7 @@ impl FileEntry {
                    file_entries.name, \
                    file_entries.mime_type, \
                    file_entries.mime_subtype, \
-                   file_entries.mime_parameter, \
+                   file_entries.mime_param, \
                    file_entries.size, \
                    file_entries.created, \
                    file_entries.updated \
