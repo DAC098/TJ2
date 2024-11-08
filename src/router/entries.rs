@@ -12,7 +12,8 @@ use crate::state;
 use crate::db;
 use crate::db::ids::{EntryId, EntryUid, FileEntryId, FileEntryUid, JournalId, UserId};
 use crate::error::{self, Context};
-use crate::journal::{Journal, EntryTag, Entry, EntryFull, FileEntry};
+use crate::fs::{CreatedFiles, RemovedFiles};
+use crate::journal::{Journal, EntryTag, Entry, EntryFull, FileEntry, JournalDir};
 use crate::router::body;
 use crate::router::macros;
 use crate::sec::authz::{Scope, Ability};
@@ -226,7 +227,7 @@ impl<T, E> From<(T, E)> for Attached<T, E> {
     }
 }
 
-pub type ResultFileEntry = Attached<FileEntry, ClientData>;
+pub type ResultFileEntry = Attached<FileEntry, Option<ClientData>>;
 pub type ResultEntryFull = EntryFull<ResultFileEntry>;
 
 #[derive(Debug, Deserialize)]
@@ -334,7 +335,6 @@ pub async fn create_entry(
     };
 
     let tags = if !json.tags.is_empty() {
-        let mut first = true;
         let mut rtn: Vec<EntryTag> = Vec::new();
 
         for tag in json.tags {
@@ -351,39 +351,14 @@ pub async fn create_entry(
             });
         }
 
-        let mut params: db::ParamsVec<'_> = vec![&id, &created];
-        let mut query = String::from(
-            "insert into entry_tags (entries_id, key, value, created) values "
-        );
-
-        for tag in &rtn {
-            if first {
-                first = false;
-            } else {
-                query.push_str(", ");
-            }
-
-            write!(
-                &mut query,
-                "($1, ${}, ${}, $2)",
-                db::push_param(&mut params, &tag.key),
-                db::push_param(&mut params, &tag.value)
-            ).unwrap();
-        }
-
-        transaction.execute(query.as_str(), params.as_slice())
-            .await
-            .context("failed to commit tags")?;
+        upsert_tags(&transaction, &id, &rtn).await?;
 
         rtn
     } else {
         Vec::new()
     };
 
-    let mut created_files = Vec::new();
-
-    let files = if !json.files.is_empty() {
-        let mut first = true;
+    let (files, created_files) = if !json.files.is_empty() {
         let mut rtn: Vec<ResultFileEntry> = Vec::new();
 
         for file in json.files {
@@ -409,97 +384,22 @@ pub async fn create_entry(
                 key: file.key
             };
 
-            rtn.push(ResultFileEntry::from((file_entry, client_data)));
+            rtn.push(ResultFileEntry::from((file_entry, Some(client_data))));
         }
 
-        let mut params: db::ParamsVec<'_> = vec![&id, &created];
-        let mut query = String::from(
-            "insert into file_entries ( \
-                uid, \
-                entries_id, \
-                name, \
-                mime_type, \
-                mime_subtype, \
-                created \
-            ) values "
-        );
+        let dir = state.storage().journal_dir(&journal);
+        let created_files = insert_files(&transaction, &dir, &mut rtn).await?;
 
-        for entry in &rtn {
-            if first {
-                first = false;
-            } else {
-                query.push_str(", ");
-            }
-
-            write!(
-                &mut query,
-                "(${}, $1, ${}, ${}, ${}, $2)",
-                db::push_param(&mut params, &entry.inner.uid),
-                db::push_param(&mut params, &entry.inner.name),
-                db::push_param(&mut params, &entry.inner.mime_type),
-                db::push_param(&mut params, &entry.inner.mime_subtype),
-            ).unwrap();
-        }
-
-        query.push_str(" returning id");
-
-        tracing::debug!("file insert query: \"{query}\"");
-
-        let results = transaction.query_raw(query.as_str(), params)
-            .await
-            .context("failed to insert files")?;
-
-        futures::pin_mut!(results);
-
-        for file_entry in &mut rtn {
-            let Some(ins_result) = results.next().await else {
-                return Err(error::Error::context("less than expected number of ids returned from database"));
-            };
-
-            let record = ins_result.context("failed to retrieve file entry id from insert")?;
-
-            let file_entry_id = record.get(0);
-            file_entry.inner.id = file_entry_id;
-
-            let file_path = state.storage()
-                .journal_file_entry(journal.id, file_entry_id);
-            let file_result = tokio::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&file_path)
-                .await;
-
-            match file_result {
-                Ok(_) => created_files.push(file_path),
-                Err(err) => {
-                    let failed = files::drop_files(created_files).await;
-
-                    for (path, err) in failed {
-                        tracing::error!("failed to remove journal file: \"{}\" {err}", path.display());
-                    }
-
-                    return Err(error::Error::context_source(
-                        "failed to create file for journal entry",
-                        err
-                    ));
-                }
-            }
-        }
-
-        rtn
+        (rtn, created_files)
     } else {
-        Vec::new()
+        (Vec::new(), CreatedFiles::new())
     };
 
     let commit_result = transaction.commit()
         .await;
 
     if let Err(err) = commit_result {
-        let failed = files::drop_files(created_files).await;
-
-        for (path, err) in failed {
-            tracing::error!("failed to remove journal file: \"{}\" {err}", path.display());
-        }
+        created_files.log_rollback().await;
 
         return Err(error::Error::context_source(
             "failed to commit changes to journal entry",
@@ -587,18 +487,16 @@ pub async fn update_entry(
         let mut unchanged: Vec<EntryTag> = Vec::new();
         let mut current_tags: HashMap<String, EntryTag> = HashMap::new();
 
-        {
-            let tag_stream = EntryTag::retrieve_entry_stream(&transaction, entry.id)
-                .await
-                .context("failed to retrieve entry tags")?;
+        let tag_stream = EntryTag::retrieve_entry_stream(&transaction, entry.id)
+            .await
+            .context("failed to retrieve entry tags")?;
 
-            futures::pin_mut!(tag_stream);
+        futures::pin_mut!(tag_stream);
 
-            while let Some(tag_result) = tag_stream.next().await {
-                let tag = tag_result.context("failed to retrieve journal tag")?;
+        while let Some(tag_result) = tag_stream.next().await {
+            let tag = tag_result.context("failed to retrieve journal tag")?;
 
-                current_tags.insert(tag.key.clone(), tag);
-            }
+            current_tags.insert(tag.key.clone(), tag);
         }
 
         for tag in json.tags {
@@ -627,35 +525,7 @@ pub async fn update_entry(
         }
 
         if !tags.is_empty() {
-            let mut first = true;
-            let mut params: db::ParamsVec<'_> = vec![&entry.id, &updated];
-            let mut query = String::from(
-                "insert into entry_tags (entries_id, key, value, created) values "
-            );
-
-            for tag in &tags {
-
-                if first {
-                    first = false;
-                } else {
-                    query.push_str(", ");
-                }
-
-                write!(
-                    &mut query,
-                    "($1, ${}, ${}, $2)",
-                    db::push_param(&mut params, &tag.key),
-                    db::push_param(&mut params, &tag.value),
-                ).unwrap();
-            }
-
-            query.push_str(" on conflict (entries_id, key) do update set \
-                value = EXCLUDED.value, \
-                updated = EXCLUDED.created");
-
-            transaction.execute(query.as_str(), params.as_slice())
-                .await
-                .context("failed to upsert tags for journal")?;
+            upsert_tags(&transaction, &entry.id, &tags).await?;
         }
 
         if !current_tags.is_empty() {
@@ -671,47 +541,113 @@ pub async fn update_entry(
             )
                 .await
                 .context("failed to delete tags for journal")?;
-
-            /*
-            let mut first = true;
-            let mut params: db::ParamsVec<'_> = vec![&entry.id];
-            let mut query = String::from(
-                "delete from entry_tags where entries_id = $1 and key in ("
-            );
-
-            for (key, _) in &current_tags {
-                if first {
-                    first = false;
-
-                    write!(
-                        &mut query,
-                        "{}",
-                        db::push_param(&mut params, key)
-                    ).unwrap();
-                } else {
-                    write!(
-                        &mut query,
-                        ",{}",
-                        db::push_param(&mut params, key)
-                    ).unwrap();
-                }
-            }
-
-            query.push_str(")");
-
-            transaction.execute(query.as_str(), params.as_slice())
-                .await
-                .context("failed to delete tags for journal")?;
-                */
         }
 
         tags.extend(unchanged);
         tags
     };
 
-    transaction.commit()
-        .await
-        .context("failed commit changes to journal entry")?;
+    let mut created_files = CreatedFiles::new();
+
+    let files = {
+        let mut files = Vec::new();
+        let mut new_files = Vec::new();
+        let mut updated_files = Vec::new();
+        let mut current = HashMap::new();
+        let file_stream = FileEntry::retrieve_entry_stream(&transaction, &entry.id)
+            .await
+            .context("failed to retrieve file entries")?;
+
+        futures::pin_mut!(file_stream);
+
+        while let Some(file_result) = file_stream.next().await {
+            let file = file_result.context("failed to retrieve file entry")?;
+
+            current.insert(file.id, file);
+        }
+
+        for file_entry in json.files {
+            match file_entry {
+                UpdatedFileEntryBody::New(new) => {
+                    let uid = FileEntryUid::gen();
+                    let name = opt_non_empty_str(new.name);
+                    let mime_type = String::new();
+                    let mime_subtype = String::new();
+
+                    let file_entry = FileEntry {
+                        id: FileEntryId::new(1).unwrap(),
+                        uid,
+                        entries_id: entry.id,
+                        name,
+                        mime_type,
+                        mime_subtype,
+                        mime_param: None,
+                        size: 0,
+                        created: updated,
+                        updated: None
+                    };
+                    let client_data = ClientData {
+                        key: new.key
+                    };
+
+                    new_files.push(ResultFileEntry::from((file_entry, Some(client_data))));
+                }
+                UpdatedFileEntryBody::Existing(exists) => {
+                    let Some(mut found) = current.remove(&exists.id) else {
+                        return Err(error::Error::context("a specified file does not exist in the database"));
+                    };
+
+                    let check = opt_non_empty_str(exists.name);
+
+                    if found.name == check {
+                        files.push(ResultFileEntry::from((found, None)));
+                    } else {
+                        found.name = check;
+
+                        updated_files.push(ResultFileEntry::from((found, None)));
+                    }
+                }
+            }
+        }
+
+        if !new_files.is_empty() {
+            let dir = state.storage().journal_dir(&journal);
+
+            created_files = insert_files(&transaction, &dir, &mut new_files).await?;
+            files.extend(new_files);
+        }
+
+        if !updated_files.is_empty() {
+            for file in &updated_files {
+                if let Err(err) = file.inner.update(&transaction).await {
+                    created_files.log_rollback().await;
+
+                    return Err(error::Error::context_source(
+                        "failed to update file entry",
+                        err
+                    ));
+                }
+            }
+
+            files.extend(updated_files);
+        }
+
+        files
+    };
+
+    let commit_result = transaction.commit()
+        .await;
+
+    if let Err(err) = commit_result {
+        if !created_files.is_empty() {
+            created_files.log_rollback().await;
+        }
+
+        return Err(error::Error::context_source(
+            "failed commit changes to journal entry",
+            err
+        ));
+    }
 
     let entry = ResultEntryFull {
         id: entry.id,
@@ -724,7 +660,7 @@ pub async fn update_entry(
         created: entry.created,
         updated: Some(updated),
         tags,
-        files: Vec::new(),
+        files,
     };
 
     Ok(body::Json(entry).into_response())
@@ -782,18 +718,16 @@ pub async fn delete_entry(
         .await
         .context("failed to delete files for journal entry")?;
 
-    let marked_files = if !entry.files.is_empty() {
-        let files_dir = state.storage().journal_files(journal.id);
-        let result = files::mark_remove(&files_dir,entry.files).await;
+    let mut marked_files = RemovedFiles::new();
 
-        match result {
-            Ok(successful) => successful,
-            Err((processed, err)) => {
-                let failed = files::unmark_remove(processed).await;
+    if !entry.files.is_empty() {
+        let journal_dir = state.storage().journal_dir(&journal);
 
-                for (path, err) in failed {
-                    tracing::error!("failed to unmark journal file: \"{}\" {err}", path.display());
-                }
+        for entry in entry.files {
+            let entry_path = journal_dir.file_path(&entry);
+
+            if let Err(err) = marked_files.add(entry_path).await {
+                marked_files.log_rollback().await;
 
                 return Err(error::Error::context_source(
                     "failed to mark files for removal",
@@ -801,9 +735,7 @@ pub async fn delete_entry(
                 ));
             }
         }
-    } else {
-        Vec::new()
-    };
+    }
 
     let entry_result = transaction.execute(
         "delete from entries where id = $1",
@@ -818,11 +750,7 @@ pub async fn delete_entry(
         }
         Err(err) => {
             if !marked_files.is_empty() {
-                let failed = files::unmark_remove(marked_files).await;
-
-                for (path, err) in failed {
-                    tracing::error!("failed to unmark journal file: \"{}\" {err}", path.display());
-                }
+                marked_files.log_rollback().await;
             }
 
             return Err(error::Error::context_source(
@@ -834,11 +762,7 @@ pub async fn delete_entry(
 
     if let Err(err) = transaction.commit().await {
         if !marked_files.is_empty() {
-            let failed = files::unmark_remove(marked_files).await;
-
-            for (path, err) in failed {
-                tracing::error!("failed to unmark journal file: \"{}\" {err}", path.display());
-            }
+            marked_files.log_rollback().await;
         }
 
         Err(error::Error::context_source(
@@ -847,13 +771,129 @@ pub async fn delete_entry(
         ))
     } else {
         if !marked_files.is_empty() {
-            let failed = files::drop_marked(marked_files).await;
-
-            for (path, err) in failed {
-                tracing::error!("failed to removed marked journal file: \"{}\" {err}", path.display());
-            }
+            marked_files.log_clean().await;
         }
 
         Ok(StatusCode::OK.into_response())
     }
+}
+
+async fn insert_files(
+    conn: &impl db::GenericClient,
+    dir: &JournalDir,
+    files: &mut Vec<ResultFileEntry>,
+) -> Result<CreatedFiles, error::Error> {
+    let mut first = true;
+    let mut params: db::ParamsVec<'_> = vec![];
+    let mut query = String::from(
+        "insert into file_entries ( \
+            uid, \
+            entries_id, \
+            name, \
+            mime_type, \
+            mime_subtype, \
+            created \
+        ) values "
+    );
+
+    for entry in files.iter() {
+        if first {
+            first = false;
+        } else {
+            query.push_str(", ");
+        }
+
+        write!(
+            &mut query,
+            "(${}, ${}, ${}, ${}, ${}, ${})",
+            db::push_param(&mut params, &entry.inner.uid),
+            db::push_param(&mut params, &entry.inner.entries_id),
+            db::push_param(&mut params, &entry.inner.name),
+            db::push_param(&mut params, &entry.inner.mime_type),
+            db::push_param(&mut params, &entry.inner.mime_subtype),
+            db::push_param(&mut params, &entry.inner.created),
+        ).unwrap();
+    }
+
+    query.push_str(" returning id");
+
+    tracing::debug!("file insert query: \"{query}\"");
+
+    let results = match conn.query_raw(query.as_str(), params).await {
+        Ok(r) => r.map(|stream| stream.map(|record|
+            record.get::<usize, FileEntryId>(0)
+        )),
+        Err(err) => return Err(error::Error::context_source(
+            "failed to insert files",
+            err
+        ))
+    };
+
+    futures::pin_mut!(results);
+
+    let mut created_files = CreatedFiles::new();
+
+    for file_entry in files {
+        let Some(ins_result) = results.next().await else {
+            return Err(error::Error::context(
+                "less than expected number of ids returned from database"
+            ));
+        };
+
+        file_entry.inner.id = ins_result.context(
+            "failed to retrieve file entry id from insert"
+        )?;
+
+        let file_path = dir.file_path(&file_entry.inner);
+
+        if let Err(err) = created_files.add(file_path).await {
+            created_files.log_rollback().await;
+
+            return Err(error::Error::context_source(
+                "failed to create file for journal entry",
+                err
+            ));
+        }
+    }
+
+    Ok(created_files)
+}
+
+async fn upsert_tags(
+    conn: &impl db::GenericClient,
+    entries_id: &EntryId,
+    tags: &Vec<EntryTag>
+) -> Result<(), error::Error> {
+    let mut first = true;
+    let mut params: db::ParamsVec<'_> = vec![entries_id];
+    let mut query = String::from(
+        "insert into entry_tags (entries_id, key, value, created, updated) values "
+    );
+
+    for tag in tags {
+        if first {
+            first = false;
+        } else {
+            query.push_str(", ");
+        }
+
+        write!(
+            &mut query,
+            "($1, ${}, ${}, ${}, ${})",
+            db::push_param(&mut params, &tag.key),
+            db::push_param(&mut params, &tag.value),
+            db::push_param(&mut params, &tag.created),
+            db::push_param(&mut params, &tag.updated),
+        ).unwrap();
+    }
+
+    query.push_str(" on conflict (entries_id, key) do update set \
+        value = EXCLUDED.value, \
+        updated = EXCLUDED.updated");
+
+    conn.execute(query.as_str(), params.as_slice())
+        .await
+        .context("failed to upsert tags for journal")?;
+
+    Ok(())
 }

@@ -1,7 +1,4 @@
-use std::path::PathBuf;
-use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{Poll, Context as TaskContext};
 
 use axum::body::Body;
 use axum::extract::Path;
@@ -9,8 +6,6 @@ use axum::http::{StatusCode, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc};
 use futures::StreamExt;
-use futures::stream::FuturesOrdered;
-use pin_project::pin_project;
 use serde::Deserialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
@@ -25,135 +20,6 @@ use crate::router::macros;
 use crate::sec::authz::{Scope, Ability};
 
 use super::auth;
-
-#[pin_project]
-struct WithFut<T, F> {
-    attached: Option<T>,
-    #[pin]
-    future: F
-}
-
-impl<T, F> WithFut<T, F> {
-    fn new(attached: T, future: F) -> Self {
-        Self {
-            attached: Some(attached),
-            future,
-        }
-    }
-}
-
-impl<T, F, O> std::future::Future for WithFut<T, F>
-where
-    F: std::future::Future<Output = O>
-{
-    type Output = (Option<T>, O);
-
-    fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
-        let pinned = self.project();
-
-        match pinned.future.poll(cx) {
-            Poll::Ready(value) => {
-                Poll::Ready((pinned.attached.take(), value))
-            }
-            Poll::Pending => Poll::Pending
-        }
-    }
-}
-
-pub async fn drop_files(list: Vec<PathBuf>) -> Vec<(PathBuf, std::io::Error)> {
-    let mut futs = {
-        let mut futs = FuturesOrdered::new();
-
-        for path in list {
-            let rm_fut = tokio::fs::remove_file(path.clone());
-
-            futs.push_back(WithFut::new(path, rm_fut));
-        }
-
-        futs
-    };
-
-    let mut failed = Vec::new();
-
-    while let Some((maybe_path, result)) = futs.next().await {
-        let path = maybe_path.unwrap();
-
-        if let Err(err) = result {
-            failed.push((path, err));
-        }
-    }
-
-    failed
-}
-
-pub async fn mark_remove(files_dir: &PathBuf, list: Vec<FileEntry>) -> Result<Vec<(PathBuf, PathBuf)>, (Vec<(PathBuf, PathBuf)>, std::io::Error)> {
-    let mut successful = Vec::new();
-
-    for entry in list {
-        let curr = files_dir.join(format!("{}.file", entry.id));
-        let mark = files_dir.join(format!("{}.file.rm", entry.id));
-
-        if let Err(err) = tokio::fs::rename(&curr, &mark).await {
-            return Err((successful, err));
-        } else {
-            successful.push((mark, curr));
-        }
-    }
-
-    Ok(successful)
-}
-
-pub async fn unmark_remove(marked: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, std::io::Error)> {
-    let mut futs = {
-        let mut futs = FuturesOrdered::new();
-
-        for (mark, curr) in marked {
-            let re_fut = tokio::fs::rename(mark.clone(), curr.clone());
-
-            futs.push_back(WithFut::new(curr, re_fut));
-        }
-
-        futs
-    };
-
-    let mut failed = Vec::new();
-
-    while let Some((maybe_path, result)) = futs.next().await {
-        let path = maybe_path.unwrap();
-
-        if let Err(err) = result {
-            failed.push((path, err));
-        }
-    }
-
-    failed
-}
-
-pub async fn drop_marked(marked: Vec<(PathBuf, PathBuf)>) -> Vec<(PathBuf, std::io::Error)> {
-    let mut futs = {
-        let mut futs = FuturesOrdered::new();
-
-        for (mark, _curr) in marked {
-            let re_fut = tokio::fs::remove_file(mark.clone());
-
-            futs.push_back(WithFut::new(mark, re_fut));
-        }
-
-        futs
-    };
-
-    let mut failed = Vec::new();
-
-    while let Some((maybe_path, result)) = futs.next().await {
-        let path = maybe_path.unwrap();
-
-        if let Err(err) = result {
-            failed.push((path, err));
-        }
-    }
-
-    failed
-}
 
 #[derive(Debug, Deserialize)]
 pub struct FileEntryPath {

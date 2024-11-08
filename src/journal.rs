@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, DateTime, Utc};
@@ -372,5 +373,24 @@ impl FileEntry {
         ).await?;
 
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct JournalDir {
+    root: PathBuf,
+}
+
+impl JournalDir {
+    pub fn new(root: &PathBuf, journal: &Journal) -> Self {
+        let path = format!("journals/{}", journal.id);
+
+        Self {
+            root: root.join(path)
+        }
+    }
+
+    pub fn file_path(&self, file_entry: &FileEntry) -> PathBuf {
+        self.root.join(format!("files/{}.file", file_entry.id))
     }
 }

@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Poll, Context as TaskContext};
 
+use futures::stream::{StreamExt, FuturesOrdered};
 use pin_project::pin_project;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWrite;
 
+use crate::error;
 use crate::path::{add_extension, tokio_metadata};
 
 #[derive(Debug, thiserror::Error)]
@@ -194,6 +196,7 @@ pub enum UpdateError {
     }
 }
 
+#[derive(Debug)]
 pub struct UpdatedFile {
     curr: PathBuf,
     prev: PathBuf,
@@ -221,6 +224,248 @@ impl UpdatedFile {
             // the previous file is now gone and all that is left is the
             // updated file
             Ok(())
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RemovedFileError {
+    #[error("the provided file has no file_name value")]
+    NoFileName,
+
+    #[error("the provided file was not found in the file system")]
+    CurrNotFound,
+
+    #[error("a previous mark failed to be cleaned up and the marked file exists")]
+    MarkExists,
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error)
+}
+
+#[derive(Debug)]
+pub struct RemovedFile {
+    curr: PathBuf,
+    mark: PathBuf,
+}
+
+impl RemovedFile {
+    pub async fn mark(curr: PathBuf) -> Result<Self, RemovedFileError> {
+        let mark = add_extension(&curr, "mark")
+            .ok_or(RemovedFileError::NoFileName)?;
+
+        let (curr_meta, mark_meta) = tokio::join!(
+            tokio_metadata(&curr),
+            tokio_metadata(&mark),
+        );
+
+        if curr_meta?.is_none() {
+            return Err(RemovedFileError::CurrNotFound);
+        }
+
+        if mark_meta?.is_some() {
+            return Err(RemovedFileError::MarkExists);
+        }
+
+        tokio::fs::rename(&curr, &mark).await?;
+
+        Ok(Self {
+            curr,
+            mark
+        })
+    }
+
+    pub async fn clean(self) -> Result<(), (Self, std::io::Error)> {
+        if let Err(err) = tokio::fs::remove_file(&self.mark).await {
+            Err((self, err))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn rollback(self) -> Result<(), (Self, std::io::Error)> {
+        if let Err(err) = tokio::fs::rename(&self.mark, &self.curr).await {
+            Err((self, err))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RemovedFiles {
+    processed: Vec<RemovedFile>
+}
+
+impl RemovedFiles {
+    pub fn new() -> Self {
+        Self {
+            processed: Vec::new()
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.processed.is_empty()
+    }
+
+    pub async fn add(&mut self, to_drop: PathBuf) -> Result<(), RemovedFileError> {
+        self.processed.push(RemovedFile::mark(to_drop).await?);
+
+        Ok(())
+    }
+
+    pub async fn clean(self) -> Vec<(RemovedFile, std::io::Error)> {
+        let mut futs = FuturesOrdered::new();
+
+        for mark in self.processed {
+            futs.push_back(mark.clean());
+        }
+
+        let mut failed = Vec::new();
+
+        while let Some(result) = futs.next().await {
+            if let Err(fail) = result {
+                failed.push(fail);
+            }
+        }
+
+        failed
+    }
+
+    pub async fn rollback(self) -> Vec<(RemovedFile, std::io::Error)> {
+        let mut futs = FuturesOrdered::new();
+
+        for mark in self.processed {
+            futs.push_back(mark.rollback());
+        }
+
+        let mut failed = Vec::new();
+
+        while let Some(result) = futs.next().await {
+            if let Err(fail) = result {
+                failed.push(fail);
+            }
+        }
+
+        failed
+    }
+
+    pub async fn log_clean(self) {
+        let failed = self.clean().await;
+
+        for (marked, err) in failed {
+            let prefix = format!(
+                "failed to clean file: \"{}\"",
+                marked.mark.display()
+            );
+
+            error::log_prefix_error(prefix.as_str(), &err);
+        }
+    }
+
+    pub async fn log_rollback(self) {
+        let failed = self.rollback().await;
+
+        for (marked, err) in failed {
+            let prefix = format!(
+                "failed to rollback file: \"{}\"",
+                marked.mark.display()
+            );
+
+            error::log_prefix_error(prefix.as_str(), &err);
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CreatedFileError {
+    #[error("the provided file already exists")]
+    AlreadyExists,
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error)
+}
+
+#[derive(Debug)]
+pub struct CreatedFile(PathBuf);
+
+impl CreatedFile {
+    pub async fn create(path: PathBuf) -> Result<Self, CreatedFileError> {
+        let result = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await;
+
+        if let Err(err) = result {
+            Err(match err.kind() {
+                ErrorKind::AlreadyExists => CreatedFileError::AlreadyExists,
+                _ => CreatedFileError::Io(err)
+            })
+        } else {
+            Ok(Self(path))
+        }
+    }
+
+    pub async fn rollback(self) -> Result<(), (Self, std::io::Error)> {
+        if let Err(err) = tokio::fs::remove_file(&self.0).await {
+            Err((self, err))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CreatedFiles {
+    processed: Vec<CreatedFile>
+}
+
+impl CreatedFiles {
+    pub fn new() -> Self {
+        Self {
+            processed: Vec::new()
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.processed.is_empty()
+    }
+
+    pub async fn add(&mut self, path: PathBuf) -> Result<(), CreatedFileError> {
+        self.processed.push(CreatedFile::create(path).await?);
+
+        Ok(())
+    }
+
+    pub async fn rollback(self) -> Vec<(CreatedFile, std::io::Error)> {
+        let mut futs = FuturesOrdered::new();
+
+        for created in self.processed {
+            futs.push_back(created.rollback());
+        }
+
+        let mut failed = Vec::new();
+
+        while let Some(result) = futs.next().await {
+            if let Err(fail) = result {
+                failed.push(fail);
+            }
+        }
+
+        failed
+    }
+
+    pub async fn log_rollback(self) {
+        let failed = self.rollback().await;
+
+        for (created, err) in failed {
+            let prefix = format!(
+                "failed to rollback file: \"{}\"",
+                created.0.display()
+            );
+
+            error::log_prefix_error(prefix.as_str(), &err);
         }
     }
 }
