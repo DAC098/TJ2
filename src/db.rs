@@ -1,5 +1,8 @@
 use std::fmt::Debug;
 
+use async_trait::async_trait;
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
 use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
 use serde::{Serialize, Deserialize};
 use tokio_postgres::{Config as PgConfig, NoTls};
@@ -8,6 +11,7 @@ use crate::config::Config;
 use crate::error::{Error, Context};
 use crate::sec::authz::{Scope, Ability, Role};
 use crate::sec::password;
+use crate::state;
 use crate::user::User;
 
 pub use deadpool_postgres::{Pool, GenericClient, Object};
@@ -148,4 +152,23 @@ where
     T: Serialize + Debug
 {
     types::Json(value)
+}
+
+pub struct Conn(pub Object);
+
+#[async_trait]
+impl FromRequestParts<state::SharedState> for Conn {
+    type Rejection = Error;
+
+    async fn from_request_parts(
+        _parts: &mut Parts,
+        state: &state::SharedState
+    ) -> Result<Self, Self::Rejection> {
+        let conn = state.db()
+            .get()
+            .await
+            .context("failed to retrieve database connection")?;
+
+        Ok(Self(conn))
+    }
 }
