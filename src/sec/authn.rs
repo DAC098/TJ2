@@ -26,7 +26,7 @@ pub enum InitiatorError {
     #[error("the given session has expired")]
     SessionExpired(Session),
 
-    #[error(transparent)]
+    #[error("failed to parse request header")]
     HeaderStr(#[from] axum::http::header::ToStrError),
 
     #[error(transparent)]

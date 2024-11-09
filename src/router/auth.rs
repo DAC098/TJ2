@@ -2,11 +2,11 @@ use argon2::{Argon2, PasswordVerifier};
 use argon2::password_hash::PasswordHash;
 use axum::extract::Query;
 use axum::http::{StatusCode, HeaderMap};
-use axum::body::Body;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{self, Context};
+use crate::header::{Location, is_accepting_html};
 use crate::router::body;
 use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
@@ -48,6 +48,17 @@ impl LoginQuery {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub enum LoginStatus {
+    Active,
+    Inactive
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoginCheck {
+    status: LoginStatus
+}
+
 pub async fn login(
     state: state::SharedState,
     Query(query): Query<LoginQuery>,
@@ -58,58 +69,53 @@ pub async fn login(
         .await
         .context("failed to retrieve database connection")?;
 
-    let result = Initiator::from_headers(&conn, &headers)
-        .await;
+    let result = Initiator::from_headers(&conn, &headers).await;
 
-    match result {
-        Ok(_) => {
-            tracing::debug!("session for initiator is valid");
+    let Ok(is_html) = is_accepting_html(&headers) else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            "invalid characters in accept header"
+        ).into_response());
+    };
 
-            let location = query.get_prev()
-                .unwrap_or("/".to_owned());
+    if is_html {
+        if let Err(err) = result {
+            error::log_prefix_error(
+                "error when retrieving session id",
+                &err
+            );
 
-            Response::builder()
-                .status(StatusCode::FOUND)
-                .header("location", location)
-                .body(Body::empty())
-                .context("failed to create redirect response")
+            Ok((
+                Session::clear_cookie(),
+                body::SpaPage::new(state.templates())?
+            ).into_response())
+        } else {
+            Ok(Location::to(
+                query.get_prev().unwrap_or("/".to_owned())
+            ).into_response())
         }
-        Err(err) => match err {
-            InitiatorError::SessionIdNotFound => {
-                tracing::debug!("session id not found");
-
-                Ok(body::SpaPage::new(state.templates())?.into_response())
-            }
-            InitiatorError::SessionNotFound |
-            InitiatorError::UserNotFound(_) |
-            InitiatorError::Unauthenticated(_) |
-            InitiatorError::Unverified(_) |
-            InitiatorError::SessionExpired(_) => {
-                tracing::debug!("problem with session");
-
-                Ok((
-                    Session::clear_cookie(),
-                    body::SpaPage::new(state.templates())?
-                ).into_response())
-            }
-            InitiatorError::HeaderStr(err) => {
-                Err(error::Error::context_source(
-                    "error when parsing cookie headers",
-                    err
-                ))
-            }
-            InitiatorError::Token(err) => {
-                Err(error::Error::context_source(
-                    "invalid session token",
-                    err
-                ))
-            }
-            InitiatorError::DbPg(err) => {
-                Err(error::Error::context_source(
+    } else {
+        if let Err(err) = result {
+            match err {
+                InitiatorError::DbPg(err) => Err(error::Error::context_source(
                     "database error when retrieving session",
                     err
-                ))
+                )),
+                err => {
+                    error::log_prefix_error(
+                        "error when retrieving session id",
+                        &err
+                    );
+
+                    Ok(body::Json(LoginCheck {
+                        status: LoginStatus::Inactive
+                    }).into_response())
+                }
             }
+        } else {
+            Ok(body::Json(LoginCheck {
+                status: LoginStatus::Active
+            }).into_response())
         }
     }
 }

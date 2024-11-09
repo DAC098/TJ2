@@ -18,7 +18,6 @@ use crate::error::{self, Context};
 mod layer;
 mod assets;
 
-pub mod responses;
 pub mod macros;
 pub mod body;
 
