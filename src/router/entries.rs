@@ -39,8 +39,6 @@ pub async fn retrieve_entries(
     state: state::SharedState,
     req: Request,
 ) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), req.headers());
-
     let conn = state.db_conn().await?;
 
     let initiator = macros::require_initiator!(
@@ -48,6 +46,8 @@ pub async fn retrieve_entries(
         req.headers(),
         Some(req.uri().clone())
     );
+
+    macros::res_if_html!(state.templates(), req.headers());
 
     let result = Journal::retrieve_default(&conn, initiator.user.id)
         .await

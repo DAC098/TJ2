@@ -9,12 +9,15 @@ create table users (
 create table groups (
     id bigint primary key generated always as identity,
     uid varchar not null unique,
-    name varchar not null unique
+    name varchar not null unique,
+    created timestamp with time zone not null,
+    updated timestamp with time zone
 );
 
 create table group_users (
     users_id bigint not null references users (id),
     groups_id bigint not null references groups (id),
+    added timestamp with time zone not null,
     primary key (users_id, groups_id)
 );
 

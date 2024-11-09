@@ -83,6 +83,7 @@ pub struct InvalidScope;
 #[derive(Debug, Clone)]
 pub enum Scope {
     Users,
+    Groups,
     Journals,
     Entries,
     Roles,
@@ -92,6 +93,7 @@ impl Scope {
     pub fn as_str(&self) -> &'static str {
         match self {
             Scope::Users => "Users",
+            Scope::Groups => "Groups",
             Scope::Journals => "Journals",
             Scope::Entries => "Entries",
             Scope::Roles => "Roles",
@@ -111,6 +113,7 @@ impl FromStr for Scope {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Users" => Ok(Scope::Users),
+            "Groups" => Ok(Scope::Groups),
             "Journals" => Ok(Scope::Journals),
             "Entries" => Ok(Scope::Entries),
             "Roles" => Ok(Scope::Roles),

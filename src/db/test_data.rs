@@ -16,7 +16,8 @@ pub async fn create(conn: &impl GenericClient, rng: &mut ThreadRng) -> Result<()
 
     let journalists_group = Group::create(conn, "journalists")
         .await
-        .context("failed to create journalists group")?;
+        .context("failed to create journalists group")?
+        .context("journalists group already exists")?;
     let journalists_role = Role::create(conn, "journalists")
         .await
         .context("failed to create journalists role")?;
@@ -150,7 +151,8 @@ async fn create_user(
 
     User::create(conn, username, &hash, 0)
         .await
-        .context("failed to create user")
+        .context("failed to create user")?
+        .context("user already exists?")
 }
 
 fn gen_username(rng: &mut ThreadRng) -> String {

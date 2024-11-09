@@ -6,6 +6,7 @@ use axum::http::request::Parts;
 use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
 use serde::{Serialize, Deserialize};
 use tokio_postgres::{Config as PgConfig, NoTls};
+use tokio_postgres::error::SqlState;
 
 use crate::config::Config;
 use crate::error::{Error, Context};
@@ -70,8 +71,11 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
 
     if maybe_admin.is_none() {
         let mut rng = rand::thread_rng();
-        let admin = create_admin_user(&transaction).await?;
-        let admin_role = create_default_roles(&transaction).await?;
+        let admin = create_admin_user(&transaction)
+            .await?
+            .context("admin already exists. prior lookup failed")?;
+        let admin_role = create_default_roles(&transaction)
+            .await?;
 
         admin_role.assign_user(&transaction, admin.id)
             .await
@@ -88,7 +92,7 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
     Ok(())
 }
 
-async fn create_admin_user(conn: &impl GenericClient) -> Result<User, Error> {
+async fn create_admin_user(conn: &impl GenericClient) -> Result<Option<User>, Error> {
     let hash = password::create("password")
         .context("failed to create admin password")?;
 
@@ -116,6 +120,12 @@ async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> 
             Ability::Delete,
         ]),
         (Scope::Entries, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
+        ]),
+        (Scope::Groups, vec![
             Ability::Create,
             Ability::Read,
             Ability::Update,
@@ -152,6 +162,18 @@ where
     T: Serialize + Debug
 {
     types::Json(value)
+}
+
+pub fn unique_error(error: &PgError) -> Option<&str> {
+    let Some(db_error) = error.as_db_error() else {
+        return None;
+    };
+
+    if *db_error.code() == SqlState::UNIQUE_VIOLATION {
+        db_error.constraint()
+    } else {
+        None
+    }
 }
 
 pub struct Conn(pub Object);

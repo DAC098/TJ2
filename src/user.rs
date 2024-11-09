@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+
 use crate::db;
 use crate::db::ids::{UserId, UserUid, GroupId, GroupUid};
 
@@ -55,24 +57,28 @@ impl User {
             }))
     }
 
-    pub async fn create(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Self, db::PgError> {
+    pub async fn create(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Option<Self>, db::PgError> {
         let uid = UserUid::gen();
 
-        conn.query_one(
+        let result = conn.query_opt(
             "\
             insert into users (uid, username, password, version) \
             values ($1, $2, $3, $4) \
+            on conflict on constraint users_username_key do nothing \
             returning id",
             &[&uid, &username, &hash, &version]
-        )
-            .await
-            .map(|row| Self {
+        ).await?;
+
+        match result {
+            Some(row) => Ok(Some(Self {
                 id: row.get(0),
                 uid,
                 username: username.to_owned(),
                 password: hash.to_owned(),
                 version
-            })
+            })),
+            None => Ok(None)
+        }
     }
 }
 
@@ -80,26 +86,57 @@ impl User {
 pub struct Group {
     pub id: GroupId,
     pub uid: GroupUid,
-    pub name: String
+    pub name: String,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
 }
 
 impl Group {
-    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Self, db::PgError> {
-        let uid = GroupUid::gen();
-
-        conn.query_one(
+    pub async fn retrieve_id(conn: &impl db::GenericClient, groups_id: GroupId) -> Result<Option<Self>, db::PgError> {
+        conn.query_opt(
             "\
-            insert into groups (uid, name) values \
-            ($1, $2) \
-            returning id",
-            &[&name, &uid]
+            select id, \
+                   uid, \
+                   name, \
+                   created, \
+                   updated \
+            from groups \
+            where id = $1",
+            &[&groups_id]
         )
             .await
-            .map(|row| Self {
+            .map(|maybe| maybe.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                name: row.get(2),
+                created: row.get(3),
+                updated: row.get(4),
+            }))
+    }
+
+    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Option<Self>, db::PgError> {
+        let uid = GroupUid::gen();
+        let created = Utc::now();
+
+        let result = conn.query_opt(
+            "\
+            insert into groups (uid, name, created) values \
+            ($1, $2, $3) \
+            on conflict on constraint groups_name_key do nothing \
+            returning id",
+            &[&uid, &name, &created]
+        ).await?;
+
+        match result {
+            Some(row) => Ok(Some(Self {
                 id: row.get(0),
                 uid,
                 name: name.to_owned(),
-            })
+                created,
+                updated: None
+            })),
+            None => Ok(None),
+        }
     }
 }
 
@@ -108,13 +145,14 @@ pub async fn assign_user_group(
     users_id: UserId,
     groups_id: GroupId
 ) -> Result<(), db::PgError> {
+    let added = Utc::now();
+
     conn.execute(
         "\
-        insert into group_users (users_id, groups_id) values \
-        ($1, $2)",
-        &[&users_id, &groups_id]
-    )
-        .await?;
+        insert into group_users (users_id, groups_id, added) values \
+        ($1, $2, $3)",
+        &[&users_id, &groups_id, &added]
+    ).await?;
 
     Ok(())
 }

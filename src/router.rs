@@ -23,6 +23,8 @@ pub mod body;
 
 mod auth;
 mod entries;
+mod users;
+mod groups;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -77,6 +79,12 @@ pub fn build(state: &state::SharedState) -> Router {
             .delete(entries::delete_entry))
         .route("/entries/:date/:file_entry_id", get(entries::files::retrieve_file)
             .put(entries::files::upload_file))
+        .route("/users", get(users::retrieve_users)
+            .post(users::create_user))
+        .route("/users/:user_id", get(users::retrieve_user))
+        .route("/groups", get(groups::retrieve_groups)
+            .post(groups::create_group))
+        .route("/groups/:groups_id", get(groups::retrieve_group))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())
