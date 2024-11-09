@@ -233,7 +233,7 @@ impl IntoResponseParts for SetCookie {
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         let value = self.into_header_value()
-            .context("failed to to change SetCookie into HeaderValue")?;
+            .context("failed to change SetCookie into HeaderValue")?;
 
         res.headers_mut().insert("set-cookie", value);
 
