@@ -1,17 +1,20 @@
+use std::fmt::Write;
+
 use axum::extract::{Request, Path};
 use axum::http::{HeaderMap, Uri, StatusCode};
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{UserId, UserUid};
+use crate::db::ids::{UserId, UserUid, GroupId};
 use crate::error::{self, Context};
 use crate::router::body;
 use crate::router::macros;
 use crate::state;
 use crate::sec::{password, authz};
-use crate::user::User;
+use crate::user::{User, GroupUser};
 
 #[derive(Debug, Serialize)]
 pub struct UserPartial {
@@ -91,6 +94,13 @@ pub struct UserFull {
     id: UserId,
     uid: UserUid,
     username: String,
+    groups: Vec<AttachedGroup>
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttachedGroup {
+    groups_id: GroupId,
+    added: DateTime<Utc>,
 }
 
 pub async fn retrieve_user(
@@ -126,27 +136,50 @@ pub async fn retrieve_user(
         .await
         .context("failed to retrieve user")?;
 
-    if let Some(user) = result {
-        Ok(body::Json(UserFull {
-            id: user.id,
-            uid: user.uid,
-            username: user.username,
-        }).into_response())
-    } else {
-        Ok(StatusCode::NOT_FOUND.into_response())
+    let Some(user) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let group_users = GroupUser::retrieve_users_id_stream(
+        &conn,
+        &user.id
+    )
+        .await
+        .context("failed to retireve attached groups")?;
+
+    futures::pin_mut!(group_users);
+
+    let mut groups = Vec::new();
+
+    while let Some(result) = group_users.next().await {
+        let group_user = result.context("failed to retrieve attached group record")?;
+
+        groups.push(AttachedGroup {
+            groups_id: group_user.groups_id,
+            added: group_user.added
+        });
     }
+
+    Ok(body::Json(UserFull {
+        id: user.id,
+        uid: user.uid,
+        username: user.username,
+        groups
+    }).into_response())
 }
 
 #[derive(Debug, Deserialize)]
 pub struct NewUser {
     username: String,
     password: String,
+    groups: Option<Vec<GroupId>>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum NewUserResult {
     UsernameExists,
+    GroupsNotFound,
     Created(UserFull)
 }
 
@@ -185,20 +218,74 @@ pub async fn create_user(
         .await
         .context("failed to create new user")?;
 
+    let Some(user) = result else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            body::Json(NewUserResult::UsernameExists)
+        ).into_response())
+    };
+
+    let groups = if let Some(groups) = &json.groups {
+        let added = Utc::now();
+        let mut first = true;
+        let mut rtn = Vec::new();
+        let mut params: db::ParamsVec<'_> = vec![&user.id, &added];
+        let mut query = String::from(
+            "insert into group_users (groups_id, users_id, added) values "
+        );
+
+        for groups_id in groups {
+            if first {
+                first = false;
+            } else {
+                query.push_str(", ");
+            }
+
+            write!(
+                &mut query,
+                "(${}, $1, $2)",
+                db::push_param(&mut params, groups_id)
+            ).unwrap();
+
+            rtn.push(AttachedGroup {
+                groups_id: *groups_id,
+                added
+            });
+        }
+
+        query.push_str(" on conflict on constraint group_users_pkey do nothing");
+
+        if let Err(err) = transaction.execute(query.as_str(), params.as_slice()).await {
+            if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::ForeignKey(name) => if name == "group_users_groups_id_fkey" {
+                        return Ok((
+                            StatusCode::BAD_REQUEST,
+                            body::Json(NewUserResult::GroupsNotFound)
+                        ).into_response())
+                    },
+                    _ => {}
+                }
+            }
+
+            return Err(error::Error::context_source(
+                "failed to add groups to user", err
+            ));
+        }
+
+        rtn
+    } else {
+        Vec::new()
+    };
+
     transaction.commit()
         .await
         .context("failed to commit transaction")?;
 
-    if let Some(user) = result {
-        Ok(body::Json(NewUserResult::Created(UserFull {
-            id: user.id,
-            uid: user.uid,
-            username: user.username,
-        })).into_response())
-    } else {
-        Ok((
-            StatusCode::BAD_REQUEST,
-            body::Json(NewUserResult::UsernameExists)
-        ).into_response())
-    }
+    Ok(body::Json(NewUserResult::Created(UserFull {
+        id: user.id,
+        uid: user.uid,
+        username: user.username,
+        groups,
+    })).into_response())
 }

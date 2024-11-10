@@ -170,6 +170,29 @@ impl GroupUser {
             added: row.get(2),
         })))
     }
+
+    pub async fn retrieve_users_id_stream(
+        conn: &impl db::GenericClient,
+        users_id: &UserId,
+    ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
+        let params: db::ParamsArray<'_, 1> = [users_id];
+
+        let stream = conn.query_raw(
+            "\
+            select group_users.groups_id, \
+                   group_users.users_id, \
+                   group_users.added \
+            from group_users \
+            where group_users.users_id = $1",
+            params
+        ).await?;
+
+        Ok(stream.map(|result| result.map(|row| Self {
+            groups_id: row.get(0),
+            users_id: row.get(1),
+            added: row.get(2),
+        })))
+    }
 }
 
 pub async fn assign_user_group(
