@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use futures::{Stream, StreamExt};
 
 use crate::db;
 use crate::db::ids::{UserId, UserUid, GroupId, GroupUid};
@@ -137,6 +138,37 @@ impl Group {
             })),
             None => Ok(None),
         }
+    }
+}
+
+pub struct GroupUser {
+    pub groups_id: GroupId,
+    pub users_id: UserId,
+    pub added: DateTime<Utc>,
+}
+
+impl GroupUser {
+    pub async fn retrieve_groups_id_stream(
+        conn: &impl db::GenericClient,
+        groups_id: &GroupId
+    ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
+        let params: db::ParamsArray<'_, 1> = [groups_id];
+
+        let stream = conn.query_raw(
+            "\
+            select group_users.groups_id, \
+                   group_users.users_id, \
+                   group_users.added \
+            from group_users \
+            where group_users.groups_id = $1",
+            params
+        ).await?;
+
+        Ok(stream.map(|result| result.map(|row| Self {
+            groups_id: row.get(0),
+            users_id: row.get(1),
+            added: row.get(2),
+        })))
     }
 }
 

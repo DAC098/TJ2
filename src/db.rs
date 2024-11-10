@@ -164,15 +164,30 @@ where
     types::Json(value)
 }
 
-pub fn unique_error(error: &PgError) -> Option<&str> {
-    let Some(db_error) = error.as_db_error() else {
-        return None;
-    };
+pub enum ErrorKind<'a> {
+    Unique(&'a str),
+    ForeignKey(&'a str),
+}
 
-    if *db_error.code() == SqlState::UNIQUE_VIOLATION {
-        db_error.constraint()
-    } else {
-        None
+impl<'a> ErrorKind<'a> {
+    pub fn check(error: &'a PgError) -> Option<Self> {
+        let Some(db_error) = error.as_db_error() else {
+            return None;
+        };
+
+        match *db_error.code() {
+            SqlState::UNIQUE_VIOLATION => if let Some(name) = db_error.constraint() {
+                Some(Self::Unique(name))
+            } else {
+                None
+            }
+            SqlState::FOREIGN_KEY_VIOLATION => if let Some(name) = db_error.constraint() {
+                Some(Self::ForeignKey(name))
+            } else {
+                None
+            }
+            _ => None
+        }
     }
 }
 

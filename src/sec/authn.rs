@@ -75,8 +75,6 @@ impl Initiator {
     ) -> Result<Self, InitiatorError> {
         let token = Self::get_token(headers)?;
 
-        tracing::debug!("retrieving session for {token}");
-
         let Some(session) = Session::retrieve_token(conn, &token).await? else {
             return Err(InitiatorError::SessionNotFound);
         };
