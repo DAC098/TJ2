@@ -1,10 +1,10 @@
-use std::fmt::Write;
+use std::collections::HashSet;
 
 use axum::extract::{Request, Path};
 use axum::http::{HeaderMap, Uri, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
@@ -14,7 +14,7 @@ use crate::router::body;
 use crate::router::macros;
 use crate::state;
 use crate::sec::authz;
-use crate::user::{Group, GroupUser};
+use crate::user::Group;
 
 #[derive(Debug, Serialize)]
 pub struct GroupPartial {
@@ -108,7 +108,56 @@ pub struct GroupFull {
 #[derive(Debug, Serialize)]
 pub struct AttachedUser {
     users_id: UserId,
+    username: String,
     added: DateTime<Utc>
+}
+
+impl AttachedUser {
+    async fn retrieve_stream(
+        conn: &impl db::GenericClient,
+        groups_id: &GroupId,
+    ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
+        let params: db::ParamsArray<'_, 1> = [groups_id];
+
+        let stream = conn.query_raw(
+            "\
+            select group_users.users_id, \
+                   users.username, \
+                   group_users.added \
+            from group_users \
+                left join users on \
+                    group_users.users_id = users.id \
+            where group_users.users_id = $1",
+            params
+        ).await?;
+
+        Ok(stream.map(|result| result.map(|row| Self {
+            users_id: row.get(0),
+            username: row.get(1),
+            added: row.get(2),
+        })))
+    }
+
+    async fn retrieve(
+        conn: &impl db::GenericClient,
+        groups_id: &GroupId
+    ) -> Result<Vec<Self>, error::Error> {
+        let stream = Self::retrieve_stream(conn, groups_id)
+            .await
+            .context("failed to retrieve attached users")?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let record = result.context("failed to retrieve attached user record")?;
+
+            rtn.push(record);
+        }
+
+        Ok(rtn)
+    }
 }
 
 pub async fn retrieve_group(
@@ -148,25 +197,7 @@ pub async fn retrieve_group(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let group_users = GroupUser::retrieve_groups_id_stream(
-        &conn,
-        &group.id
-    )
-        .await
-        .context("failed to retrieve attached users")?;
-
-    futures::pin_mut!(group_users);
-
-    let mut users = Vec::new();
-
-    while let Some(result) = group_users.next().await {
-        let group_user = result.context("failed to retrieve attached user record")?;
-
-        users.push(AttachedUser {
-            users_id: group_user.users_id,
-            added: group_user.added
-        });
-    }
+    let users = AttachedUser::retrieve(&conn, &group.id).await?;
 
     Ok(body::Json(GroupFull {
         id: group.id,
@@ -188,7 +219,9 @@ pub struct NewGroup {
 #[serde(tag = "result")]
 pub enum NewGroupResult {
     GroupExists,
-    UsersNotFound,
+    UsersNotFound {
+        ids: Vec<UserId>
+    },
     Created(GroupFull)
 }
 
@@ -233,50 +266,56 @@ pub async fn create_group(
 
     let users = if let Some(users) = &json.users {
         let added = Utc::now();
-        let mut first = true;
+        let params: db::ParamsArray<'_, 3> = [&group.id, &added, &users];
+        let mut requested: HashSet<UserId> = HashSet::from_iter(users.clone());
         let mut rtn = Vec::new();
-        let mut params: db::ParamsVec<'_> = vec![&group.id, &added];
-        let mut query = String::from(
-            "insert into group_users (groups_id, users_id, added) values "
-        );
 
-        for user_id in users {
-            if first {
-                first = false;
-            } else {
-                query.push_str(", ");
+        let stream = transaction.query_raw(
+            "\
+            with tmp_insert as ( \
+                insert into group_users (users_id, groups_id, added) \
+                select users.id, \
+                       $1::bigint as groups_id, \
+                       $2::timestamp with time zone as added \
+                from users \
+                where users.id = any($3) \
+                returning * \
+            ) \
+            select tmp_insert.users_id, \
+                   users.username, \
+                   tmp_insert.added \
+            from tmp_insert \
+                left join users on \
+                    tmp_insert.users_id = users.id",
+            params
+        )
+            .await
+            .context("failed to add users to group")?;
+
+        futures::pin_mut!(stream);
+
+        while let Some(result) = stream.next().await {
+            let record = result.context("failed to retrieve added user")?;
+            let users_id = record.get(0);
+
+            if !requested.remove(&users_id) {
+                tracing::warn!("a user was added that was not requested");
             }
 
-            write!(
-                &mut query,
-                "($1, ${}, $2)",
-                db::push_param(&mut params, user_id)
-            ).unwrap();
-
             rtn.push(AttachedUser {
-                users_id: *user_id,
-                added
+                users_id,
+                username: record.get(1),
+                added: record.get(2),
             });
         }
 
-        query.push_str(" on conflict on constraint group_users_pkey do nothing");
-
-        if let Err(err) = transaction.execute(query.as_str(), params.as_slice()).await {
-            if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::ForeignKey(name) => if name == "group_users_users_id_fkey" {
-                        return Ok((
-                            StatusCode::BAD_REQUEST,
-                            body::Json(NewGroupResult::UsersNotFound)
-                        ).into_response());
-                    }
-                    _ => {}
-                }
-            }
-
-            return Err(error::Error::context_source(
-                "failed to add users to group", err
-            ));
+        if !requested.is_empty() {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                body::Json(NewGroupResult::UsersNotFound {
+                    ids: Vec::from_iter(requested)
+                })
+            ).into_response());
         }
 
         rtn
