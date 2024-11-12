@@ -81,7 +81,7 @@ pub fn build(state: &state::SharedState) -> Router {
             .put(entries::files::upload_file))
         .route("/users", get(users::retrieve_users)
             .post(users::create_user))
-        .route("/users/:user_id", get(users::retrieve_user))
+        .route("/users/:users_id", get(users::retrieve_user))
         .route("/groups", get(groups::retrieve_groups)
             .post(groups::create_group))
         .route("/groups/:groups_id", get(groups::retrieve_group))

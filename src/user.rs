@@ -81,6 +81,21 @@ impl User {
             None => Ok(None)
         }
     }
+
+    pub async fn update(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+        let result = conn.execute(
+            "\
+            update users \
+            set username = $2, \
+                password = $3, \
+                version = $4 \
+            where id = $1 \
+            on conflict on constraint users_username_key do nothing",
+            &[&self.id, &self.username, &self.password, &self.version]
+        ).await?;
+
+        Ok(result == 1)
+    }
 }
 
 #[derive(Debug)]
