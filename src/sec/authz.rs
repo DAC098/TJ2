@@ -2,6 +2,7 @@ use std::fmt::{Write, Display, Formatter, Result as FmtResult};
 use std::str::FromStr;
 
 use bytes::BytesMut;
+use chrono::{DateTime, Utc};
 use postgres_types as pg_types;
 
 use crate::db;
@@ -161,25 +162,44 @@ pub struct Role {
     pub id: RoleId,
     pub uid: RoleUid,
     pub name: String,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
 }
 
 impl Role {
-    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Self, db::PgError> {
+    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Option<Self>, db::PgError> {
         let uid = RoleUid::gen();
+        let created = Utc::now();
 
-        conn.query_one(
+        let result = conn.query_one(
             "\
-            insert into authz_roles (uid, name) values \
-            ($1, $2) \
+            insert into authz_roles (uid, name, created) values \
+            ($1, $2, $3) \
             returning id",
             &[&uid, &name]
-        )
-            .await
-            .map(|row| Self {
+        ).await;
+
+        match result {
+            Ok(row) => Ok(Some(Self {
                 id: row.get(0),
                 uid,
-                name: name.to_owned()
-            })
+                name: name.to_owned(),
+                created,
+                updated: None
+            })),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => if constraint == "authz_roles_name_key" {
+                        Ok(None)
+                    } else {
+                        Err(err)
+                    }
+                    _ => Err(err)
+                }
+            } else {
+                Err(err)
+            }
+        }
     }
 
     pub async fn assign_user(&self, conn: &impl db::GenericClient, users_id: UserId) -> Result<(), db::PgError> {
@@ -269,9 +289,11 @@ pub async fn assign_user_role(
     role_id: RoleId,
     users_id: UserId,
 ) -> Result<(), db::PgError> {
+    let added = Utc::now();
+
     conn.execute(
-        "insert into user_roles (users_id, role_id) values ($1, $2)",
-        &[&users_id, &role_id]
+        "insert into user_roles (users_id, role_id, added) values ($1, $2, $3)",
+        &[&users_id, &role_id, &added]
     ).await?;
 
     Ok(())
@@ -282,9 +304,11 @@ pub async fn assign_group_role(
     role_id: RoleId,
     groups_id: GroupId,
 ) -> Result<(), db::PgError> {
+    let added = Utc::now();
+
     conn.execute(
-        "insert into group_roles (groups_id, role_id) values ($1, $2)",
-        &[&groups_id, &role_id]
+        "insert into group_roles (groups_id, role_id, added) values ($1, $2, $3)",
+        &[&groups_id, &role_id, &added]
     ).await?;
 
     Ok(())

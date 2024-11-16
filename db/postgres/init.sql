@@ -42,7 +42,9 @@ create table authn_sessions (
 create table authz_roles (
     id bigint primary key generated always as identity,
     uid varchar not null unique,
-    name varchar not null unique
+    name varchar not null unique,
+    created timestamp with time zone not null,
+    updated timestamp with time zone
 );
 
 create table authz_permissions (
@@ -57,12 +59,14 @@ create table authz_permissions (
 create table user_roles (
     users_id bigint not null references users (id),
     role_id bigint not null references authz_roles (id),
+    added timestamp with time zone not null,
     primary key (users_id, role_id)
 );
 
 create table group_roles (
     groups_id bigint not null references groups (id),
     role_id bigint not null references authz_roles (id),
+    added timestamp with time zone not null,
     primary key (groups_id, role_id)
 );
 

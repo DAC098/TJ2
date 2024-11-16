@@ -104,7 +104,8 @@ async fn create_admin_user(conn: &impl GenericClient) -> Result<Option<User>, Er
 async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> {
     let admin_role = Role::create(conn, "admin")
         .await
-        .context("failed to create admin role")?;
+        .context("failed to create admin role")?
+        .context("admin role already exists")?;
 
     let permissions = vec![
         (Scope::Users, vec![

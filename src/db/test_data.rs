@@ -20,7 +20,8 @@ pub async fn create(conn: &impl GenericClient, rng: &mut ThreadRng) -> Result<()
         .context("journalists group already exists")?;
     let journalists_role = Role::create(conn, "journalists")
         .await
-        .context("failed to create journalists role")?;
+        .context("failed to create journalists role")?
+        .context("journalists role already exists")?;
 
     journalists_role.assign_group(conn, journalists_group.id)
         .await
