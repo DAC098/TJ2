@@ -220,7 +220,7 @@ pub async fn retrieve_user(
 pub struct NewUser {
     username: String,
     password: String,
-    groups: Option<Vec<GroupId>>,
+    groups: Vec<GroupId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -502,11 +502,11 @@ fn unique_groups<V>(
 async fn create_groups(
     conn: &impl db::GenericClient,
     user: &User,
-    groups: Option<Vec<GroupId>>,
+    groups: Vec<GroupId>,
 ) -> Result<(Vec<AttachedGroup>, Vec<GroupId>), error::Error> {
-    let Some(groups) = groups else {
+    if groups.is_empty() {
         return Ok((Vec::new(), Vec::new()));
-    }; 
+    }
 
     let added = Utc::now();
     let (mut requested, groups, _diff) = unique_groups::<()>(groups, None);
