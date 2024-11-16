@@ -89,12 +89,25 @@ impl User {
             set username = $2, \
                 password = $3, \
                 version = $4 \
-            where id = $1 \
-            on conflict on constraint users_username_key do nothing",
+            where id = $1",
             &[&self.id, &self.username, &self.password, &self.version]
-        ).await?;
+        ).await;
 
-        Ok(result == 1)
+        match result {
+            Ok(result) => Ok(result == 1),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => if constraint == "users_username_key" {
+                        Ok(false)
+                    } else {
+                        Err(err)
+                    },
+                    _ => Err(err)
+                }
+            } else {
+                Err(err)
+            }
+        }
     }
 }
 
