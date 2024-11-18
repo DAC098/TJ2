@@ -3,7 +3,9 @@ create table users (
     uid varchar not null unique,
     username varchar not null unique,
     password varchar not null,
-    version bigint not null default 0
+    version bigint not null default 0,
+    created timestamp with time zone not null,
+    updated timestamp with time zone
 );
 
 create table groups (

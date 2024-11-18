@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::str::FromStr;
 
@@ -305,3 +306,42 @@ id_type!(RoleId);
 uid_type!(RoleUid);
 
 id_type!(PermissionId);
+
+pub fn unique_ids<K, V>(
+    ids: Vec<K>,
+    current: Option<&HashMap<K, V>>,
+) -> (HashSet<K>, Vec<K>, bool)
+where
+    K: std::cmp::Eq + std::hash::Hash + std::marker::Copy
+{
+    let mut set = HashSet::with_capacity(ids.len());
+    let mut list = Vec::with_capacity(ids.len());
+
+    if let Some(current) = current {
+        let mut diff = false;
+
+        for id in ids {
+            if set.insert(id) {
+                list.push(id);
+
+                if !current.contains_key(&id) {
+                    diff = true;
+                }
+            }
+        }
+
+        if set.len() != current.len() {
+            diff = true;
+        }
+
+        (set, list, diff)
+    } else {
+        for id in ids {
+            if set.insert(id) {
+                list.push(id);
+            }
+        }
+
+        (set, list, true)
+    }
+}

@@ -1,13 +1,17 @@
+use std::collections::HashMap;
 use std::fmt::{Write, Display, Formatter, Result as FmtResult};
 use std::str::FromStr;
 
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
+use futures::{Stream, StreamExt};
 use postgres_types as pg_types;
+use serde::Serialize;
 
 use crate::db;
 use crate::db::ids::{GroupId, UserId, RoleId, RoleUid, PermissionId};
-use crate::error::BoxDynError;
+use crate::error::{self, Context, BoxDynError};
+use crate::user::{User, Group};
 
 #[derive(Debug, thiserror::Error)]
 #[error("the provided string is not a valid Ability")]
@@ -176,7 +180,7 @@ impl Role {
             insert into authz_roles (uid, name, created) values \
             ($1, $2, $3) \
             returning id",
-            &[&uid, &name]
+            &[&uid, &name, &created]
         ).await;
 
         match result {
@@ -359,4 +363,329 @@ where
         .await?;
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RefId<'a> {
+    User(&'a UserId),
+    Group(&'a GroupId),
+}
+
+impl<'a> From<&'a User> for RefId<'a> {
+    fn from(user: &'a User) -> Self {
+        Self::User(&user.id)
+    }
+}
+
+impl<'a> From<&'a Group> for RefId<'a> {
+    fn from(group: &'a Group) -> Self {
+        Self::Group(&group.id)
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttachedRole {
+    pub role_id: RoleId,
+    pub name: String,
+    pub added: DateTime<Utc>,
+}
+
+impl AttachedRole {
+    pub async fn retrieve_stream<'a, I>(
+        conn: &impl db::GenericClient,
+        id: I
+    ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError>
+    where
+        I: Into<RefId<'a>>
+    {
+        let stream = match id.into() {
+            RefId::User(users_id) => {
+                let params: db::ParamsArray<'_, 1> = [users_id];
+
+                conn.query_raw(
+                    "\
+                    select user_roles.role_id, \
+                           authz_roles.name, \
+                           user_roles.added \
+                    from user_roles \
+                        left join authz_roles on \
+                            user_roles.role_id = authz_roles.id \
+                    where user_roles.users_id = $1",
+                    params
+                ).await?
+            }
+            RefId::Group(groups_id) => {
+                let params: db::ParamsArray<'_, 1> = [groups_id];
+
+                conn.query_raw(
+                    "\
+                    select group_roles.role_id, \
+                           authz_roles.name, \
+                           group_roles.added \
+                    from group_roles \
+                        left join authz_roles on \
+                            group_roles.role_id = authz_roles.id \
+                    where group_roles.groups_id = $1",
+                    params
+                ).await?
+            }
+        };
+
+        Ok(stream.map(|result| result.map(|row| Self {
+            role_id: row.get(0),
+            name: row.get(1),
+            added: row.get(2),
+        })))
+    }
+
+    pub async fn retrieve<'a, I>(
+        conn: &impl db::GenericClient,
+        id: I
+    ) -> Result<Vec<Self>, error::Error>
+    where
+        I: Into<RefId<'a>>
+    {
+        let stream = Self::retrieve_stream(conn, id)
+            .await
+            .context("failed to retrieve attached roles")?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let record = result.context("failed to retrieve attached role record")?;
+
+            rtn.push(record);
+        }
+
+        Ok(rtn)
+    }
+}
+
+pub async fn create_attached_roles<'a, I>(
+    conn: &impl db::GenericClient,
+    id: I,
+    roles: Vec<RoleId>,
+) -> Result<(Vec<AttachedRole>, Vec<RoleId>), error::Error>
+where
+    I: Into<RefId<'a>>
+{
+    if roles.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let added = Utc::now();
+    let (mut requested, roles, _diff) = db::ids::unique_ids::<RoleId, ()>(roles, None);
+
+    let stream = match id.into() {
+        RefId::User(users_id) => {
+            let params: db::ParamsArray<'_, 3> = [users_id, &added, &roles];
+
+            conn.query_raw(
+                "\
+                with tmp_insert as ( \
+                    insert into user_roles (role_id, users_id, added) \
+                    select authz_roles.id as role_id, \
+                           $1::bigint as users_id, \
+                           $2::timestamp with time zone as added \
+                    from authz_roles \
+                    where authz_roles.id = any($3) \
+                    returning * \
+                ) \
+                select tmp_insert.role_id, \
+                       authz_roles.name, \
+                       tmp_insert.added \
+                from tmp_insert \
+                    left join authz_roles on \
+                        tmp_insert.role_id = authz_roles.id",
+                params
+            )
+                .await
+                .context("failed to add roles to user")?
+        }
+        RefId::Group(groups_id) => {
+            let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
+
+            conn.query_raw(
+                "\
+                witn tmp_insert as ( \
+                    insert into group_roles (role_id, groups_id, added) \
+                    select authz_roles.id as role_id, \
+                           $1::bigint as groups_id, \
+                           $2::timestamp with time zone as added \
+                    from authz_roles \
+                    where authz_roles.id = any($3) \
+                    returning * \
+                ) \
+                select tmp_insert.role_id, \
+                       authz_roles.name, \
+                       tmp_insert.added \
+                from tmp_insert \
+                    left join authz_roles on \
+                        tmp_insert.role_id = authz_roles.id",
+                params
+            )
+                .await
+                .context("failed to add roles to group")?
+        }
+    };
+
+    futures::pin_mut!(stream);
+
+    let mut rtn = Vec::new();
+
+    while let Some(result) = stream.next().await {
+        let record = result.context("failed to retrieve added role")?;
+        let role_id = record.get(0);
+
+        if !requested.remove(&role_id) {
+            tracing::warn!("a role was added that was not requested");
+        }
+
+        rtn.push(AttachedRole {
+            role_id,
+            name: record.get(1),
+            added: record.get(2),
+        });
+    }
+
+    Ok((rtn, Vec::new()))
+}
+
+pub async fn update_attached_roles<'a, I>(
+    conn: &impl db::GenericClient,
+    id: I,
+    roles: Option<Vec<RoleId>>,
+) -> Result<(Vec<AttachedRole>, Vec<RoleId>), error::Error>
+where
+    I: Into<RefId<'a>>,
+{
+    let id = id.into();
+
+    let Some(roles) = roles else {
+        return Ok((AttachedRole::retrieve(conn, id).await?, Vec::new()));
+    };
+
+    let mut current: HashMap<RoleId, AttachedRole> = HashMap::new();
+    let stream = AttachedRole::retrieve_stream(conn, id)
+        .await
+        .context("failed to retrieve currently attached roles")?;
+
+    futures::pin_mut!(stream);
+
+    while let Some(result) = stream.next().await {
+        let record = result.context("failed to retrieve current attached group")?;
+
+        current.insert(record.role_id, record);
+    }
+
+    let (mut requested, roles, diff) = db::ids::unique_ids(roles, Some(&current));
+
+    if !diff {
+        return Ok((current.into_values().collect(), Vec::new()));
+    }
+
+    let added = Utc::now();
+
+    let stream = match id {
+        RefId::User(users_id) => {
+            let params: db::ParamsArray<'_, 3> = [users_id, &added, &roles];
+
+            conn.query_raw(
+                "\
+                with tmp_insert as ( \
+                    insert into user_roles (role_id, users_id, added) \
+                    select authz_roles.id, \
+                           $1::bigint as users_id, \
+                           $2::timestamp with time zone as added \
+                    from authz_roles \
+                    where authz_roles.id = any($3) \
+                    on conflict on constraint user_roles_pkey do nothing \
+                    returning * \
+                ) \
+                select tmp_insert.role_id, \
+                       authz_roles.name, \
+                       tmp_insert.added \
+                from tmp_insert \
+                    left join authz_roles on \
+                        tmp_insert.role_id = authz_roles.id",
+                params
+            )
+                .await
+                .context("failed to add roles to user")?
+        }
+        RefId::Group(groups_id) => {
+            let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
+
+            conn.query_raw(
+                "\
+                with tmp_insert as ( \
+                    insert into group_roles (role_id, groups_id, added) \
+                    select authz_roles.id as role_id, \
+                           $1::bigint as groups_id, \
+                           $2::timestamp with time zone as added \
+                    from authz_roles \
+                    where authz_roles.id = any($3) \
+                    on conflict on constraint group_roles_pkey do nothing \
+                    returning * \
+                ) \
+                select tmp_insert.role_id, \
+                       authz_roles.name, \
+                       tmp_insert.added \
+                from tmp_insert \
+                    left join authz_roles on \
+                        tmp_insert.role_id = authz_roles.id",
+                params
+            )
+                .await
+                .context("failed to add roles to group")?
+        }
+    };
+
+    futures::pin_mut!(stream);
+
+    let mut rtn = Vec::new();
+
+    while let Some(result) = stream.next().await {
+        let record = result.context("failed to retrieve added role")?;
+        let role_id = record.get(0);
+
+        if !requested.remove(&role_id) {
+            tracing::warn!("a role was added that was not requested");
+        }
+
+        current.remove(&role_id);
+
+        rtn.push(AttachedRole {
+            role_id,
+            name: record.get(1),
+            added: record.get(2),
+        });
+    }
+
+    if !current.is_empty() {
+        let to_delete = Vec::from_iter(current.into_keys());
+
+        match id {
+            RefId::User(users_id) => {
+                conn.execute(
+                    "delete from user_roles where users_id = $1 and role_id = any($2)",
+                    &[users_id, &to_delete]
+                )
+                    .await
+                    .context("failed to delete from user roles")?;
+            }
+            RefId::Group(groups_id) => {
+                conn.execute(
+                    "delete from group_roles where groups_id = $1 and role_id = any($2)",
+                    &[groups_id, &to_delete]
+                )
+                    .await
+                    .context("failed to delete from user roles")?;
+            }
+        }
+    }
+
+    Ok((rtn, Vec::from_iter(requested)))
 }
