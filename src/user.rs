@@ -515,6 +515,35 @@ impl Group {
             None => Ok(None),
         }
     }
+
+    pub async fn update(&mut self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+        self.updated = Some(Utc::now());
+
+        let result = conn.execute(
+            "\
+            update groups \
+            set name = $2, \
+                updated = $3
+            where id = $1",
+            &[&self.id, &self.name, &self.updated]
+        ).await;
+
+        match result {
+            Ok(count) => Ok(count == 1),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => if constraint == "groups_name_key" {
+                        Ok(false)
+                    } else {
+                        Err(err)
+                    },
+                    _ => Err(err)
+                }
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

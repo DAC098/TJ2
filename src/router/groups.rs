@@ -104,6 +104,50 @@ pub struct GroupFull {
     roles: Vec<AttachedRole>,
 }
 
+impl GroupFull {
+    async fn retrieve(
+        conn: &impl db::GenericClient,
+        groups_id: &GroupId
+    ) -> Result<Option<Self>, error::Error> {
+        let result = Group::retrieve_id(conn, *groups_id)
+            .await
+            .context("failed to retrieve group")?;
+
+        let Some(group) = result else {
+            return Ok(None);
+        };
+
+        let results = tokio::join!(
+            AttachedUser::retrieve(conn, &group),
+            AttachedRole::retrieve(conn, &group)
+        );
+
+        match results {
+            (Ok(users), Ok(roles)) => Ok(Some(Self {
+                id: group.id,
+                uid: group.uid,
+                name: group.name,
+                created: group.created,
+                updated: group.updated,
+                users,
+                roles,
+            })),
+            (Err(err), Ok(_)) => Err(error::Error::context_source(
+                "failed to retrieve users",
+                err
+            )),
+            (Ok(_), Err(err)) => Err(error::Error::context_source(
+                "failed to retrieve roles",
+                err
+            )),
+            (Err(u_err), Err(_r_err)) => Err(error::Error::context_source(
+                "failed to retrieve users and roles",
+                u_err
+            ))
+        }
+    }
+}
+
 pub async fn retrieve_group(
     state: state::SharedState,
     headers: HeaderMap,
@@ -133,42 +177,11 @@ pub async fn retrieve_group(
         return Ok(StatusCode::UNAUTHORIZED.into_response());
     }
 
-    let result = Group::retrieve_id(&conn, groups_id)
-        .await
-        .context("failed to retrieve group")?;
-
-    let Some(group) = result else {
+    let Some(group) = GroupFull::retrieve(&conn, &groups_id).await? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let results = tokio::join!(
-        AttachedUser::retrieve(&conn, &group),
-        AttachedRole::retrieve(&conn, &group)
-    );
-
-    match results {
-        (Ok(users), Ok(roles)) => Ok(body::Json(GroupFull {
-            id: group.id,
-            uid: group.uid,
-            name: group.name,
-            created: group.created,
-            updated: group.updated,
-            users,
-            roles,
-        }).into_response()),
-        (Err(err), Ok(_)) => Err(error::Error::context_source(
-            "failed to retrieve users",
-            err
-        )),
-        (Ok(_), Err(err)) => Err(error::Error::context_source(
-            "failed to retrieve roles",
-            err
-        )),
-        (Err(u_err), Err(_r_err)) => Err(error::Error::context_source(
-            "failed to retrieve users and roles",
-            u_err
-        ))
-    }
+    Ok(body::Json(group).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,4 +280,173 @@ pub async fn create_group(
         users,
         roles,
     })).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateGroup {
+    name: Option<String>,
+    users: Option<Vec<UserId>>,
+    roles: Option<Vec<RoleId>>,
+}
+
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "result")]
+pub enum UpdateGroupResult {
+    GroupExists,
+    UsersNotFound {
+        ids: Vec<UserId>
+    },
+    RolesNotFound {
+        ids: Vec<RoleId>
+    },
+}
+
+pub async fn update_group(
+    db::Conn(mut conn): db::Conn,
+    headers: HeaderMap,
+    Path(GroupPath { groups_id }): Path<GroupPath>,
+    body::Json(json): body::Json<UpdateGroup>,
+) -> Result<Response, error::Error> {
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
+
+    let initiator = macros::require_initiator!(
+        &transaction,
+        &headers,
+        None::<&str>
+    );
+
+    let perm_check = authz::has_permission(
+        &transaction,
+        initiator.user.id,
+        authz::Scope::Groups,
+        authz::Ability::Update,
+    )
+        .await
+        .context("failed to retrieve permission for user")?;
+
+    if !perm_check {
+        return Ok(StatusCode::UNAUTHORIZED.into_response());
+    }
+
+    let result = Group::retrieve_id(&transaction, groups_id)
+        .await
+        .context("failed to retrieve group")?;
+
+    let Some(mut group) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    if json.name.is_some() {
+        if let Some(name) = json.name {
+            group.name = name;
+        }
+
+        let did_update = group.update(&transaction)
+            .await
+            .context("failed to update group")?;
+
+        if !did_update {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                body::Json(UpdateGroupResult::GroupExists)
+            ).into_response());
+        }
+    }
+
+    let (_attached, not_found) = update_attached_users(&transaction, &group, json.users)
+        .await?;
+
+    if !not_found.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            body::Json(UpdateGroupResult::UsersNotFound {
+                ids: not_found
+            })
+        ).into_response());
+    }
+
+    let (_attached, not_found) = update_attached_roles(&transaction, &group, json.roles)
+        .await?;
+
+    if !not_found.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            body::Json(UpdateGroupResult::RolesNotFound {
+                ids: not_found
+            })
+        ).into_response());
+    }
+
+    transaction.commit()
+        .await
+        .context("failed to commit transaction")?;
+
+    Ok(StatusCode::OK.into_response())
+}
+
+pub async fn delete_group(
+    db::Conn(mut conn): db::Conn,
+    headers: HeaderMap,
+    Path(GroupPath { groups_id }): Path<GroupPath>
+) -> Result<Response, error::Error> {
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
+
+    let initiator = macros::require_initiator!(
+        &transaction,
+        &headers,
+        None::<&str>
+    );
+
+    let perm_check = authz::has_permission(
+        &transaction,
+        initiator.user.id,
+        authz::Scope::Groups,
+        authz::Ability::Delete,
+    )
+        .await
+        .context("failed to retrieve permission for user")?;
+
+    if !perm_check {
+        return Ok(StatusCode::UNAUTHORIZED.into_response());
+    }
+
+    let result = GroupFull::retrieve(&transaction, &groups_id)
+        .await
+        .context("failed to retrieve group")?;
+
+    let Some(group) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let _users = transaction.execute(
+        "delete from group_users where groups_id = $1",
+        &[&group.id]
+    )
+        .await
+        .context("failed to delete from group users")?;
+
+    let _roles = transaction.execute(
+        "delete from group_roles where groups_id = $1",
+        &[&group.id]
+    )
+        .await
+        .context("failed to delete from group roles")?;
+
+    let _user = transaction.execute(
+        "delete from groups where id = $1",
+        &[&group.id]
+    )
+        .await
+        .context("failed to delete from groups")?;
+
+    transaction.commit()
+        .await
+        .context("failed to commit transaction")?;
+
+    Ok(StatusCode::OK.into_response())
 }
