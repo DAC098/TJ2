@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use postgres_types as pg_types;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
 use crate::db;
 use crate::db::ids::{GroupId, UserId, RoleId, RoleUid, PermissionId};
@@ -17,7 +17,7 @@ use crate::user::{User, Group};
 #[error("the provided string is not a valid Ability")]
 pub struct InvalidAbility;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Ability {
     Create,
     Read,
@@ -28,10 +28,10 @@ pub enum Ability {
 impl Ability {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Ability::Create => "Create",
-            Ability::Read => "Read",
-            Ability::Update => "Update",
-            Ability::Delete => "Delete",
+            Ability::Create => "create",
+            Ability::Read => "read",
+            Ability::Update => "update",
+            Ability::Delete => "delete",
         }
     }
 }
@@ -47,10 +47,10 @@ impl FromStr for Ability {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Create" => Ok(Ability::Create),
-            "Read" => Ok(Ability::Read),
-            "Update" => Ok(Ability::Update),
-            "Delete" => Ok(Ability::Delete),
+            "create" => Ok(Ability::Create),
+            "read" => Ok(Ability::Read),
+            "update" => Ok(Ability::Update),
+            "delete" => Ok(Ability::Delete),
             _ => Err(InvalidAbility)
         }
     }
@@ -85,7 +85,7 @@ impl pg_types::ToSql for Ability {
 #[error("the provided string is not a valid scope")]
 pub struct InvalidScope;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub enum Scope {
     Users,
     Groups,
@@ -97,11 +97,11 @@ pub enum Scope {
 impl Scope {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Scope::Users => "Users",
-            Scope::Groups => "Groups",
-            Scope::Journals => "Journals",
-            Scope::Entries => "Entries",
-            Scope::Roles => "Roles",
+            Scope::Users => "users",
+            Scope::Groups => "groups",
+            Scope::Journals => "journals",
+            Scope::Entries => "entries",
+            Scope::Roles => "roles",
         }
     }
 }
@@ -117,11 +117,11 @@ impl FromStr for Scope {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Users" => Ok(Scope::Users),
-            "Groups" => Ok(Scope::Groups),
-            "Journals" => Ok(Scope::Journals),
-            "Entries" => Ok(Scope::Entries),
-            "Roles" => Ok(Scope::Roles),
+            "users" => Ok(Scope::Users),
+            "groups" => Ok(Scope::Groups),
+            "journals" => Ok(Scope::Journals),
+            "entries" => Ok(Scope::Entries),
+            "roles" => Ok(Scope::Roles),
             _ => Err(InvalidScope),
         }
     }

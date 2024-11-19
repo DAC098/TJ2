@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::fmt::Write;
+
 use axum::extract::{Request, Path};
 use axum::http::{HeaderMap, Uri, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -13,6 +16,12 @@ use crate::router::macros;
 use crate::state;
 use crate::sec::authz::{self, Role};
 use crate::user::{AttachedUser, AttachedGroup, create_attached_users, update_attached_users, create_attached_groups, update_attached_groups};
+
+#[derive(Debug, Deserialize)]
+pub struct Permission {
+    scope: authz::Scope,
+    abilites: Vec<authz::Ability>
+}
 
 #[derive(Debug, Serialize)]
 pub struct RolePartial {
@@ -99,6 +108,7 @@ pub struct RoleFull {
     name: String,
     created: DateTime<Utc>,
     updated: Option<DateTime<Utc>>,
+    permissions: Vec<AttachedPermission>,
     users: Vec<AttachedUser>,
     groups: Vec<AttachedGroup>,
 }
@@ -113,34 +123,64 @@ impl RoleFull {
             return Ok(None);
         };
 
-        let result = tokio::join!(
+        let (users, groups, permissions) = tokio::join!(
             AttachedUser::retrieve(conn, &role),
             AttachedGroup::retrieve(conn, &role),
+            AttachedPermission::retrieve(conn, &role.id),
         );
 
-        match result {
-            (Ok(users), Ok(groups)) => Ok(Some(Self {
-                id: role.id,
-                uid: role.uid,
-                name: role.name,
-                created: role.created,
-                updated: role.updated,
-                users,
-                groups
-            })),
-            (Err(err), Ok(_)) => Err(error::Error::context_source(
-                "failed to retrieve users",
-                err
-            )),
-            (Ok(_), Err(err)) => Err(error::Error::context_source(
-                "failed to retrieve groups",
-                err
-            )),
-            (Err(u_err), Err(_g_err)) => Err(error::Error::context_source(
-                "failed to retrieve users and groups",
-                u_err
-            ))
+        let users = users.context("failed to retrieve users")?;
+        let groups = groups.context("failed to retrieve groups")?;
+        let permissions = permissions.context("failed to retrieve permissions")?;
+
+        Ok(Some(Self {
+            id: role.id,
+            uid: role.uid,
+            name: role.name,
+            created: role.created,
+            updated: role.updated,
+            permissions,
+            users,
+            groups
+        }))
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttachedPermission {
+    scope: authz::Scope,
+    ability: authz::Ability,
+}
+
+impl AttachedPermission {
+    async fn retrieve(conn: &impl db::GenericClient, role_id: &RoleId) -> Result<Vec<Self>, error::Error> {
+        let params: db::ParamsArray<'_, 1> = [role_id];
+
+        let stream = conn.query_raw(
+            "\
+            select authz_permissions.scope, \
+                   authz_permissions.ability \
+            from authz_permissions \
+            where authz_permissions.role_id = $1",
+            params
+        )
+            .await
+            .context("failed to retrieve permissions for role")?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let row = result.context("failed to retrieve permission record")?;
+
+            rtn.push(Self {
+                scope: row.get(0),
+                ability: row.get(1),
+            });
         }
+
+        Ok(rtn)
     }
 }
 
@@ -184,9 +224,16 @@ pub async fn retrieve_role(
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Deserialize)]
+pub struct PermissionBody {
+    scope: authz::Scope,
+    ability: authz::Ability
+}
+
 #[derive(Debug, Deserialize)]
 pub struct NewRole {
     name: String,
+    permissions: Vec<PermissionBody>,
     users: Vec<UserId>,
     groups: Vec<GroupId>,
 }
@@ -243,6 +290,43 @@ pub async fn create_role(
         ).into_response());
     };
 
+    let permissions = {
+        let mut rtn = Vec::new();
+        let unique: HashSet<PermissionBody> = HashSet::from_iter(json.permissions);
+
+        let mut first = true;
+        let mut params: db::ParamsVec<'_> = vec![&role.id];
+        let mut query = String::from(
+            "insert into authz_permissions (role_id, scope, ability) values"
+        );
+
+        for perm in &unique {
+            if first {
+                first = false;
+            } else {
+                query.push_str(", ");
+            }
+
+            write!(
+                &mut query,
+                "($1, ${}, ${})",
+                db::push_param(&mut params, &perm.scope),
+                db::push_param(&mut params, &perm.ability)
+            ).unwrap();
+
+            rtn.push(AttachedPermission {
+                scope: perm.scope.clone(),
+                ability: perm.ability.clone(),
+            });
+        }
+
+        transaction.execute(query.as_str(), params.as_slice())
+            .await
+            .context("failed to insert permissions")?;
+
+        rtn
+    };
+
     let (users, not_found) = create_attached_users(&transaction, &role, json.users).await?;
 
     if !not_found.is_empty() {
@@ -275,6 +359,7 @@ pub async fn create_role(
         name: role.name,
         created: role.created,
         updated: role.updated,
+        permissions,
         users,
         groups
     })).into_response())

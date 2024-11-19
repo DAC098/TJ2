@@ -131,6 +131,12 @@ async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> 
             Ability::Read,
             Ability::Update,
             Ability::Delete,
+        ]),
+        (Scope::Roles, vec![
+            Ability::Create,
+            Ability::Read,
+            Ability::Update,
+            Ability::Delete,
         ])
     ];
 
