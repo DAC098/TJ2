@@ -15,7 +15,7 @@ use crate::sec::password;
 use crate::state;
 use crate::user::User;
 
-pub use deadpool_postgres::{Pool, GenericClient, Object};
+pub use deadpool_postgres::{Pool, GenericClient, Object, Transaction};
 pub use tokio_postgres::Error as PgError;
 pub use tokio_postgres::types::{self, ToSql};
 
@@ -192,7 +192,16 @@ impl<'a> ErrorKind<'a> {
     }
 }
 
+// could directly implement FromRequestParts for Object
 pub struct Conn(pub Object);
+
+impl Conn {
+    pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
+        self.0.transaction()
+            .await
+            .context("failed to create transaction")
+    }
+}
 
 #[async_trait]
 impl FromRequestParts<state::SharedState> for Conn {
@@ -208,5 +217,17 @@ impl FromRequestParts<state::SharedState> for Conn {
             .context("failed to retrieve database connection")?;
 
         Ok(Self(conn))
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<()> for Conn {
+    type Rejection = Error;
+
+    async fn from_request_parts(
+        _parts: &mut Parts,
+        _state: &()
+    ) -> Result<Self, Self::Rejection> {
+        Err(Error::context("no state"))
     }
 }

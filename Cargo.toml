@@ -116,6 +116,7 @@ version = "1"
 
 [dependencies.axum]
 version = "0.7"
+features = ["macros"]
 
 [dependencies.axum-server]
 git = "https://github.com/DAC098/axum-server.git"

@@ -807,7 +807,7 @@ where
                     insert into group_roles (groups_id, role_id, added) \
                     select groups.id as groups_id, \
                            $1::bigint as role_id, \
-                           $2::timpestamp with time zone as added \
+                           $2::timestamp with time zone as added \
                     from groups \
                     where groups.id = any($3) \
                     on conflict on constraint group_roles_pkey do nothing \

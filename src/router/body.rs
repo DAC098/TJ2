@@ -100,6 +100,32 @@ where
     }
 }
 
+#[async_trait]
+impl<T> FromRequest<()> for Json<T>
+where
+    T: DeserializeOwned
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &()) -> Result<Self, Self::Rejection> {
+        match axum::Json::from_request(req, state).await {
+            Ok(axum::Json(inner)) => Ok(Self(inner)),
+            Err(err) => {
+                log_prefix_error(
+                    "failed to parse json request body",
+                    &err
+                );
+
+                Err(error_json(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_JSON",
+                    None
+                ))
+            }
+        }
+    }
+}
+
 pub struct Html<T = String>{
     body: T
 }

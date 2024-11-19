@@ -171,6 +171,28 @@ pub struct Role {
 }
 
 impl Role {
+    pub async fn retrieve_id(conn: &impl db::GenericClient, role_id: &RoleId) -> Result<Option<Self>, db::PgError> {
+        conn.query_opt(
+            "\
+            select authz_roles.id, \
+                   authz_roles.uid, \
+                   authz_roles.name, \
+                   authz_roles.created, \
+                   authz_roles.updated \
+            from authz_roles \
+            where authz_roles.id = $1",
+            &[role_id]
+        )
+            .await
+            .map(|result| result.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                name: row.get(2),
+                created: row.get(3),
+                updated: row.get(4),
+            }))
+    }
+
     pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Option<Self>, db::PgError> {
         let uid = RoleUid::gen();
         let created = Utc::now();
@@ -195,6 +217,35 @@ impl Role {
                 match kind {
                     db::ErrorKind::Unique(constraint) => if constraint == "authz_roles_name_key" {
                         Ok(None)
+                    } else {
+                        Err(err)
+                    }
+                    _ => Err(err)
+                }
+            } else {
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn update(&mut self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+        self.updated = Some(Utc::now());
+
+        let result = conn.execute(
+            "\
+            update authz_roles \
+            set name = $2, \
+                updated = $3 \
+            where id = $1",
+            &[&self.id, &self.name, &self.updated]
+        ).await;
+
+        match result {
+            Ok(count) => Ok(count == 1),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => if constraint == "authz_roles_name_key" {
+                        Ok(false)
                     } else {
                         Err(err)
                     }

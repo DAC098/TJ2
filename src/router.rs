@@ -25,6 +25,7 @@ mod auth;
 mod entries;
 mod users;
 mod groups;
+mod roles;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -89,6 +90,11 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/groups/:groups_id", get(groups::retrieve_group)
             .patch(groups::update_group)
             .delete(groups::delete_group))
+        .route("/roles", get(roles::retrieve_roles)
+            .post(roles::create_role))
+        .route("/roles/:role_id", get(roles::retrieve_role)
+            .patch(roles::update_role)
+            .delete(roles::delete_role))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())
