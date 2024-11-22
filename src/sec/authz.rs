@@ -17,7 +17,7 @@ use crate::user::{User, Group};
 #[error("the provided string is not a valid Ability")]
 pub struct InvalidAbility;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Ability {
     Create,
     Read,
@@ -85,7 +85,7 @@ impl pg_types::ToSql for Ability {
 #[error("the provided string is not a valid scope")]
 pub struct InvalidScope;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
 pub enum Scope {
     Users,
     Groups,
@@ -377,10 +377,11 @@ pub async fn create_permissions<'a, I>(
 where
     I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>
 {
+    let added = Utc::now();
     let mut top_first = true;
-    let mut params: db::ParamsVec<'_> = vec![&id];
+    let mut params: db::ParamsVec<'_> = vec![&id, &added];
     let mut query = String::from(
-        "insert into authz_permissions (role_id, scope, ability) values "
+        "insert into authz_permissions (role_id, scope, ability, added) values "
     );
 
     for (scope, abilities) in list {
@@ -392,6 +393,8 @@ where
             query.push_str(", ");
         }
 
+        let scope_index = db::push_param(&mut params, scope);
+
         for ability in abilities {
             if first {
                 first = false;
@@ -401,8 +404,7 @@ where
 
             write!(
                 &mut query,
-                "($1, ${}, ${})",
-                db::push_param(&mut params, scope),
+                "($1, ${scope_index}, ${}, $2)",
                 db::push_param(&mut params, ability),
             ).unwrap();
         }

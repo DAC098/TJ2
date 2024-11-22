@@ -55,6 +55,7 @@ create table authz_permissions (
     scope varchar not null,
     ability varchar not null,
     ref_id bigint,
+    added timestamp with time zone,
     unique (role_id, scope, ability, ref_id)
 );
 

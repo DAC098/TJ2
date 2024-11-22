@@ -1,11 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, BTreeMap, HashMap};
 use std::fmt::Write;
 
 use axum::extract::{Request, Path};
 use axum::http::{HeaderMap, Uri, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
@@ -16,12 +16,6 @@ use crate::router::macros;
 use crate::state;
 use crate::sec::authz::{self, Role};
 use crate::user::{AttachedUser, AttachedGroup, create_attached_users, update_attached_users, create_attached_groups, update_attached_groups};
-
-#[derive(Debug, Deserialize)]
-pub struct Permission {
-    scope: authz::Scope,
-    abilites: Vec<authz::Ability>
-}
 
 #[derive(Debug, Serialize)]
 pub struct RolePartial {
@@ -150,34 +144,49 @@ impl RoleFull {
 pub struct AttachedPermission {
     scope: authz::Scope,
     ability: authz::Ability,
+    added: DateTime<Utc>,
 }
 
 impl AttachedPermission {
-    async fn retrieve(conn: &impl db::GenericClient, role_id: &RoleId) -> Result<Vec<Self>, error::Error> {
+    async fn retrieve_stream(
+        conn: &impl db::GenericClient,
+        role_id: &RoleId
+    ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
         let params: db::ParamsArray<'_, 1> = [role_id];
 
         let stream = conn.query_raw(
             "\
             select authz_permissions.scope, \
-                   authz_permissions.ability \
+                   authz_permissions.ability, \
+                   authz_permissions.added
             from authz_permissions \
-            where authz_permissions.role_id = $1",
+            where authz_permissions.role_id = $1 \
+            order by authz_permissions.scope, \
+                     authz_permissions.ability",
             params
         )
+            .await?;
+
+        Ok(stream.map(|result| result.map(|row| Self {
+            scope: row.get(0),
+            ability: row.get(1),
+            added: row.get(2),
+        })))
+    }
+
+    async fn retrieve(conn: &impl db::GenericClient, role_id: &RoleId) -> Result<Vec<Self>, error::Error> {
+        let stream = Self::retrieve_stream(conn, role_id)
             .await
-            .context("failed to retrieve permissions for role")?;
+            .context("failed to retrieve attached permissions")?;
 
         futures::pin_mut!(stream);
 
         let mut rtn = Vec::new();
 
         while let Some(result) = stream.next().await {
-            let row = result.context("failed to retrieve permission record")?;
+            let record = result.context("failed to retrieve permission record")?;
 
-            rtn.push(Self {
-                scope: row.get(0),
-                ability: row.get(1),
-            });
+            rtn.push(record);
         }
 
         Ok(rtn)
@@ -224,10 +233,10 @@ pub async fn retrieve_role(
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct PermissionBody {
     scope: authz::Scope,
-    ability: authz::Ability
+    abilities: Vec<authz::Ability>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,42 +299,7 @@ pub async fn create_role(
         ).into_response());
     };
 
-    let permissions = {
-        let mut rtn = Vec::new();
-        let unique: HashSet<PermissionBody> = HashSet::from_iter(json.permissions);
-
-        let mut first = true;
-        let mut params: db::ParamsVec<'_> = vec![&role.id];
-        let mut query = String::from(
-            "insert into authz_permissions (role_id, scope, ability) values"
-        );
-
-        for perm in &unique {
-            if first {
-                first = false;
-            } else {
-                query.push_str(", ");
-            }
-
-            write!(
-                &mut query,
-                "($1, ${}, ${})",
-                db::push_param(&mut params, &perm.scope),
-                db::push_param(&mut params, &perm.ability)
-            ).unwrap();
-
-            rtn.push(AttachedPermission {
-                scope: perm.scope.clone(),
-                ability: perm.ability.clone(),
-            });
-        }
-
-        transaction.execute(query.as_str(), params.as_slice())
-            .await
-            .context("failed to insert permissions")?;
-
-        rtn
-    };
+    let permissions = create_permissions(&transaction, &role, json.permissions).await?;
 
     let (users, not_found) = create_attached_users(&transaction, &role, json.users).await?;
 
@@ -532,4 +506,131 @@ pub async fn delete_role(
         .context("failed to commit transaction")?;
 
     Ok(StatusCode::OK.into_response())
+}
+
+fn unique_permissions(permissions: Vec<PermissionBody>) -> BTreeMap<authz::Scope, BTreeSet<authz::Ability>> {
+    let mut rtn: BTreeMap<authz::Scope, BTreeSet<authz::Ability>> = BTreeMap::new();
+
+    for perm in permissions {
+        if let Some(known) = rtn.get_mut(&perm.scope) {
+            known.extend(perm.abilities);
+        } else {
+            let value = BTreeSet::from_iter(perm.abilities);
+
+            rtn.insert(perm.scope, value);
+        }
+    }
+
+    rtn
+}
+
+async fn create_permissions(
+    conn: &impl db::GenericClient,
+    role: &Role,
+    permissions: Vec<PermissionBody>
+) -> Result<Vec<AttachedPermission>, error::Error> {
+    let added = Utc::now();
+    let unique = unique_permissions(permissions);
+    let mut rtn = Vec::new();
+
+    let mut first = true;
+    let mut params: db::ParamsVec<'_> = vec![&role.id, &added];
+    let mut query = String::from(
+        "insert into authz_permissions (role_id, scope, ability, added) values "
+    );
+
+    for (scope, abilities) in &unique {
+        let scope_index = db::push_param(&mut params, scope);
+
+        for ability in abilities {
+            if first {
+                first = false;
+            } else {
+                query.push_str(", ");
+            }
+
+            write!(
+                &mut query,
+                "($1, ${scope_index}, ${}, $2)",
+                db::push_param(&mut params, ability)
+            ).unwrap();
+
+            rtn.push(AttachedPermission {
+                scope: scope.clone(),
+                ability: ability.clone(),
+                added
+            });
+        }
+    }
+
+    conn.execute(query.as_str(), params.as_slice())
+        .await
+        .context("failed to insert permissions")?;
+
+    Ok(rtn)
+}
+
+async fn update_permissions(
+    conn: &impl db::GenericClient,
+    role: &Role,
+    permissions: Option<Vec<PermissionBody>>
+) -> Result<Vec<AttachedPermission>, error::Error> {
+    let Some(permissions) = permissions else {
+        return AttachedPermission::retrieve(conn, &role.id).await;
+    };
+
+    let mut stream = AttachedPermission::retrieve_stream(conn, &role.id)
+        .await
+        .context("failed to retrieve attached permissions")?;
+    let mut current: HashMap<authz::Scope, HashMap<authz::Ability, AttachedPermission>> = HashMap::new();
+
+    futures::pin_mut!(stream);
+
+    while let Some(result) = stream.next().await {
+        let record = result.context("failed to retrieve attached permission record")?;
+
+        if let Some(perms) = current.get_mut(&record.scope) {
+            perms.insert(record.ability.clone(), record);
+        } else {
+            current.insert(record.scope.clone(), HashMap::from([(record.ability.clone(), record)]));
+        }
+    }
+
+    let added = Utc::now();
+    let unique = unique_permissions(permissions);
+
+    let mut rtn = Vec::new();
+    let mut first = true;
+    let mut params: db::ParamsVec<'_> = vec![&role.id, &added];
+    let mut query = String::from(
+        "insert into authz_permissions (role_id, scope, ability, added) values "
+    );
+
+    for (scope, abilities) in &unique {
+        let scope_index = db::push_param(&mut params, scope);
+
+        for ability in abilities {
+            if first {
+                first = false;
+            } else {
+                query.push_str(", ");
+            }
+
+            write!(
+                &mut query,
+                "($1, ${scope_index}, ${}, $2)",
+                db::push_param(&mut params, ability)
+            ).unwrap();
+
+            rtn.push(AttachedPermission {
+                scope: scope.clone(),
+                ability: ability.clone(),
+                added
+            });
+        }
+    }
+
+    tracing::debug!("current permissions: {current:#?}");
+
+    Ok(rtn)
 }
