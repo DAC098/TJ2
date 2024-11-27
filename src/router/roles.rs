@@ -344,6 +344,7 @@ pub struct UpdateRole {
     name: Option<String>,
     users: Option<Vec<UserId>>,
     groups: Option<Vec<GroupId>>,
+    permissions: Option<Vec<PermissionBody>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -410,6 +411,9 @@ pub async fn update_role(
         }
     }
 
+    let _permissions = update_permissions(&transaction, &role, json.permissions)
+        .await?;
+
     let (_attached, not_found) = update_attached_users(&transaction, &role, json.users).await?;
 
     if !not_found.is_empty() {
@@ -432,9 +436,12 @@ pub async fn update_role(
         ).into_response());
     }
 
-    transaction.commit()
+    transaction.rollback()
         .await
-        .context("failed to commit transaction")?;
+        .context("failed to rollback transaction")?;
+    //transaction.commit()
+    //    .await
+    //    .context("failed to commit transaction")?;
 
     Ok(StatusCode::OK.into_response())
 }
@@ -576,18 +583,22 @@ async fn update_permissions(
     permissions: Option<Vec<PermissionBody>>
 ) -> Result<Vec<AttachedPermission>, error::Error> {
     let Some(permissions) = permissions else {
+        tracing::debug!("no permissions provided");
+
         return AttachedPermission::retrieve(conn, &role.id).await;
     };
 
-    let mut stream = AttachedPermission::retrieve_stream(conn, &role.id)
+    tracing::debug!("updating permissions");
+
+    let stream = authz::Permission::retrieve_stream(conn, &role.id)
         .await
-        .context("failed to retrieve attached permissions")?;
-    let mut current: HashMap<authz::Scope, HashMap<authz::Ability, AttachedPermission>> = HashMap::new();
+        .context("failed to retrieve permissions")?;
+    let mut current: HashMap<authz::Scope, HashMap<authz::Ability, authz::Permission>> = HashMap::new();
 
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve attached permission record")?;
+        let record = result.context("failed to retrieve permission record")?;
 
         if let Some(perms) = current.get_mut(&record.scope) {
             perms.insert(record.ability.clone(), record);
@@ -609,11 +620,17 @@ async fn update_permissions(
     for (scope, abilities) in &unique {
         let scope_index = db::push_param(&mut params, scope);
 
+        let mut known_scope = current.get_mut(scope);
+
         for ability in abilities {
             if first {
                 first = false;
             } else {
                 query.push_str(", ");
+            }
+
+            if let Some(abilities) = &mut known_scope {
+                abilities.remove(ability);
             }
 
             write!(
@@ -631,6 +648,31 @@ async fn update_permissions(
     }
 
     tracing::debug!("current permissions: {current:#?}");
+
+    tracing::debug!("insert sql: {query}");
+
+    let result = conn.execute(query.as_str(), params.as_slice())
+        .await
+        .context("failed in to insert updated psermissions")?;
+
+    if !current.is_empty() {
+        let mut id_list = Vec::new();
+
+        for (scope, abilities) in current {
+            for (ability, record) in abilities {
+                id_list.push(record.id);
+            }
+        }
+
+        tracing::debug!("permissions to delete: {id_list:#?}");
+
+        conn.execute(
+            "delete from authz_permissions where id = any($1)",
+            &[&id_list]
+        )
+            .await
+            .context("failed to delete permissions")?;
+    }
 
     Ok(rtn)
 }

@@ -159,6 +159,41 @@ pub struct Permission {
     pub scope: Scope,
     pub ability: Ability,
     pub ref_id: Option<i64>,
+    pub added: DateTime<Utc>,
+}
+
+impl Permission {
+    pub async fn retrieve_stream(
+        conn: &impl db::GenericClient,
+        role_id: &RoleId
+    ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
+        let params: db::ParamsArray<'_, 1> = [role_id];
+
+        let stream = conn.query_raw(
+            "\
+            select authz_permissions.id, \
+                   authz_permissions.role_id, \
+                   authz_permissions.scope, \
+                   authz_permissions.ability, \
+                   authz_permissions.ref_id, \
+                   authz_permissions.added \
+            from authz_permissions \
+            where authz_permissions.role_id = $1 \
+            order by authz_permissions.scope, \
+                     authz_permissions.ability",
+            params
+        )
+            .await?;
+
+        Ok(stream.map(|result| result.map(|row| Self {
+            id: row.get(0),
+            role_id: row.get(1),
+            scope: row.get(2),
+            ability: row.get(3),
+            ref_id: row.get(4),
+            added: row.get(5),
+        })))
+    }
 }
 
 #[derive(Debug)]
