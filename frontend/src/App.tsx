@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-do
 
 import Entries from "./Entries";
 import Entry from "./Entry";
+import Users from "./Users";
 
 async function send_logout() {
     let res = await fetch("/logout", {
@@ -35,12 +36,16 @@ const App = () => {
             <div>
                 <Link to="/entries">Entries</Link>
             </div>
+            <div>
+                <Link to="/users">Users</Link>
+            </div>
         </nav>
         <main className="relative flex-auto overflow-scroll">
             <Routes>
                 <Route path="/" element={<div>root page</div>}/>
                 <Route path="/entries" element={<Entries />}/>
                 <Route path="/entries/:entry_date" element={<Entry />}/>
+                <Route path="/users" element={<Users />}/>
             </Routes>
         </main>
     </div>
