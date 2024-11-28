@@ -2,7 +2,11 @@ import { useState } from "react";
 import { useForm, SubmitHandler } from "react-hook-form";
 import { useNavigate, useLocation } from "react-router-dom";
 
-import { res_as_json } from "./net";
+import { res_as_json } from "@/net";
+
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 
 interface LoginForm {
     username: string,
@@ -81,21 +85,39 @@ const Login = () => {
     };
 
     return <div className="flex w-full h-full">
-        <form className="mx-auto my-auto" onSubmit={login_form.handleSubmit(on_submit)}>
-            <div>
-                <div>
-                    <label htmlFor="username">Username</label>
-                </div>
-                <input type="text" {...login_form.register("username")}/>
-            </div>
-            <div>
-                <div>
-                    <label htmlFor="password">Password</label>
-                </div>
-                <input type="password" {...login_form.register("password")}/>
-            </div>
-            <button type="submit">Login</button>
-        </form>
+        <div className="mx-auto my-auto">
+            <Form {...login_form} children={
+                <form onSubmit={login_form.handleSubmit(on_submit)}>
+                    <FormField
+                        control={login_form.control}
+                        name="username"
+                        render={({field}) => {
+                            return <FormItem>
+                                <FormLabel>Username</FormLabel>
+                                <FormControl>
+                                    <Input {...field}/>
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        }}
+                    />
+                    <FormField
+                        control={login_form.control}
+                        name="password"
+                        render={({field}) => {
+                            return <FormItem>
+                                <FormLabel>Password</FormLabel>
+                                <FormControl>
+                                    <Input type="password" {...field}/>
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        }}
+                    />
+                    <Button type="submit">Login</Button>
+                </form>
+            }/>
+        </div>
     </div>
 };
 

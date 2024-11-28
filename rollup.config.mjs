@@ -5,6 +5,13 @@ import { nodeResolve } from "@rollup/plugin-node-resolve";
 
 export default {
     input: "./frontend/src/index.tsx",
+    onwarn: (warning, warn) => {
+        if (warning.code === "MODULE_LEVEL_DIRECTIVE") {
+            return;
+        }
+
+        warn(warning);
+    },
     output: {
         file: "./frontend/assets/index.js",
         format: "umd",
@@ -26,6 +33,10 @@ export default {
                 jsx: "react-jsx",
                 moduleResolution: "Bundler",
                 sourceMap: true,
+                baseUrl: "./frontend/src/",
+                paths: {
+                    "@/*": ["./*"]
+                }
             },
             include: [
                 "./frontend/src/**/*.tsx",

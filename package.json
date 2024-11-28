@@ -3,20 +3,27 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "build-css": "npx tailwindcss -i ./frontend/css/input.css -o ./frontend/assets/stylesheet.css",
-    "watch-css": "npx tailwindcss -w -i ./frontend/css/input.css -o ./frontend/assets/stylesheet.css",
+    "build-css": "npx tailwindcss -i ./frontend/styles/input.css -o ./frontend/assets/stylesheet.css",
+    "watch-css": "npx tailwindcss -w -i ./frontend/styles/input.css -o ./frontend/assets/stylesheet.css",
     "build-tsx": "rollup --config ./rollup.config.mjs",
     "watch-tsx": "rollup --config ./rollup.config.mjs --watch"
   },
   "dependencies": {
+    "@hookform/resolvers": "^3.9.1",
+    "@radix-ui/react-label": "^2.1.0",
+    "@radix-ui/react-slot": "^1.1.0",
+    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "content-type": "^1.0.5",
     "htmx.org": "^2.0.2",
+    "lucide-react": "^0.462.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.53.0",
     "react-router-dom": "^6.26.2",
+    "tailwind-merge": "^2.5.5",
     "tailwindcss": "^3.4.12",
+    "tailwindcss-animate": "^1.0.7",
     "zod": "^3.23.8"
   },
   "devDependencies": {
