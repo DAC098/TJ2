@@ -7,7 +7,7 @@ import {
 
 import Entries from "@/Entries";
 import Entry from "@/Entry";
-import Users from "@/Users";
+import { Users } from "@/users";
 import { AppSidebar } from "@/sidebar";
 
 const App = () => {
@@ -20,6 +20,7 @@ const App = () => {
                     <Route path="/entries" element={<Entries />}/>
                     <Route path="/entries/:entry_date" element={<Entry />}/>
                     <Route path="/users" element={<Users />}/>
+                    <Route path="/users/:user_id" element={<>specific user</>}/>
                 </Routes>
             </main>
         </SidebarProvider>

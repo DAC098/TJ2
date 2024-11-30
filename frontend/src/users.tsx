@@ -45,7 +45,7 @@ const columns: ColumnDef<UserPartial>[] = [
     }
 ];
 
-const Users = () => {
+export function Users() {
     let [loading, set_loading] = useState(false);
     let [users, set_users] = useState<UserPartial[]>([]);
 
@@ -74,5 +74,3 @@ const Users = () => {
         <DataTable columns={columns} data={users}/>
     </div>;
 };
-
-export default Users;
