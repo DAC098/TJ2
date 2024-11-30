@@ -55,7 +55,7 @@ export function getUserMedia(constraints?: MediaStreamConstraints): Promise<Medi
     return allow_get_user_media ? navigator.mediaDevices.getUserMedia(constraints) : Promise.resolve(null);
 }
 
-export function enumerateDevices(): Promise<MediaDeviceInfo[] | null> {
+export function enumerate_devices(): Promise<MediaDeviceInfo[] | null> {
     return allow_enumerate_devices ? navigator.mediaDevices.enumerateDevices() : Promise.resolve(null);
 }
 

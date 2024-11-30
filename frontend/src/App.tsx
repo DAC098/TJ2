@@ -14,7 +14,7 @@ const App = () => {
     return <div className="flex flex-row flex-nowrap w-full h-full">
         <SidebarProvider>
             <AppSidebar/>
-            <main className="relative flex-auto overflow-scroll">
+            <main className="relative flex-auto overflow-auto">
                 <Routes>
                     <Route path="/" element={<div>root page</div>}/>
                     <Route path="/entries" element={<Entries />}/>

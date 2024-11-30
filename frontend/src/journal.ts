@@ -47,7 +47,6 @@ export interface EntryTagForm {
 export interface InMemoryFile {
     type: "in-memory",
     key: string,
-    src: URL,
     data: Blob,
     name: string,
     mime_type: string,
@@ -70,14 +69,17 @@ export interface ServerFile {
 export interface LocalFile {
     type: "local",
     key: string,
-    src: URL,
     name: string,
     data: File,
+    mime_type: string,
+    mime_subtype: string,
+    mime_param: string | null,
 }
 
 export type EntryFileForm =
     InMemoryFile |
-    ServerFile;
+    ServerFile |
+    LocalFile;
 
 export interface EntryForm {
     date: string,

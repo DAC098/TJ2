@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { Plus } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
     DataTable,
     ColumnDef,
@@ -84,13 +86,14 @@ const Entries = () => {
         });
     }, []);
 
-    if (loading) {
-        return <div>loading entries</div>
-    } else {
-        return <div>
-            <DataTable columns={columns} data={entries}/>
+    return <div className="max-w-3xl mx-auto my-auto space-y-4">
+        <div className="flex flex-row flex-nowrap gap-x-4">
+            <Link to="/entries/new">
+                <Button type="button">New Entry<Plus/></Button>
+            </Link>
         </div>
-    }
+        <DataTable columns={columns} data={entries}/>
+    </div>
 };
 
 export default Entries;
