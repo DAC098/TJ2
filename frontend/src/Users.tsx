@@ -1,7 +1,12 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { Plus } from "lucide-react";
 
-import { ViewDate } from "./components/time";
+import { Button } from "@/components/ui/button";
+import {
+    DataTable,
+    ColumnDef,
+} from "@/components/ui/table";
 
 interface UserPartial {
     id: number,
@@ -23,6 +28,23 @@ async function get_users() {
     return await res.json() as UserPartial[];
 }
 
+const columns: ColumnDef<UserPartial>[] = [
+    {
+        accessorKey: "username",
+        header: "Username",
+        cell: ({ row }) => {
+            return <Link to={`/users/${row.original.id}`}>{row.original.username}</Link>;
+        }
+    },
+    {
+        accessorKey: "mod",
+        header: "Mod",
+        cell: ({ row }) => {
+            return row.original.updated != null ? row.original.updated : row.original.created;
+        }
+    }
+];
+
 const Users = () => {
     let [loading, set_loading] = useState(false);
     let [users, set_users] = useState<UserPartial[]>([]);
@@ -43,34 +65,14 @@ const Users = () => {
         });
     }, []);
 
-    let user_rows = [];
-
-    for (let user of users) {
-        let date = new Date(user.updated != null ? user.updated : user.created);
-
-        user_rows.push(<tr key={user.id}>
-            <td>
-                <Link to={`/users/${user.id}`}>{user.username}</Link>
-            </td>
-            <td><ViewDate date={date}/></td>
-        </tr>);
-    }
-
-    if (loading) {
-        return <div>loading users</div>;
-    } else {
-        return <div>
-            <table>
-                <thead>
-                    <tr className="sticky top-0 bg-white">
-                        <th>Username</th>
-                        <th>Mod</th>
-                    </tr>
-                </thead>
-                <tbody>{user_rows}</tbody>
-            </table>
-        </div>;
-    }
+    return <div className="max-w-3xl mx-auto my-auto space-y-4">
+        <div className="flex flex-row flex-nowrap gap-x-4">
+            <Link to="/users/new">
+                <Button type="button">New User<Plus/></Button>
+            </Link>
+        </div>
+        <DataTable columns={columns} data={users}/>
+    </div>;
 };
 
 export default Users;
