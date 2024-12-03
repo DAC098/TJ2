@@ -60,7 +60,7 @@ fn main() {
         }
     };
 
-    if let Err(err) = setup(config) {
+    if let Err(err) = setup(args, config) {
         error::log_error(&err);
 
         std::process::exit(1);
@@ -69,7 +69,7 @@ fn main() {
     }
 }
 
-fn setup(config: config::Config) -> Result<(), Error> {
+fn setup(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
     let mut builder = if config.settings.thread_pool == 1 {
         Builder::new_current_thread()
     } else {
@@ -82,13 +82,17 @@ fn setup(config: config::Config) -> Result<(), Error> {
         .build()
         .context("failed to create tokio runtime")?;
 
-    rt.block_on(init(config))
+    rt.block_on(init(args, config))
 }
 
-async fn init(config: config::Config) -> Result<(), Error> {
+async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
     let state = state::SharedState::new(&config)
         .await
         .context("failed to create SharedState")?;
+
+    if args.gen_test_data {
+        db::gen_test_data(&state).await?;
+    }
 
     let router = router::build(&state);
 

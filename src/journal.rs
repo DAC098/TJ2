@@ -390,6 +390,15 @@ impl JournalDir {
         }
     }
 
+    pub async fn create(&self) -> Result<(), std::io::Error> {
+        let files_dir = self.root.join("files");
+
+        tokio::fs::create_dir(&self.root).await?;
+        tokio::fs::create_dir(&files_dir).await?;
+
+        Ok(())
+    }
+
     pub fn file_path(&self, file_entry: &FileEntry) -> PathBuf {
         self.root.join(format!("files/{}.file", file_entry.id))
     }

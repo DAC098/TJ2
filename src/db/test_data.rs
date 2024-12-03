@@ -10,8 +10,13 @@ use crate::journal::Journal;
 use crate::user::{User, Group, assign_user_group};
 use crate::sec::password;
 use crate::sec::authz::{Role, Scope, Ability};
+use crate::state;
 
-pub async fn create(conn: &impl GenericClient, rng: &mut ThreadRng) -> Result<(), Error> {
+pub async fn create(
+    state: &state::SharedState,
+    conn: &impl GenericClient,
+    rng: &mut ThreadRng
+) -> Result<(), Error> {
     let password = "password";
 
     let journalists_group = Group::create(conn, "journalists")
@@ -56,13 +61,14 @@ pub async fn create(conn: &impl GenericClient, rng: &mut ThreadRng) -> Result<()
             .await
             .context("failed to assign test user to journalists group")?;
 
-        create_journal(conn, rng, user.id).await?;
+        create_journal(state, conn, rng, user.id).await?;
     }
 
     Ok(())
 }
 
 pub async fn create_journal(
+    state: &state::SharedState,
     conn: &impl GenericClient,
     rng: &mut ThreadRng,
     users_id: ids::UserId
@@ -71,15 +77,22 @@ pub async fn create_journal(
         .await
         .context("failed to create journal for test user")?;
 
+    let journal_dir = state.storage()
+        .journal_dir(&journal);
+
+    journal_dir.create()
+        .await
+        .context("failed to create journal directory")?;
+
     let today = Utc::now();
-    let total_entries = rng.gen_range(50..=240) + 1;
+    let total_entries = rng.gen_range(50..=730) + 1;
 
     for count in 1..total_entries {
         let date = today.date_naive()
             .checked_sub_days(Days::new(count))
             .unwrap();
 
-        tracing::debug!("creating entry: {date}");
+        //tracing::debug!("creating entry: {date}");
 
         create_journal_entry(conn, rng, journal.id, users_id, date).await?;
     }

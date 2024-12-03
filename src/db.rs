@@ -10,6 +10,7 @@ use tokio_postgres::error::SqlState;
 
 use crate::config::Config;
 use crate::error::{Error, Context};
+use crate::journal::Journal;
 use crate::sec::authz::{Scope, Ability, Role};
 use crate::sec::password;
 use crate::state;
@@ -70,7 +71,6 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
         .context("failed to check if admin user was found")?;
 
     if maybe_admin.is_none() {
-        let mut rng = rand::thread_rng();
         let admin = create_admin_user(&transaction)
             .await?
             .context("admin already exists. prior lookup failed")?;
@@ -80,9 +80,6 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
         admin_role.assign_user(&transaction, admin.id)
             .await
             .context("failed to assign admin to admin role")?;
-
-        test_data::create_journal(&transaction, &mut rng, admin.id).await?;
-        test_data::create(&transaction, &mut rng).await?;
     }
 
     transaction.commit()
@@ -145,6 +142,42 @@ async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> 
         .context("failed to create default permissions")?;
 
     Ok(admin_role)
+}
+
+pub async fn gen_test_data(state: &state::SharedState) -> Result<(), Error> {
+    let mut rng = rand::thread_rng();
+    let mut conn = state.db_conn().await?;
+
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create database transaction")?;
+
+    let maybe_admin = User::retrieve_username(&transaction, "admin")
+        .await
+        .context("failed to check if admin user was found")?;
+
+    if let Some(admin) = maybe_admin {
+        let default_check = Journal::retrieve_default(&transaction, admin.id)
+            .await
+            .context("failed to check for admin default journal")?;
+
+        if default_check.is_none() {
+            test_data::create_journal(
+                state,
+                &transaction,
+                &mut rng,
+                admin.id
+            ).await?;
+        }
+    }
+
+    test_data::create(state, &transaction, &mut rng).await?;
+
+    transaction.commit()
+        .await
+        .context("failed to commit transaction for test data")?;
+
+    Ok(())
 }
 
 pub fn push_param<'a, T>(params: &mut ParamsVec<'a>, v: &'a T) -> usize

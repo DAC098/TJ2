@@ -37,7 +37,12 @@ pub struct CliArgs {
     pub config_path: PathBuf,
 
     #[arg(short = 'V', long)]
-    pub verbosity: Option<Verbosity>
+    pub verbosity: Option<Verbosity>,
+
+    /// attempts to generate test data for the server to use for testing
+    /// purposes
+    #[arg(long)]
+    pub gen_test_data: bool
 }
 
 #[derive(Debug)]
