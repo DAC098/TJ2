@@ -93,7 +93,7 @@ impl Assets {
     pub fn get_dir<'a>(&self, uri: &'a str) -> Option<(&Path, &'a str)> {
         for (key, dir) in &self.directories {
             if let Some(stripped) = uri.strip_prefix(key) {
-                tracing::debug!("found asset directory: {key}");
+                //tracing::debug!("found asset directory: {key}");
 
                 return Some((dir, stripped));
             }

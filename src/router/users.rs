@@ -149,12 +149,23 @@ impl UserFull {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MaybeUserId {
+    users_id: Option<UserId>
+}
+
 pub async fn retrieve_user(
     state: state::SharedState,
     headers: HeaderMap,
     uri: Uri,
-    Path(UserPath { users_id }): Path<UserPath>,
+    Path(MaybeUserId { users_id }): Path<MaybeUserId>,
 ) -> Result<Response, error::Error> {
+    macros::res_if_html!(state.templates(), &headers);
+
+    let Some(users_id) = users_id else {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    };
+
     let conn = state.db_conn().await?;
 
     let initiator = macros::require_initiator!(
@@ -162,8 +173,6 @@ pub async fn retrieve_user(
         &headers,
         Some(uri.clone())
     );
-
-    macros::res_if_html!(state.templates(), &headers);
 
     let perm_check = authz::has_permission(
         &conn,

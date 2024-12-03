@@ -65,7 +65,7 @@ fn get_mime(path: &Path) -> String {
 }
 
 async fn send_file(path: &Path) -> Response<Body> {
-    tracing::debug!("attempting to send file: \"{}\"", path.display());
+    //tracing::debug!("attempting to send file: \"{}\"", path.display());
 
     let mime = get_mime(path);
 
@@ -126,7 +126,7 @@ pub async fn handle(
 
     let uri_path = uri.path();
 
-    tracing::debug!("searching for: \"{uri_path}\"");
+    //tracing::debug!("searching for: \"{uri_path}\"");
 
     if let Some(asset) = state.assets().get_file(uri_path) {
         send_file(asset).await

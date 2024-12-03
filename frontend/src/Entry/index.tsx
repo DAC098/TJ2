@@ -121,10 +121,6 @@ const Entry = () => {
     const form = useForm<EntryForm>({
         defaultValues: blank_form()
     });
-    const tags = useFieldArray<EntryForm, "tags">({
-        control: form.control,
-        name: "tags"
-    });
 
     let [loading, setLoading] = useState(true);
 
