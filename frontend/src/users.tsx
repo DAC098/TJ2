@@ -1,5 +1,5 @@
 import { format } from "date-fns";
-import { Plus, Save, Trash, Eye, EyeOff } from "lucide-react";
+import { Plus, Save, Trash, Eye, EyeOff, RefreshCcw, Search, Check } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 import { Link, useParams, useNavigate } from "react-router-dom";
@@ -14,6 +14,7 @@ import {
     FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import {
     Sheet,
     SheetContent,
@@ -135,10 +136,11 @@ async function get_user(id: string) {
 }
 
 interface UserHeaderProps {
-    users_id: string | null
+    users_id: string | null,
+    on_delete: () => void,
 }
 
-function UserHeader({users_id}: UserHeaderProps) {
+function UserHeader({users_id, on_delete}: UserHeaderProps) {
     const form = useFormContext<UserForm>();
 
     return <div className="flex flex-row flex-nowrap gap-x-4 items-center">
@@ -155,6 +157,7 @@ function UserHeader({users_id}: UserHeaderProps) {
                 type="button"
                 variant="destructive"
                 onClick={() => {
+                    on_delete();
                 }}
             >
                 Delete
@@ -180,6 +183,164 @@ export function User() {
             confirm: "",
         }
     });
+
+    const create_user = async (data) => {
+        let body = JSON.stringify({
+            username: data.username,
+            password: data.password,
+            confirm: data.confirm,
+            groups: data.groups.map(attached => {
+                return attached.groups_id;
+            }),
+            roles: data.roles.map(attached => {
+                return attached.role_id;
+            })
+        });
+
+        let res = await fetch("/users", {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                "content-length": body.length.toString(10),
+            },
+            body
+        });
+
+        switch (res.status) {
+        case 200:
+            return await res.json();
+        case 400:
+            let json = await res.json();
+
+            console.error("failed to update user", json);
+            break;
+        case 403:
+            console.error("you do not have permission to create users");
+            break;
+        default:
+            console.warn("unhandled response status code");
+            break;
+        }
+
+        return null;
+    };
+
+    const update_user = async (users_id, data) => {
+        let body = JSON.stringify({
+            username: data.username,
+            password: data.password.length !== 0 ? data.password : null,
+            groups: data.groups.map(attached => {
+                return attached.groups_id;
+            }),
+            roles: data.roles.map(attached => {
+                return attached.role_id;
+            })
+        });
+
+        let res = await fetch(`/users/${users_id}`, {
+            method: "PATCH",
+            headers: {
+                "content-type": "application/json",
+                "content-length": body.length.toString(10),
+            },
+            body
+        });
+
+        switch (res.status) {
+        case 200:
+            return true;
+        case 400:
+            let json = await res.json();
+
+            console.error("failed to update user", json);
+            break;
+        case 403:
+            console.error("you do not have permission to update users");
+            break;
+        case 404:
+            console.error("user not found");
+            break;
+        default:
+            console.warn("unhandled response status code");
+            break;
+        }
+
+        return false;
+    };
+
+    const on_submit: SubmitHandler<UserForm> = async (data, event) => {
+        data.password = data.password.trim();
+        data.confirm = data.confirm.trim();
+
+        if (data.password.length !== 0) {
+            if (data.confirm !== data.password) {
+                console.warn("confirm does not match password");
+
+                return;
+            }
+        }
+
+        if (users_id === "new") {
+            try {
+                let created = await create_user(data);
+
+                if (created == null) {
+                    return;
+                }
+
+                let form_reset = {
+                    username: created.username,
+                    password: "",
+                    confirm: "",
+                    groups: created.groups,
+                    roles: created.roles,
+                };
+
+                form.reset(form_reset);
+
+                navigate(`/users/${created.id}`);
+            } catch (err) {
+                console.error("error when creating new user", err);
+            }
+        } else {
+            try {
+                if (await update_user(users_id, data)) {
+                    data.password = "";
+                    data.confirm = "";
+
+                    form.reset(data);
+                }
+            } catch (err) {
+                console.error("error when updating new user", err);
+            }
+        }
+    };
+
+    const delete_user = async () => {
+        if (users_id === "new") {
+            return;
+        }
+
+        try {
+            let res = await fetch(`/users/${users_id}`, {
+                method: "DELETE"
+            });
+
+            switch (res.status) {
+            case 200:
+                navigate("/users");
+                break;
+            case 403:
+                console.error("you do not have permission to delete users");
+                break;
+            case 404:
+                console.error("user not found");
+                break;
+            }
+        } catch (err) {
+            console.error("error when deleting user", err);
+        }
+    };
 
     useEffect(() => {
         if (users_id === "new") {
@@ -207,14 +368,22 @@ export function User() {
 
     return <div className="max-w-3xl mx-auto my-auto">
         <FormProvider<UserForm> {...form} children={
-            <form className="space-y-4">
-                <UserHeader users_id={users_id} />
+            <form onSubmit={form.handleSubmit(on_submit)} className="space-y-4">
+                <UserHeader users_id={users_id} on_delete={() => {
+                    delete_user();
+                }}/>
+                <Separator />
                 <FormField control={form.control} name="password" render={({field}) => {
                     return <FormItem className="w-1/2">
                         <FormLabel>Password</FormLabel>
                         <FormControl>
                             <div className="w-full relative">
-                                <Input type={show_password ? "text" : "password"} autocomplete="new-password" {...field}/>
+                                <Input
+                                    type={show_password ? "text" : "password"}
+                                    autoComplete="new-password"
+                                    className="pr-10"
+                                    {...field}
+                                />
                                 <Button
                                     type="button"
                                     variant="ghost"
@@ -238,6 +407,7 @@ export function User() {
                         </FormControl>
                     </FormItem>
                 }}/>
+                <Separator />
                 <div className="flex flex-row gap-x-4">
                     <GroupList />
                     <RoleList />
@@ -287,16 +457,87 @@ function GroupList() {
     return <div className="grow space-y-4 basis-1/2">
         <div className="flex flex-row flex-nowrap gap-x-4 items-center">
             <span>Groups</span>
-            <AddGroups />
+            <AddGroups on_group_added={new_group => {
+                groups.append(new_group);
+            }}/>
         </div>
         <DataTable columns={columns} data={groups.fields}/>
     </div>
 }
 
-function AddGroups() {
-    return <Sheet>
+interface GroupPartial {
+    id: number,
+    uid: string,
+    name: string,
+    created: string,
+    updated: string | null
+}
+
+interface AddGroupsProps {
+    on_group_added: (group: AttachedGroup) => void,
+}
+
+function AddGroups({on_group_added}: AddGroupsProps) {
+    let [loading, set_loading] = useState(false);
+    let [data, set_data] = useState<GroupPartial[]>([]);
+
+    let columns: ColumnDef<GroupPartial>[] = [
+        {
+            accessorKey: "name",
+            header: "Name",
+        },
+        {
+            id: "selector",
+            cell: ({ row }) => {
+                return <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                        on_group_added({
+                            groups_id: row.original.id,
+                            name: row.original.name,
+                            added: (new Date()).toJSON(),
+                        });
+                    }}
+                >
+                    <Plus/>
+                </Button>;
+            }
+        }
+    ];
+
+    const retrieve_groups = async () => {
+        if (loading) {
+            return;
+        }
+
+        set_loading(true);
+
+        try {
+            let res = await fetch("/groups");
+
+            if (res.status === 200) {
+                let json = await res.json();
+
+                set_data(json);
+            }
+        } catch (err) {
+            console.error("failed to retrieve available groups", err);
+        }
+
+        set_loading(false);
+    };
+
+    return <Sheet onOpenChange={value => {
+        if (value) {
+            retrieve_groups();
+        }
+    }}>
         <SheetTrigger asChild>
-            <Button type="button" variant="secondary">Add Group<Plus/></Button>
+            <Button type="button" variant="secondary">
+                Add Group <Plus/>
+            </Button>
         </SheetTrigger>
         <SheetContent>
             <SheetHeader>
@@ -305,7 +546,29 @@ function AddGroups() {
                     Add groups to the selected user
                 </SheetDescription>
             </SheetHeader>
-            content
+            <div className="space-y-4 mt-4">
+                <div className="flex flex-row flex-nowrap gap-x-4 items-center">
+                    <div className="w-full relative">
+                        <Input type="text" placeholder="Search" className="pr-10" disabled={loading}/>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0 top-0"
+                            disabled={loading}
+                            onClick={() => {
+                                retrieve_groups();
+                            }}
+                        >
+                            <Search/>
+                        </Button>
+                    </div>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => {}}>
+                        <RefreshCcw/>
+                    </Button>
+                </div>
+                <DataTable columns={columns} data={data}/>
+            </div>
         </SheetContent>
     </Sheet>
 }
@@ -335,7 +598,7 @@ function RoleList() {
             cell: ({ row }) => {
                 return <Button
                     type="button"
-                    variant="descructive"
+                    variant="destructive"
                     size="icon"
                     onClick={() => {
                         roles.remove(row.index);
@@ -350,16 +613,87 @@ function RoleList() {
     return <div className="grow space-y-4 basis-1/2">
         <div className="flex flex-row flex-nowrap gap-x-4 items-center">
             <span>Roles</span>
-            <AddRoles />
+            <AddRoles on_role_added={new_role => {
+                roles.append(new_role);
+            }}/>
         </div>
         <DataTable columns={columns} data={roles.fields}/>
     </div>;
 }
 
-function AddRoles() {
-    return <Sheet>
+interface RolePartial {
+    id: number,
+    uid: string,
+    name: string,
+    created: string,
+    updated: string | null
+}
+
+interface AddRolesProps {
+    on_role_added: (role: AttachedRole) => void,
+}
+
+function AddRoles({on_role_added}: AddRolesProps) {
+    let [loading, set_loading] = useState(false);
+    let [data, set_data] = useState<RolePartial[]>([]);
+
+    let columns: ColumnDef<RolePartial>[] = [
+        {
+            accessorKey: "name",
+            header: "Name",
+        },
+        {
+            id: "selector",
+            cell: ({ row }) => {
+                return <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                        on_role_added({
+                            role_id: row.original.id,
+                            name: row.original.name,
+                            added: (new Date()).toJSON(),
+                        });
+                    }}
+                >
+                    <Plus/>
+                </Button>;
+            }
+        }
+    ];
+
+    const retrieve_roles = async () => {
+        if (loading) {
+            return;
+        }
+
+        set_loading(true);
+
+        try {
+            let res = await fetch("/roles");
+
+            if (res.status === 200) {
+                let json = await res.json();
+
+                set_data(json);
+            }
+        } catch (err) {
+            console.error("failed to retrieve roles", err);
+        }
+
+        set_loading(false);
+    };
+
+    return <Sheet onOpenChange={value => {
+        if (value) {
+            retrieve_roles();
+        }
+    }}>
         <SheetTrigger asChild>
-            <Button type="button" variant="secondary">Add Roles<Plus/></Button>
+            <Button type="button" variant="secondary">
+                Add Roles <Plus/>
+            </Button>
         </SheetTrigger>
         <SheetContent>
             <SheetHeader>
@@ -368,7 +702,29 @@ function AddRoles() {
                     Add roles to the selected user
                 </SheetDescription>
             </SheetHeader>
-            content
+            <div className="space-y-4 mt-4">
+                <div className="flex flex-row flex-nowrap gap-x-4 items-center">
+                    <div className="w-full relative">
+                        <Input type="text" placeholder="Search" className="pr-10" disabled={loading}/>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0 top-0"
+                            disabled={loading}
+                            onClick={() => {
+                                retrieve_roles();
+                            }}
+                        >
+                            <Search/>
+                        </Button>
+                    </div>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => {}}>
+                        <RefreshCcw/>
+                    </Button>
+                </div>
+                <DataTable columns={columns} data={data}/>
+            </div>
         </SheetContent>
     </Sheet>
 }
