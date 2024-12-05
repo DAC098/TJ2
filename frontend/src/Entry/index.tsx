@@ -1,8 +1,8 @@
+import { format } from "date-fns";
+import { CalendarIcon, Trash, Save } from "lucide-react";
 import { useState, useEffect, JSX } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { format } from "date-fns";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
-import { CalendarIcon, Trash, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import FileEntry from "@/Entry/FileEntry";
 import {
     JournalEntry,
     JournalTag,
+    EntryFileForm,
     EntryForm,
     EntryTagForm,
     get_date,
@@ -114,7 +115,75 @@ const EntryHeader = ({entry_date}: EntryHeaderProps) => {
     </div>;
 };
 
-const Entry = () => {
+type EntryFileFormMap = {[key: string]: EntryFileForm};
+
+function create_file_map(files: EntryFileForm[]): EntryFileFormMap {
+    let rtn = {};
+
+    for (let file of files) {
+        if (file.type === "server") {
+            continue;
+        }
+
+        rtn[file.key] = file;
+    }
+
+    return rtn;
+}
+
+async function parallel_file_uploads(entry_form: EntryForm, entry: JournalEntry): Promise<EntryFileForm[]> {
+    let mapped = create_file_map(entry_form.files);
+    let promises = [];
+    let ref_order = [];
+
+    for (let file_entry of entry.files) {
+        if (file_entry.attached == null) {
+            continue;
+        }
+
+        let ref = mapped[file_entry.attached.key];
+
+        if (ref == null) {
+            console.log("file key not known to client", file_entry.attached.key);
+
+            continue;
+        }
+
+        promises.push(upload_data(entry.date, file_entry, ref));
+        ref_order.push(ref);
+    }
+
+    let failed = [];
+    let prom_results = await Promise.allSettled(promises);
+
+    for (let index = 0; index < prom_results.length; index += 1) {
+        let prom = prom_results[index];
+        let ref = ref_order[index];
+
+        switch (prom.status) {
+        case "fulfilled":
+            if (prom.value) {
+                console.log("file uploaded");
+            } else {
+                console.log("file upload failed");
+
+                failed.push(ref);
+            }
+
+            break;
+        case "rejected":
+            console.log("file failed", prom.reason);
+
+            failed.push(ref);
+
+            break;
+        }
+    }
+
+    return failed;
+}
+
+function Entry() {
     const { entry_date } = useParams();
     const navigate = useNavigate();
 
@@ -124,68 +193,28 @@ const Entry = () => {
 
     let [loading, setLoading] = useState(true);
 
-    const create_and_upload = async (entry: EntryForm): Promise<[boolean, JournalEntry]> => {
-        let mapped = {};
-        let promise = create_entry(entry);
+    const create_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
+        let result = await create_entry(entry);
 
-        if (entry.files.length !== 0) {
-            for (let file of entry.files) {
-                if (file.type == "server") {
-                    continue;
-                }
-
-                mapped[file.key] = file;
-            }
+        if (result.files.length === 0) {
+            return [result, []];
         }
 
-        let failed = false;
-        let result = await promise;
+        let failed_uploads = await parallel_file_uploads(entry, result);
 
-        console.log("created entry:", result);
+        return [result, failed_uploads];
+    };
 
-        if (result.files.length !== 0 ) {
-            let promises = [];
+    const update_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
+        let result = await update_entry(entry_date, entry);
 
-            for (let file_entry of result.files) {
-                let ref = mapped[file_entry.attached.key];
-
-                if (ref == null) {
-                    console.log("file key not known to client", file_entry.attached.key);
-
-                    continue;
-                }
-
-                let prom = upload_data(result.date, file_entry, ref)
-                    .then(success => {
-                        if (success) {
-                            console.log("uploaded file", file_entry.id);
-                        } else {
-                            failed = true;
-                        }
-                    });
-
-                promises.push(prom);
-            }
-
-            let prom_results = await Promise.allSettled(promises);
-
-            for (let prom of prom_results) {
-                switch (prom.status) {
-                case "fulfilled":
-                    console.log("file uploaded", prom.value);
-
-                    break;
-                case "rejected":
-                    console.log("file failed", prom.reason);
-
-                    failed = true;
-
-                    break;
-                }
-            }
+        if (result.files.length === 0) {
+            return [result, []];
         }
 
-        return [failed, result];
+        let failed_uploads = await parallel_file_uploads(entry, result);
+
+        return [result, failed_uploads];
     };
 
     const onSubmit: SubmitHandler<EntryForm> = async (data, event) => {
@@ -193,9 +222,11 @@ const Entry = () => {
 
         if (entry_date == null || entry_date == "new") {
             try {
-                let [failed, result] = await create_and_upload(data);
+                let [result, failed] = await create_and_upload(data);
 
-                if (!failed) {
+                console.log("created entry:", result, failed);
+
+                if (failed.length === 0) {
                     form.reset(entry_to_form(result));
 
                     navigate(`/entries/${result.date}`);
@@ -205,9 +236,9 @@ const Entry = () => {
             }
         } else {
             try {
-                let result = await update_entry(entry_date, data);
+                let [result, failed] = await update_and_upload(data);
 
-                console.log("updated entry:", result);
+                console.log("updated entry:", result, failed);
             } catch(err) {
                 console.error("failed to update entry:", err);
             }

@@ -267,9 +267,10 @@ pub struct NewFileEntryBody {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
 pub enum UpdatedFileEntryBody {
-    New(NewFileEntryBody),
     Existing(ExistingFileEntryBody),
+    New(NewFileEntryBody),
 }
 
 fn non_empty_str(given: String) -> Option<String> {

@@ -220,7 +220,29 @@ export async function create_entry(entry: EntryForm) {
 }
 
 export async function update_entry(date: string, entry: EntryForm) {
-    let body = JSON.stringify(entry);
+    let sending = {
+        date: entry.date,
+        title: entry.title,
+        contents: entry.contents,
+        tags: entry.tags,
+        files: [],
+    };
+
+    for (let file of entry.files) {
+        if (file.type == "server") {
+            sending.files.push({
+                id: file._id,
+                name: file.name,
+            });
+        } else {
+            sending.files.push({
+                key: file.key,
+                name: file.name,
+            });
+        }
+    }
+
+    let body = JSON.stringify(sending);
     let res = await fetch(`/entries/${date}`, {
         method: "PATCH",
         headers: {
@@ -250,7 +272,7 @@ export async function delete_entry(date: string) {
 export async function upload_data(
     date: string,
     file_entry: JournalFile,
-    ref: LocalFile | InMemoryFile
+    ref: LocalFile | InMemoryFile | ServerFile,
 ): Promise<boolean> {
     try {
         let path = `/entries/${date}/${file_entry.id}`;
@@ -274,6 +296,8 @@ export async function upload_data(
             } else {
                 return true;
             }
+        case "server":
+            return true;
         }
     } catch(err) {
         console.log("failed to upload data", err);
