@@ -89,11 +89,11 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub async fn retrieve_date(
+    pub async fn retrieve_id(
         conn: &impl GenericClient,
-        journals_id: JournalId,
-        users_id: UserId,
-        date: &NaiveDate
+        journals_id: &JournalId,
+        users_id: &UserId,
+        entries_id: &EntryId,
     ) -> Result<Option<Self>, PgError> {
         conn.query_opt(
             "\
@@ -108,9 +108,9 @@ impl Entry {
                    entries.updated \
             from entries \
             where entries.journals_id = $1 and \
-                  entries.entry_date = $3 and \
+                  entries.id = $3 and \
                   entries.users_id = $2",
-            &[&journals_id, &users_id, date]
+            &[journals_id, users_id, entries_id]
         )
             .await
             .map(|maybe| maybe.map(|found| Self {
@@ -146,15 +146,15 @@ where
 }
 
 impl EntryFull {
-    pub async fn retrieve_date(
+    pub async fn retrieve_id(
         conn: &impl GenericClient,
-        journals_id: JournalId,
-        users_id: UserId,
-        date: &NaiveDate,
+        journals_id: &JournalId,
+        users_id: &UserId,
+        entries_id: &EntryId,
     ) -> Result<Option<Self>, PgError> {
-        if let Some(found) = Entry::retrieve_date(conn, journals_id, users_id, date).await ? {
+        if let Some(found) = Entry::retrieve_id(conn, journals_id, users_id, entries_id).await ? {
             let tags_fut = EntryTag::retrieve_entry(conn, found.id);
-            let files_fut = FileEntry::retrieve_entry(conn, found.id);
+            let files_fut = FileEntry::retrieve_entry(conn, &found.id);
 
             match tokio::join!(tags_fut, files_fut) {
                 (Ok(tags), Ok(files)) => Ok(Some(Self {
@@ -286,8 +286,8 @@ impl FileEntry {
 
     pub async fn retrieve_file_entry(
         conn: &impl GenericClient,
-        date: &NaiveDate,
-        file_entry_id: FileEntryId
+        entries_id: &EntryId,
+        file_entry_id: &FileEntryId
     ) -> Result<Option<Self>, PgError> {
         conn.query_opt(
             "\
@@ -302,11 +302,9 @@ impl FileEntry {
                    file_entries.created, \
                    file_entries.updated \
             from file_entries \
-                left join entries on \
-                    file_entries.entries_id = entries.id \
-            where entries.entry_date = $1 and \
+            where file_entries.entries_id = $1 and \
                   file_entries.id = $2",
-            &[date, &file_entry_id]
+            &[entries_id, file_entry_id]
         )
             .await
             .map(|maybe| maybe.map(|record| Self {
@@ -325,7 +323,7 @@ impl FileEntry {
 
     pub async fn retrieve_entry(
         conn: &impl GenericClient,
-        entries_id: EntryId
+        entries_id: &EntryId
     ) -> Result<Vec<Self>, PgError> {
         let stream = Self::retrieve_entry_stream(conn, &entries_id).await?;
         let mut rtn = Vec::new();

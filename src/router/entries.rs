@@ -156,24 +156,24 @@ pub async fn retrieve_entries(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct MaybeEntryDate {
-    date: Option<NaiveDate>
+pub struct MaybeEntryPath {
+    entries_id: Option<EntryId>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct EntryDate {
-    date: NaiveDate
+pub struct EntryPath {
+    entries_id: EntryId,
 }
 
 pub async fn retrieve_entry(
     state: state::SharedState,
     uri: Uri,
     headers: HeaderMap,
-    Path(MaybeEntryDate { date }): Path<MaybeEntryDate>,
+    Path(MaybeEntryPath { entries_id}): Path<MaybeEntryPath>,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
-    let Some(date) = date else {
+    let Some(entries_id) = entries_id else {
         return Ok(StatusCode::BAD_REQUEST.into_response());
     };
 
@@ -191,11 +191,11 @@ pub async fn retrieve_entry(
 
     auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
-    let result = EntryFull::retrieve_date(
+    let result = EntryFull::retrieve_id(
         &conn,
-        journal.id,
-        initiator.user.id,
-        &date
+        &journal.id,
+        &initiator.user.id,
+        &entries_id
     )
         .await
         .context("failed to retrieve journal entry for date")?;
@@ -431,7 +431,7 @@ pub async fn create_entry(
 pub async fn update_entry(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(EntryDate { date }): Path<EntryDate>,
+    Path(EntryPath { entries_id }): Path<EntryPath>,
     body::Json(json): body::Json<UpdatedEntryBody>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
@@ -450,11 +450,11 @@ pub async fn update_entry(
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
 
-    let result = Entry::retrieve_date(
+    let result = Entry::retrieve_id(
         &transaction,
-        journal.id,
-        initiator.user.id,
-        &date
+        &journal.id,
+        &initiator.user.id,
+        &entries_id
     )
         .await
         .context("failed to retrieve journal entry by date")?;
@@ -670,7 +670,7 @@ pub async fn update_entry(
 pub async fn delete_entry(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(EntryDate { date }): Path<EntryDate>,
+    Path(EntryPath { entries_id }): Path<EntryPath>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
     let transaction = conn.transaction()
@@ -688,11 +688,11 @@ pub async fn delete_entry(
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Delete);
 
-    let result = EntryFull::retrieve_date(
+    let result = EntryFull::retrieve_id(
         &transaction,
-        journal.id,
-        initiator.user.id,
-        &date
+        &journal.id,
+        &initiator.user.id,
+        &entries_id
     )
         .await
         .context("failed to retrieve journal entry by date")?;

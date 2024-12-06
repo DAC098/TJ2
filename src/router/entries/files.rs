@@ -11,7 +11,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
 use crate::state;
-use crate::db::ids::FileEntryId;
+use crate::db::ids::{EntryId, FileEntryId};
 use crate::error::{self, Context};
 use crate::fs::FileUpdater;
 use crate::journal::{Journal, FileEntry};
@@ -23,14 +23,14 @@ use super::auth;
 
 #[derive(Debug, Deserialize)]
 pub struct FileEntryPath {
-    date: NaiveDate,
+    entries_id: EntryId,
     file_entry_id: FileEntryId,
 }
 
 pub async fn retrieve_file(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(FileEntryPath { date, file_entry_id }): Path<FileEntryPath>,
+    Path(FileEntryPath { entries_id, file_entry_id }): Path<FileEntryPath>,
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
@@ -46,7 +46,7 @@ pub async fn retrieve_file(
 
     auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
-    let result = FileEntry::retrieve_file_entry(&conn, &date, file_entry_id)
+    let result = FileEntry::retrieve_file_entry(&conn, &entries_id, &file_entry_id)
         .await
         .context("failed to retrieve journal entry file")?;
 
@@ -76,7 +76,7 @@ pub async fn retrieve_file(
 pub async fn upload_file(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(FileEntryPath { date, file_entry_id }): Path<FileEntryPath>,
+    Path(FileEntryPath { entries_id, file_entry_id }): Path<FileEntryPath>,
     stream: Body
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
@@ -98,7 +98,7 @@ pub async fn upload_file(
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
 
-    let result = FileEntry::retrieve_file_entry(&transaction, &date, file_entry_id)
+    let result = FileEntry::retrieve_file_entry(&transaction, &entries_id, &file_entry_id)
         .await
         .context("failed to retrieve journal entry file")?;
 

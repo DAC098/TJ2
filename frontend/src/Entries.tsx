@@ -35,9 +35,7 @@ const columns: ColumnDef<JournalEntry>[] = [
         accessorKey: "date",
         header: "Date",
         cell: ({ row }) => {
-            let date = row.original.date;
-
-            return <Link to={`/entries/${date}`}>{date}</Link>;
+            return <Link to={`/entries/${row.original.id}`}>{row.original.date}</Link>;
         }
     },
     {

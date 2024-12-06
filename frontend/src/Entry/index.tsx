@@ -61,10 +61,10 @@ const EntrySecTitle = ({title}: EntrySecTitleProps) => {
 };
 
 interface EntryHeaderProps {
-    entry_date: string,
+    entries_id: string,
 }
 
-const EntryHeader = ({entry_date}: EntryHeaderProps) => {
+const EntryHeader = ({entries_id}: EntryHeaderProps) => {
     const navigate = useNavigate();
     const form = useFormContext<EntryForm>();
 
@@ -99,9 +99,9 @@ const EntryHeader = ({entry_date}: EntryHeaderProps) => {
             </FormItem>
         }}/>
         <Button type="submit">Save<Save/></Button>
-        {entry_date != null && entry_date !== "new" ?
+        {entries_id != null && entries_id !== "new" ?
             <Button type="button" variant="destructive" onClick={() => {
-                delete_entry(entry_date).then(() => {
+                delete_entry(entries_id).then(() => {
                     console.log("deleted entry");
 
                     navigate("/entries");
@@ -131,7 +131,7 @@ function create_file_map(files: EntryFileForm[]): EntryFileFormMap {
     return rtn;
 }
 
-async function parallel_file_uploads(entry_form: EntryForm, entry: JournalEntry): Promise<EntryFileForm[]> {
+async function parallel_uploads(entry_form: EntryForm, entry: JournalEntry): Promise<EntryFileForm[]> {
     let mapped = create_file_map(entry_form.files);
     let promises = [];
     let ref_order = [];
@@ -149,7 +149,7 @@ async function parallel_file_uploads(entry_form: EntryForm, entry: JournalEntry)
             continue;
         }
 
-        promises.push(upload_data(entry.date, file_entry, ref));
+        promises.push(upload_data(entry.id, file_entry, ref));
         ref_order.push(ref);
     }
 
@@ -184,7 +184,7 @@ async function parallel_file_uploads(entry_form: EntryForm, entry: JournalEntry)
 }
 
 function Entry() {
-    const { entry_date } = useParams();
+    const { entries_id } = useParams();
     const navigate = useNavigate();
 
     const form = useForm<EntryForm>({
@@ -200,27 +200,25 @@ function Entry() {
             return [result, []];
         }
 
-        let failed_uploads = await parallel_file_uploads(entry, result);
+        let failed_uploads = await parallel_uploads(entry, result);
 
         return [result, failed_uploads];
     };
 
     const update_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
-        let result = await update_entry(entry_date, entry);
+        let result = await update_entry(entries_id, entry);
 
         if (result.files.length === 0) {
             return [result, []];
         }
 
-        let failed_uploads = await parallel_file_uploads(entry, result);
+        let failed_uploads = await parallel_uploads(entry, result);
 
         return [result, failed_uploads];
     };
 
     const onSubmit: SubmitHandler<EntryForm> = async (data, event) => {
-        console.log(data);
-
-        if (entry_date == null || entry_date == "new") {
+        if (entries_id == null || entries_id == "new") {
             try {
                 let [result, failed] = await create_and_upload(data);
 
@@ -229,7 +227,7 @@ function Entry() {
                 if (failed.length === 0) {
                     form.reset(entry_to_form(result));
 
-                    navigate(`/entries/${result.date}`);
+                    navigate(`/entries/${result.id}`);
                 }
             } catch(err) {
                 console.error("failed to create entry:", err);
@@ -246,15 +244,9 @@ function Entry() {
     };
 
     useEffect(() => {
-        console.log("entry date:", entry_date);
+        console.log("entry id:", entries_id);
 
-        let form_date = form.getValues("date");
-
-        if (form_date == entry_date) {
-            console.log("form date is same as entry, assume entry was just created");
-        }
-
-        if (entry_date == null || entry_date == "new") {
+        if (entries_id == null || entries_id == "new") {
             console.log("resetting to blank");
 
             form.reset(blank_form());
@@ -262,19 +254,19 @@ function Entry() {
             return;
         }
 
-        retrieve_entry(entry_date).then(entry => {
+        retrieve_entry(entries_id).then(entry => {
             console.log("resetting to entry:", entry);
 
             form.reset(entry_to_form(entry));
         }).catch(err => {
             console.error("failed to retrieve entry:", err);
         });
-    }, [entry_date]);
+    }, [entries_id]);
 
     return <div className="max-w-3xl mx-auto my-auto">
         <FormProvider<EntryForm> {...form} children={
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                <EntryHeader entry_date={entry_date}/>
+                <EntryHeader entries_id={entries_id}/>
                 <FormField control={form.control} name="title" render={({field}) => {
                     return <FormItem className="w-2/4">
                         <FormLabel>Title</FormLabel>
@@ -292,7 +284,7 @@ function Entry() {
                     </FormItem>
                 }}/>
                 <TagEntry />
-                <FileEntry entry_date={entry_date}/>
+                <FileEntry entries_id={entries_id}/>
             </form>
         }/>
     </div>

@@ -82,7 +82,7 @@ export type EntryFileForm =
     LocalFile;
 
 export interface EntryForm {
-    date: string,
+    date: Date,
     title: string,
     contents: string,
     tags: EntryTagForm[],
@@ -112,7 +112,7 @@ export function blank_form(): EntryForm {
     let today = new Date();
 
     return {
-        date: get_date(today),
+        date: today,
         title: "",
         contents: "",
         tags: [],
@@ -146,7 +146,7 @@ export function entry_to_form(entry: JournalEntry): EntryForm {
     }
 
     return {
-        date: entry.date,
+        date: new Date(entry.date),
         title: entry.title ?? "",
         contents: entry.contents ?? "",
         tags,
@@ -165,8 +165,8 @@ export function get_date(date: Date): string {
     return `${date.getFullYear()}-${month}-${day}`;
 }
 
-export async function retrieve_entry(date: string): Promise<JournalEntry | null> {
-    let res = await fetch(`/entries/${date}`);
+export async function retrieve_entry(entries_id: string): Promise<JournalEntry | null> {
+    let res = await fetch(`/entries/${entries_id}`);
 
     if (res.status === 404) {
         return null;
@@ -180,8 +180,10 @@ export async function retrieve_entry(date: string): Promise<JournalEntry | null>
 }
 
 export async function create_entry(entry: EntryForm) {
+    console.log("given entry:", entry);
+
     let sending = {
-        date: entry.date,
+        date: get_date(entry.date),
         title: entry.title,
         contents: entry.contents,
         tags: entry.tags,
@@ -219,9 +221,9 @@ export async function create_entry(entry: EntryForm) {
     return await res_as_json<JournalEntry>(res);
 }
 
-export async function update_entry(date: string, entry: EntryForm) {
+export async function update_entry(entries_id: string, entry: EntryForm) {
     let sending = {
-        date: entry.date,
+        date: get_date(entry.date),
         title: entry.title,
         contents: entry.contents,
         tags: entry.tags,
@@ -243,7 +245,7 @@ export async function update_entry(date: string, entry: EntryForm) {
     }
 
     let body = JSON.stringify(sending);
-    let res = await fetch(`/entries/${date}`, {
+    let res = await fetch(`/entries/${entries_id}`, {
         method: "PATCH",
         headers: {
             "content-type": "application/json",
@@ -259,8 +261,8 @@ export async function update_entry(date: string, entry: EntryForm) {
     return await res_as_json<JournalEntry>(res);
 }
 
-export async function delete_entry(date: string) {
-    let res = await fetch(`/entries/${date}`, {
+export async function delete_entry(entries_id: string) {
+    let res = await fetch(`/entries/${entries_id}`, {
         method: "DELETE"
     });
 
@@ -270,12 +272,12 @@ export async function delete_entry(date: string) {
 }
 
 export async function upload_data(
-    date: string,
+    entries_id: number,
     file_entry: JournalFile,
     ref: LocalFile | InMemoryFile | ServerFile,
 ): Promise<boolean> {
     try {
-        let path = `/entries/${date}/${file_entry.id}`;
+        let path = `/entries/${entries_id}/${file_entry.id}`;
 
         console.log(ref);
 

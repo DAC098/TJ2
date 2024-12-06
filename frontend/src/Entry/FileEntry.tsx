@@ -67,10 +67,10 @@ enum FileOption {
 }
 
 interface FileEntryProps {
-    entry_date: string,
+    entries_id: string,
 }
 
-const FileEntry = ({entry_date}: FileEntryProps) => {
+const FileEntry = ({entries_id}: FileEntryProps) => {
     const form = useFormContext<EntryForm>();
     const files = useFieldArray<EntryForm, "files">({
         control: form.control,
@@ -110,8 +110,6 @@ const FileEntry = ({entry_date}: FileEntryProps) => {
                 }
             }}/>
             <RecordAudio on_created={(blob) => {
-                let date = new Date();
-
                 files.append({
                     type: "in-memory",
                     key: uuidv4(),
@@ -123,8 +121,6 @@ const FileEntry = ({entry_date}: FileEntryProps) => {
                 });
             }}/>
             <RecordVideo on_created={(blob) => {
-                let date = new Date();
-
                 files.append({
                     type: "in-memory",
                     key: uuidv4(),
@@ -142,7 +138,7 @@ const FileEntry = ({entry_date}: FileEntryProps) => {
 
             switch (field.type) {
             case "server":
-                let src = `/entries/${entry_date}/${field._id}`;
+                let src = `/entries/${entries_id}/${field._id}`;
 
                 download = <DownloadBtn src={src}/>;
 
