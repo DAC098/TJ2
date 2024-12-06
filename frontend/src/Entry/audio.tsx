@@ -16,9 +16,10 @@ import { useObjectUrl } from "@/hooks";
 
 export interface RecordAudioProps {
     on_created: (Blob) => void,
+    disabled?: boolean
 }
 
-export function RecordAudio({on_created}: RecordAudioProps) {
+export function RecordAudio({on_created, disabled}: RecordAudioProps) {
     let media_ref = useRef<{
         stream: MediaStream,
         recorder: MediaRecorder,
@@ -159,7 +160,7 @@ export function RecordAudio({on_created}: RecordAudioProps) {
         set_dialog_open(open);
     }}>
         <DialogTrigger asChild>
-            <Button variant="secondary">Add Audio<Mic/></Button>
+            <Button variant="secondary" disabled={disabled}>Add Audio<Mic/></Button>
         </DialogTrigger>
         <VisuallyHidden>
             <DialogTitle>Record Audio</DialogTitle>

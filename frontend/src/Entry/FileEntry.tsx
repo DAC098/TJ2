@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react"
+import { useContext, useEffect, useRef, useState } from "react";
 import { useFormContext, useFieldArray } from "react-hook-form";
 import { Mic, Video, Plus, Trash, Download } from "lucide-react";
 
@@ -20,9 +20,10 @@ import { useObjectUrl } from "@/hooks";
 
 interface AddFileProps {
     on_selected: (FileList) => void,
+    disabled?: boolean
 }
 
-function AddFile({on_selected}: AddFileProps) {
+function AddFile({on_selected, disabled}: AddFileProps) {
     let input_ref = useRef<HTMLInputElement>(null);
 
     return <>
@@ -35,7 +36,7 @@ function AddFile({on_selected}: AddFileProps) {
                 on_selected(e.target.files);
             }}
         />
-        <Button type="button" variant="secondary" onClick={() => {
+        <Button type="button" variant="secondary" disabled={disabled} onClick={() => {
             if (input_ref.current != null) {
                 input_ref.current.click();
             }
@@ -60,17 +61,12 @@ function DownloadBtn({src, name}: DownloadBtnProps) {
     </a>;
 }
 
-enum FileOption {
-    None = 0,
-    RecAudio = 1,
-    RecVideo = 2,
-}
-
 interface FileEntryProps {
     entries_id: string,
+    loading: boolean,
 }
 
-const FileEntry = ({entries_id}: FileEntryProps) => {
+const FileEntry = ({entries_id, loading}: FileEntryProps) => {
     const form = useFormContext<EntryForm>();
     const files = useFieldArray<EntryForm, "files">({
         control: form.control,
@@ -86,7 +82,7 @@ const FileEntry = ({entries_id}: FileEntryProps) => {
     return <div className="space-y-4">
         <div className="flex flex-row flex-nowrap gap-x-4 items-center">
             Files
-            <AddFile on_selected={file_list => {
+            <AddFile disabled={loading} on_selected={file_list => {
                 for (let file of file_list) {
                     // more than likely this is not correct
                     let mime_split = file.type.split("/");
@@ -94,7 +90,7 @@ const FileEntry = ({entries_id}: FileEntryProps) => {
                     let mime_subtype = mime_split[1];
                     let mime_param: null;
 
-                    let appending = {
+                    files.append({
                         type: "local",
                         key: uuidv4(),
                         name: file.name,
@@ -102,14 +98,10 @@ const FileEntry = ({entries_id}: FileEntryProps) => {
                         mime_type,
                         mime_subtype,
                         mime_param,
-                    } as LocalFile;
-
-                    console.log("adding file:", appending);
-
-                    files.append(appending);
+                    });
                 }
             }}/>
-            <RecordAudio on_created={(blob) => {
+            <RecordAudio disabled={loading} on_created={(blob) => {
                 files.append({
                     type: "in-memory",
                     key: uuidv4(),
@@ -120,7 +112,7 @@ const FileEntry = ({entries_id}: FileEntryProps) => {
                     mime_param: null,
                 });
             }}/>
-            <RecordVideo on_created={(blob) => {
+            <RecordVideo disabled={loading} on_created={(blob) => {
                 files.append({
                     type: "in-memory",
                     key: uuidv4(),
@@ -190,13 +182,13 @@ const FileEntry = ({entries_id}: FileEntryProps) => {
                 <FormField control={form.control} name={`files.${index}.name`} render={({field: file_field}) => {
                     return <FormItem className="w-2/4">
                         <FormControl>
-                            <Input type="text" {...file_field}/>
+                            <Input type="text" disabled={loading} {...file_field}/>
                         </FormControl>
                     </FormItem>
                 }}/>
                 {download}
                 {player}
-                <Button type="button" variant="destructive" size="icon" onClick={() => {
+                <Button type="button" variant="destructive" size="icon" disabled={loading} onClick={() => {
                     files.remove(index);
                 }}><Trash/></Button>
             </div>

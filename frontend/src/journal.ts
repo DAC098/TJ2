@@ -82,6 +82,8 @@ export type EntryFileForm =
     LocalFile;
 
 export interface EntryForm {
+    id: number | null,
+    uid: string | null,
     date: Date,
     title: string,
     contents: string,
@@ -112,11 +114,29 @@ export function blank_form(): EntryForm {
     let today = new Date();
 
     return {
+        id: null,
+        uid: null,
         date: today,
         title: "",
         contents: "",
         tags: [],
         files: [],
+    };
+}
+
+interface ParsedDate {
+    year: number,
+    month: number,
+    date: number,
+}
+
+export function parse_date(given: string): ParsedDate {
+    let split = given.split("-");
+
+    return {
+        year: parseInt(split[0], 10),
+        month: parseInt(split[1], 10),
+        date: parseInt(split[2], 10),
     };
 }
 
@@ -145,8 +165,16 @@ export function entry_to_form(entry: JournalEntry): EntryForm {
         });
     }
 
+    let date = new Date();
+    let parsed = parse_date(entry.date);
+    date.setFullYear(parsed.year);
+    date.setMonth(parsed.month - 1);
+    date.setDate(parsed.date);
+
     return {
-        date: new Date(entry.date),
+        id: entry.id,
+        uid: entry.uid,
+        date,
         title: entry.title ?? "",
         contents: entry.contents ?? "",
         tags,

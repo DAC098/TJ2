@@ -62,9 +62,10 @@ const EntrySecTitle = ({title}: EntrySecTitleProps) => {
 
 interface EntryHeaderProps {
     entries_id: string,
+    loading: boolean
 }
 
-const EntryHeader = ({entries_id}: EntryHeaderProps) => {
+const EntryHeader = ({entries_id, loading}: EntryHeaderProps) => {
     const navigate = useNavigate();
     const form = useFormContext<EntryForm>();
 
@@ -77,6 +78,7 @@ const EntryHeader = ({entries_id}: EntryHeaderProps) => {
                             <Button
                                 variant="outline"
                                 className={cn("w-[280px] justify-start text-left front-normal")}
+                                disabled={loading}
                             >
                                 {format(field.value, "PPP")}
                                 <CalendarIcon className="mr-2 h-4 w-4"/>
@@ -98,9 +100,9 @@ const EntryHeader = ({entries_id}: EntryHeaderProps) => {
                 <FormMessage />
             </FormItem>
         }}/>
-        <Button type="submit">Save<Save/></Button>
+        <Button type="submit" disabled={loading}>Save<Save/></Button>
         {entries_id != null && entries_id !== "new" ?
-            <Button type="button" variant="destructive" onClick={() => {
+            <Button type="button" variant="destructive" disabled={loading} onClick={() => {
                 delete_entry(entries_id).then(() => {
                     console.log("deleted entry");
 
@@ -133,8 +135,8 @@ function create_file_map(files: EntryFileForm[]): EntryFileFormMap {
 
 async function parallel_uploads(entry_form: EntryForm, entry: JournalEntry): Promise<EntryFileForm[]> {
     let mapped = create_file_map(entry_form.files);
-    let promises = [];
-    let ref_order = [];
+    let to_upload = [];
+    let uploaders = [];
 
     for (let file_entry of entry.files) {
         if (file_entry.attached == null) {
@@ -144,41 +146,53 @@ async function parallel_uploads(entry_form: EntryForm, entry: JournalEntry): Pro
         let ref = mapped[file_entry.attached.key];
 
         if (ref == null) {
-            console.log("file key not known to client", file_entry.attached.key);
-
             continue;
         }
 
-        promises.push(upload_data(entry.id, file_entry, ref));
-        ref_order.push(ref);
+        to_upload.push([file_entry, ref]);
     }
 
     let failed = [];
-    let prom_results = await Promise.allSettled(promises);
 
-    for (let index = 0; index < prom_results.length; index += 1) {
-        let prom = prom_results[index];
-        let ref = ref_order[index];
+    for (let index = 0; index < 2; index += 1) {
+        uploaders.push((async () => {
+            let count = 0;
 
-        switch (prom.status) {
-        case "fulfilled":
-            if (prom.value) {
-                console.log("file uploaded");
-            } else {
-                console.log("file upload failed");
+            while (true) {
+                let uploading = to_upload.pop();
 
-                failed.push(ref);
+                if (uploading == null) {
+                    console.log("uploader:", index, "finished. sent:", count);
+
+                    break;
+                }
+
+                let [file_entry, ref] = uploading;
+
+                console.log("uploader:", index, "sending file:", file_entry.id);
+
+                try {
+                    let successful = await upload_data(entry.id, file_entry, ref);
+
+                    if (successful) {
+                        console.log("file uploaded");
+                    } else {
+                        console.log("file upload failed");
+
+                        failed.push(ref);
+                    }
+                } catch (err) {
+                    console.log("file failed", err);
+
+                    failed.push(ref);
+                }
+
+                count += 1;
             }
-
-            break;
-        case "rejected":
-            console.log("file failed", prom.reason);
-
-            failed.push(ref);
-
-            break;
-        }
+        })());
     }
+
+    await Promise.all(uploaders);
 
     return failed;
 }
@@ -188,10 +202,25 @@ function Entry() {
     const navigate = useNavigate();
 
     const form = useForm<EntryForm>({
-        defaultValues: blank_form()
-    });
+        defaultValues: async () => {
+            let rtn = blank_form();
 
-    let [loading, setLoading] = useState(true);
+            if (entries_id == null || entries_id === "new") {
+                return rtn;
+            }
+
+            try {
+                let entry = await retrieve_entry(entries_id);
+
+                rtn = entry_to_form(entry);
+            } catch (err) {
+                console.log("failed to retrieve entry", err);
+            }
+
+            return rtn;
+        },
+        disabled: false,
+    });
 
     const create_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
         let result = await create_entry(entry);
@@ -237,41 +266,30 @@ function Entry() {
                 let [result, failed] = await update_and_upload(data);
 
                 console.log("updated entry:", result, failed);
+
+                if (failed.length === 0) {
+                    form.reset(entry_to_form(result));
+                }
             } catch(err) {
                 console.error("failed to update entry:", err);
             }
         }
     };
 
-    useEffect(() => {
-        console.log("entry id:", entries_id);
-
-        if (entries_id == null || entries_id == "new") {
-            console.log("resetting to blank");
-
-            form.reset(blank_form());
-
-            return;
-        }
-
-        retrieve_entry(entries_id).then(entry => {
-            console.log("resetting to entry:", entry);
-
-            form.reset(entry_to_form(entry));
-        }).catch(err => {
-            console.error("failed to retrieve entry:", err);
-        });
-    }, [entries_id]);
+    if (form.formState.isLoading) {
+        return <div className="max-w-3xl mx-auto my-auto">
+        </div>;
+    }
 
     return <div className="max-w-3xl mx-auto my-auto">
         <FormProvider<EntryForm> {...form} children={
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                <EntryHeader entries_id={entries_id}/>
+                <EntryHeader entries_id={entries_id} loading={form.formState.isLoading || form.formState.isSubmitting}/>
                 <FormField control={form.control} name="title" render={({field}) => {
                     return <FormItem className="w-2/4">
                         <FormLabel>Title</FormLabel>
                         <FormControl>
-                            <Input {...field}/>
+                            <Input disabled={form.formState.isLoading || form.formState.isSubmitting} {...field}/>
                         </FormControl>
                     </FormItem>
                 }}/>
@@ -279,12 +297,12 @@ function Entry() {
                     return <FormItem className="w-3/4">
                         <FormLabel>Contents</FormLabel>
                         <FormControl>
-                            <Textarea {...field}/>
+                            <Textarea disabled={form.formState.isLoading || form.formState.isSubmitting} {...field}/>
                         </FormControl>
                     </FormItem>
                 }}/>
-                <TagEntry />
-                <FileEntry entries_id={entries_id}/>
+                <TagEntry loading={form.formState.isLoading || form.formState.isSubmitting}/>
+                <FileEntry loading={form.formState.isLoading || form.formState.isSubmitting} entries_id={entries_id}/>
             </form>
         }/>
     </div>

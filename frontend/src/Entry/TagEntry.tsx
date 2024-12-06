@@ -12,7 +12,13 @@ import {
 } from "@/components/ui/form";
 import { EntryForm } from "@/journal";
 
-export default function TagEntry() {
+interface TagEntryProps {
+    loading: boolean
+}
+
+export default function TagEntry({
+    loading
+}: TagEntryProps) {
     const form = useFormContext<EntryForm>();
     const tags = useFieldArray<EntryForm, "tags">({
         control: form.control,
@@ -22,7 +28,7 @@ export default function TagEntry() {
     return <div className="space-y-4">
         <div className="flex flex-row flex-nowrap gap-x-4 items-center">
             Tags
-            <Button type="button" variant="secondary" onClick={() => {
+            <Button type="button" variant="secondary" disabled={loading} onClick={() => {
                 tags.append({key: "", value: ""});
             }}>Add Tag<Plus/></Button>
         </div>
@@ -31,18 +37,18 @@ export default function TagEntry() {
                 <FormField control={form.control} name={`tags.${index}.key`} render={({field: tag_field}) => {
                     return <FormItem className="w-1/4">
                         <FormControl>
-                            <Input type="text" {...tag_field}/>
+                            <Input type="text" disabled={loading} {...tag_field}/>
                         </FormControl>
                     </FormItem>
                 }}/>
                 <FormField control={form.control} name={`tags.${index}.value`} render={({field: tag_field}) => {
                     return <FormItem className="w-2/4">
                         <FormControl>
-                            <Input type="text" {...tag_field}/>
+                            <Input type="text" disabled={loading} {...tag_field}/>
                         </FormControl>
                     </FormItem>
                 }}/>
-                <Button type="button" variant="destructive" size="icon" onClick={() => {
+                <Button type="button" variant="destructive" size="icon" disabled={loading} onClick={() => {
                     tags.remove(index);
                 }}><Trash/></Button>
             </div>

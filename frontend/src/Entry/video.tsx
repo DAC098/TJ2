@@ -16,9 +16,10 @@ import { useObjectUrl } from "@/hooks";
 
 export interface RecordVideoProps {
     on_created: (Blob) => void,
+    disabled?: boolean
 }
 
-export function RecordVideo({on_created}: RecordVideoProps) {
+export function RecordVideo({on_created, disabled}: RecordVideoProps) {
     const preview_ele_ref = useRef<HTMLMediaElement>(null);
     const media_ref = useRef<{
         stream: MediaStream,
@@ -163,7 +164,7 @@ export function RecordVideo({on_created}: RecordVideoProps) {
         set_dialog_open(open);
     }}>
         <DialogTrigger asChild>
-            <Button type="button" variant="secondary">Add Video<Video/></Button>
+            <Button type="button" variant="secondary" disabled={disabled}>Add Video<Video/></Button>
         </DialogTrigger>
         <VisuallyHidden>
             <DialogTitle>Record Video</DialogTitle>
