@@ -549,8 +549,11 @@ pub async fn update_entry(
     };
 
     let mut created_files = CreatedFiles::new();
+    let mut removed_files = RemovedFiles::new();
 
     let files = {
+        let mut journal_dir = state.storage()
+            .journal_dir(&journal);
         let mut files = Vec::new();
         let mut new_files = Vec::new();
         let mut updated_files = Vec::new();
@@ -633,6 +636,42 @@ pub async fn update_entry(
             files.extend(updated_files);
         }
 
+        if !current.is_empty() {
+            let mut to_delete = Vec::new();
+
+            for (id, record) in &current {
+                to_delete.push(id);
+
+                if let Err(err) = removed_files.add(journal_dir.file_path(record)).await {
+                    created_files.log_rollback().await;
+                    removed_files.log_rollback().await;
+
+                    return Err(error::Error::context_source(
+                        "failed to remove file",
+                        err
+                    ));
+                }
+            }
+
+            let result = transaction.execute(
+                "delete from file_entries where id = any($1)",
+                &[&to_delete]
+            ).await;
+
+            match result {
+                Ok(_affected) => {},
+                Err(err) => {
+                    created_files.log_rollback().await;
+                    removed_files.log_rollback().await;
+
+                    return Err(error::Error::context_source(
+                        "failed to remove file entries",
+                        err
+                    ));
+                }
+            }
+        }
+
         files
     };
 
@@ -640,15 +679,16 @@ pub async fn update_entry(
         .await;
 
     if let Err(err) = commit_result {
-        if !created_files.is_empty() {
-            created_files.log_rollback().await;
-        }
+        created_files.log_rollback().await;
+        removed_files.log_rollback().await;
 
         return Err(error::Error::context_source(
             "failed commit changes to journal entry",
             err
         ));
     }
+
+    removed_files.log_clean().await;
 
     let entry = ResultEntryFull {
         id: entry.id,
