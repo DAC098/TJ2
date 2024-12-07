@@ -7,6 +7,7 @@ import {
 
 import Entries from "@/Entries";
 import Entry from "@/Entry";
+import { Groups, Group } from "@/groups";
 import { Users, User } from "@/users";
 import { AppSidebar } from "@/sidebar";
 
@@ -21,6 +22,8 @@ const App = () => {
                     <Route path="/entries/:entries_id" element={<Entry />}/>
                     <Route path="/users" element={<Users />}/>
                     <Route path="/users/:users_id" element={<User />}/>
+                    <Route path="/groups" element={<Groups />}/>
+                    <Route path="/groups/:groups_id" element={<Group />}/>
                 </Routes>
             </main>
         </SidebarProvider>

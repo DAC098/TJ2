@@ -351,86 +351,88 @@ where
         current.insert(record.users_id, record);
     }
 
-    let (mut requested, users, diff) = db::ids::unique_ids(users, Some(&current));
+    tracing::debug!("current groups: {current:#?}");
 
-    if !diff {
-        return Ok((current.into_values().collect(), Vec::new()));
-    }
+    let (mut requested, users, common) = db::ids::unique_ids(users, Some(&mut current));
 
-    let stream = match id {
-        UserRefId::Group(groups_id) => {
-            let params: db::ParamsArray<'_, 3> = [groups_id, &added, &users];
+    let mut rtn = Vec::from_iter(common.into_values());
 
-            conn.query_raw(
-                "\
-                with tmp_insert as ( \
-                    insert into group_users (users_id, groups_id, added) \
-                    select users.id as users_id, \
-                           $1::bigint as groups_id, \
-                           $2::timestamp with time zone as added \
-                    from users \
-                    where users.id = any($3) \
-                    on conflict on constraint group_users_pkey do nothing \
-                    returning * \
-                ) \
-                select tmp_insert.users_id, \
-                       users.username, \
-                       tmp_insert.added \
-                from tmp_insert \
-                    left join users on \
-                        tmp_insert.users_id = users.id",
-                params
-            )
-                .await
-                .context("failed to add users to group")?
+    if !requested.is_empty() {
+        tracing::debug!("users: {users:#?}");
+
+        let stream = match id {
+            UserRefId::Group(groups_id) => {
+                let params: db::ParamsArray<'_, 3> = [groups_id, &added, &users];
+
+                conn.query_raw(
+                    "\
+                    with tmp_insert as ( \
+                        insert into group_users (users_id, groups_id, added) \
+                        select users.id as users_id, \
+                               $1::bigint as groups_id, \
+                               $2::timestamp with time zone as added \
+                        from users \
+                        where users.id = any($3) \
+                        on conflict on constraint group_users_pkey do nothing \
+                        returning * \
+                    ) \
+                    select tmp_insert.users_id, \
+                           users.username, \
+                           tmp_insert.added \
+                    from tmp_insert \
+                        left join users on \
+                            tmp_insert.users_id = users.id",
+                    params
+                )
+                    .await
+                    .context("failed to add users to group")?
+            }
+            UserRefId::Role(role_id) => {
+                let params: db::ParamsArray<'_, 3> = [role_id, &added, &users];
+
+                conn.query_raw(
+                    "\
+                    with tmp_insert as ( \
+                        insert into user_roles (users_id, role_id, added) \
+                        select users.id as users_id, \
+                               $1::bigint as role_id, \
+                               $2::timestamp with time zone as added \
+                        from users \
+                        where users.id = any($3) \
+                        on conflict on constraint user_roles_pkey do nothing \
+                        returning * \
+                    ) \
+                    select tmp_insert.users_id, \
+                           users.username, \
+                           tmp_insert.added \
+                    from tmp_insert \
+                        left join users on \
+                            tmp_insert.users_id = users.id",
+                    params
+                )
+                    .await
+                    .context("failed to add users to role")?
+            }
+        };
+
+        futures::pin_mut!(stream);
+
+        while let Some(result) = stream.next().await {
+            let record = result.context("failed to retrieve added user")?;
+            let users_id = record.get(0);
+
+            tracing::debug!("result users_id: {users_id}");
+
+            if !requested.remove(&users_id) {
+                tracing::warn!("a user was added that was not requested");
+            }
+
+            rtn.push(AttachedUser {
+                users_id,
+                username: record.get(1),
+                added: record.get(2)
+            });
         }
-        UserRefId::Role(role_id) => {
-            let params: db::ParamsArray<'_, 3> = [role_id, &added, &users];
-
-            conn.query_raw(
-                "\
-                with tmp_insert as ( \
-                    insert into user_roles (users_id, role_id, added) \
-                    select users.id as users_id, \
-                           $1::bigint as role_id, \
-                           $2::timestamp with time zone as added \
-                    from users \
-                    where users.id = any($3) \
-                    on conflict on constraint user_roles_pkey do nothing \
-                    returning * \
-                ) \
-                select tmp_insert.users_id, \
-                       users.username, \
-                       tmp_insert.added \
-                from tmp_insert \
-                    left join users on \
-                        tmp_insert.users_id = users.id",
-                params
-            )
-                .await
-                .context("failed to add users to role")?
-        }
-    };
-
-    futures::pin_mut!(stream);
-
-    let mut rtn = Vec::new();
-
-    while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve added user")?;
-        let users_id = record.get(0);
-
-        if !requested.remove(&users_id) {
-            tracing::warn!("a user was added that was not requested");
-        }
-
-        current.remove(&users_id);
-
-        rtn.push(AttachedUser {
-            users_id,
-            username: record.get(1),
-            added: record.get(2)
-        });
     }
 
     if !current.is_empty() {
@@ -657,7 +659,7 @@ where
     }
 
     let added = Utc::now();
-    let (mut requested, groups, _diff) = db::ids::unique_ids::<GroupId, ()>(groups, None);
+    let (mut requested, groups, _common) = db::ids::unique_ids::<GroupId, ()>(groups, None);
 
     let stream = match id.into() {
         GroupRefId::User(users_id) => {
@@ -765,86 +767,82 @@ where
         current.insert(record.groups_id, record);
     }
 
-    let (mut requested, groups, diff) = db::ids::unique_ids(groups, Some(&current));
+    let (mut requested, groups, common) = db::ids::unique_ids(groups, Some(&mut current));
 
-    if !diff {
-        return Ok((current.into_values().collect(), Vec::new()));
-    }
+    let mut rtn = Vec::from_iter(common.into_values());
 
-    let stream = match id {
-        GroupRefId::User(users_id) => {
-            let params: db::ParamsArray<'_, 3> = [users_id, &added, &groups];
+    if !requested.is_empty() {
+        let stream = match id {
+            GroupRefId::User(users_id) => {
+                let params: db::ParamsArray<'_, 3> = [users_id, &added, &groups];
 
-            conn.query_raw(
-                "\
-                with tmp_insert as ( \
-                    insert into group_users (groups_id, users_id, added) \
-                    select groups.id as groups_id, \
-                           $1::bigint as users_id, \
-                           $2::timestamp with time zone as added \
-                    from groups \
-                    where groups.id = any($3) \
-                    on conflict on constraint group_users_pkey do nothing \
-                    returning * \
-                ) \
-                select tmp_insert.groups_id, \
-                       groups.name, \
-                       tmp_insert.added \
-                from tmp_insert \
-                    left join groups on \
-                        tmp_insert.groups_id = groups.id",
-                params
-            )
-                .await
-                .context("failed to add groups to user")?
+                conn.query_raw(
+                    "\
+                    with tmp_insert as ( \
+                        insert into group_users (groups_id, users_id, added) \
+                        select groups.id as groups_id, \
+                               $1::bigint as users_id, \
+                               $2::timestamp with time zone as added \
+                        from groups \
+                        where groups.id = any($3) \
+                        on conflict on constraint group_users_pkey do nothing \
+                        returning * \
+                    ) \
+                    select tmp_insert.groups_id, \
+                           groups.name, \
+                           tmp_insert.added \
+                    from tmp_insert \
+                        left join groups on \
+                            tmp_insert.groups_id = groups.id",
+                    params
+                )
+                    .await
+                    .context("failed to add groups to user")?
+            }
+            GroupRefId::Role(role_id) => {
+                let params: db::ParamsArray<'_, 3> = [role_id, &added, &groups];
+
+                conn.query_raw(
+                    "\
+                    with tmp_insert as ( \
+                        insert into group_roles (groups_id, role_id, added) \
+                        select groups.id as groups_id, \
+                               $1::bigint as role_id, \
+                               $2::timestamp with time zone as added \
+                        from groups \
+                        where groups.id = any($3) \
+                        on conflict on constraint group_roles_pkey do nothing \
+                        returning * \
+                    ) \
+                    select tmp_insert.groups_id, \
+                           groups.name, \
+                           tmp_insert.added \
+                    from tmp_insert \
+                        left join groups on \
+                            tmp_insert.groups_id = groups.id",
+                    params
+                )
+                    .await
+                    .context("failed to add groups to role")?
+            }
+        };
+
+        futures::pin_mut!(stream);
+
+        while let Some(result) = stream.next().await {
+            let record = result.context("failed to retrieve added group")?;
+            let groups_id = record.get(0);
+
+            if !requested.remove(&groups_id) {
+                tracing::warn!("a group was added that was not requested");
+            }
+
+            rtn.push(AttachedGroup {
+                groups_id,
+                name: record.get(1),
+                added: record.get(2),
+            });
         }
-        GroupRefId::Role(role_id) => {
-            let params: db::ParamsArray<'_, 3> = [role_id, &added, &groups];
-
-            conn.query_raw(
-                "\
-                with tmp_insert as ( \
-                    insert into group_roles (groups_id, role_id, added) \
-                    select groups.id as groups_id, \
-                           $1::bigint as role_id, \
-                           $2::timestamp with time zone as added \
-                    from groups \
-                    where groups.id = any($3) \
-                    on conflict on constraint group_roles_pkey do nothing \
-                    returning * \
-                ) \
-                select tmp_insert.groups_id, \
-                       groups.name, \
-                       tmp_insert.added \
-                from tmp_insert \
-                    left join groups on \
-                        tmp_insert.groups_id = groups.id",
-                params
-            )
-                .await
-                .context("failed to add groups to role")?
-        }
-    };
-
-    futures::pin_mut!(stream);
-
-    let mut rtn = Vec::new();
-
-    while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve added group")?;
-        let groups_id = record.get(0);
-
-        if !requested.remove(&groups_id) {
-            tracing::warn!("a group was added that was not requested");
-        }
-
-        current.remove(&groups_id);
-
-        rtn.push(AttachedGroup {
-            groups_id,
-            name: record.get(1),
-            added: record.get(2),
-        });
     }
 
     if !current.is_empty() {

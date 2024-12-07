@@ -307,34 +307,36 @@ uid_type!(RoleUid);
 
 id_type!(PermissionId);
 
+/// creates a list of unique ids from a given list
+///
+/// if a current dictionary of known ids is provided then it will create a list
+/// of known ids, unknown ids, and missing ids with current representing the
+/// missing ids.
 pub fn unique_ids<K, V>(
     ids: Vec<K>,
-    current: Option<&HashMap<K, V>>,
-) -> (HashSet<K>, Vec<K>, bool)
+    current: Option<&mut HashMap<K, V>>,
+) -> (HashSet<K>, Vec<K>, HashMap<K, V>)
 where
     K: std::cmp::Eq + std::hash::Hash + std::marker::Copy
 {
     let mut set = HashSet::with_capacity(ids.len());
     let mut list = Vec::with_capacity(ids.len());
+    let mut common = HashMap::new();
 
     if let Some(current) = current {
-        let mut diff = false;
+        common.reserve(current.len());
 
         for id in ids {
-            if set.insert(id) {
-                list.push(id);
-
-                if !current.contains_key(&id) {
-                    diff = true;
+            if let Some(record) = current.remove(&id) {
+                common.insert(id, record);
+            } else {
+                if set.insert(id) {
+                    list.push(id);
                 }
             }
         }
 
-        if set.len() != current.len() {
-            diff = true;
-        }
-
-        (set, list, diff)
+        (set, list, common)
     } else {
         for id in ids {
             if set.insert(id) {
@@ -342,6 +344,6 @@ where
             }
         }
 
-        (set, list, true)
+        (set, list, common)
     }
 }

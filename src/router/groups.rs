@@ -93,6 +93,11 @@ pub struct GroupPath {
     groups_id: GroupId,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MaybeGroupPath {
+    groups_id: Option<GroupId>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct GroupFull {
     id: GroupId,
@@ -152,8 +157,14 @@ pub async fn retrieve_group(
     state: state::SharedState,
     headers: HeaderMap,
     uri: Uri,
-    Path(GroupPath { groups_id }): Path<GroupPath>
+    Path(MaybeGroupPath { groups_id }): Path<MaybeGroupPath>
 ) -> Result<Response, error::Error> {
+    macros::res_if_html!(state.templates(), &headers);
+
+    let Some(groups_id) = groups_id else {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    };
+
     let conn = state.db_conn().await?;
 
     let initiator = macros::require_initiator!(
@@ -161,8 +172,6 @@ pub async fn retrieve_group(
         &headers,
         Some(uri.clone())
     );
-
-    macros::res_if_html!(state.templates(), &headers);
 
     let perm_check = authz::has_permission(
         &conn,

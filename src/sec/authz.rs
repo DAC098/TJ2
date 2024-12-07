@@ -564,7 +564,7 @@ where
     }
 
     let added = Utc::now();
-    let (mut requested, roles, _diff) = db::ids::unique_ids::<RoleId, ()>(roles, None);
+    let (mut requested, roles, _common) = db::ids::unique_ids::<RoleId, ()>(roles, None);
 
     let stream = match id.into() {
         RefId::User(users_id) => {
@@ -597,7 +597,7 @@ where
 
             conn.query_raw(
                 "\
-                witn tmp_insert as ( \
+                with tmp_insert as ( \
                     insert into group_roles (role_id, groups_id, added) \
                     select authz_roles.id as role_id, \
                            $1::bigint as groups_id, \
@@ -655,6 +655,7 @@ where
         return Ok((AttachedRole::retrieve(conn, id).await?, Vec::new()));
     };
 
+    let added = Utc::now();
     let mut current: HashMap<RoleId, AttachedRole> = HashMap::new();
     let stream = AttachedRole::retrieve_stream(conn, id)
         .await
@@ -668,88 +669,82 @@ where
         current.insert(record.role_id, record);
     }
 
-    let (mut requested, roles, diff) = db::ids::unique_ids(roles, Some(&current));
+    let (mut requested, roles, common) = db::ids::unique_ids(roles, Some(&mut current));
 
-    if !diff {
-        return Ok((current.into_values().collect(), Vec::new()));
-    }
+    let mut rtn = Vec::from_iter(common.into_values());
 
-    let added = Utc::now();
+    if !requested.is_empty() {
+        let stream = match id {
+            RefId::User(users_id) => {
+                let params: db::ParamsArray<'_, 3> = [users_id, &added, &roles];
 
-    let stream = match id {
-        RefId::User(users_id) => {
-            let params: db::ParamsArray<'_, 3> = [users_id, &added, &roles];
+                conn.query_raw(
+                    "\
+                    with tmp_insert as ( \
+                        insert into user_roles (role_id, users_id, added) \
+                        select authz_roles.id, \
+                               $1::bigint as users_id, \
+                               $2::timestamp with time zone as added \
+                        from authz_roles \
+                        where authz_roles.id = any($3) \
+                        on conflict on constraint user_roles_pkey do nothing \
+                        returning * \
+                    ) \
+                    select tmp_insert.role_id, \
+                           authz_roles.name, \
+                           tmp_insert.added \
+                    from tmp_insert \
+                        left join authz_roles on \
+                            tmp_insert.role_id = authz_roles.id",
+                    params
+                )
+                    .await
+                    .context("failed to add roles to user")?
+            }
+            RefId::Group(groups_id) => {
+                let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
 
-            conn.query_raw(
-                "\
-                with tmp_insert as ( \
-                    insert into user_roles (role_id, users_id, added) \
-                    select authz_roles.id, \
-                           $1::bigint as users_id, \
-                           $2::timestamp with time zone as added \
-                    from authz_roles \
-                    where authz_roles.id = any($3) \
-                    on conflict on constraint user_roles_pkey do nothing \
-                    returning * \
-                ) \
-                select tmp_insert.role_id, \
-                       authz_roles.name, \
-                       tmp_insert.added \
-                from tmp_insert \
-                    left join authz_roles on \
-                        tmp_insert.role_id = authz_roles.id",
-                params
-            )
-                .await
-                .context("failed to add roles to user")?
+                conn.query_raw(
+                    "\
+                    with tmp_insert as ( \
+                        insert into group_roles (role_id, groups_id, added) \
+                        select authz_roles.id as role_id, \
+                               $1::bigint as groups_id, \
+                               $2::timestamp with time zone as added \
+                        from authz_roles \
+                        where authz_roles.id = any($3) \
+                        on conflict on constraint group_roles_pkey do nothing \
+                        returning * \
+                    ) \
+                    select tmp_insert.role_id, \
+                           authz_roles.name, \
+                           tmp_insert.added \
+                    from tmp_insert \
+                        left join authz_roles on \
+                            tmp_insert.role_id = authz_roles.id",
+                    params
+                )
+                    .await
+                    .context("failed to add roles to group")?
+            }
+        };
+
+        futures::pin_mut!(stream);
+
+        while let Some(result) = stream.next().await {
+            let record = result.context("failed to retrieve added role")?;
+            let role_id = record.get(0);
+
+            if !requested.remove(&role_id) {
+                tracing::warn!("a role was added that was not requested");
+            }
+
+            rtn.push(AttachedRole {
+                role_id,
+                name: record.get(1),
+                added: record.get(2),
+            });
         }
-        RefId::Group(groups_id) => {
-            let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
-
-            conn.query_raw(
-                "\
-                with tmp_insert as ( \
-                    insert into group_roles (role_id, groups_id, added) \
-                    select authz_roles.id as role_id, \
-                           $1::bigint as groups_id, \
-                           $2::timestamp with time zone as added \
-                    from authz_roles \
-                    where authz_roles.id = any($3) \
-                    on conflict on constraint group_roles_pkey do nothing \
-                    returning * \
-                ) \
-                select tmp_insert.role_id, \
-                       authz_roles.name, \
-                       tmp_insert.added \
-                from tmp_insert \
-                    left join authz_roles on \
-                        tmp_insert.role_id = authz_roles.id",
-                params
-            )
-                .await
-                .context("failed to add roles to group")?
-        }
-    };
-
-    futures::pin_mut!(stream);
-
-    let mut rtn = Vec::new();
-
-    while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve added role")?;
-        let role_id = record.get(0);
-
-        if !requested.remove(&role_id) {
-            tracing::warn!("a role was added that was not requested");
-        }
-
-        current.remove(&role_id);
-
-        rtn.push(AttachedRole {
-            role_id,
-            name: record.get(1),
-            added: record.get(2),
-        });
     }
 
     if !current.is_empty() {

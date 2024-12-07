@@ -88,6 +88,7 @@ pub fn build(state: &state::SharedState) -> Router {
             .delete(users::delete_user))
         .route("/groups", get(groups::retrieve_groups)
             .post(groups::create_group))
+        .route("/groups/new", get(groups::retrieve_group))
         .route("/groups/:groups_id", get(groups::retrieve_group)
             .patch(groups::update_group)
             .delete(groups::delete_group))
