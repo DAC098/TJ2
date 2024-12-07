@@ -436,12 +436,9 @@ pub async fn update_role(
         ).into_response());
     }
 
-    transaction.rollback()
+    transaction.commit()
         .await
-        .context("failed to rollback transaction")?;
-    //transaction.commit()
-    //    .await
-    //    .context("failed to commit transaction")?;
+        .context("failed to commit transaction")?;
 
     Ok(StatusCode::OK.into_response())
 }
@@ -540,6 +537,10 @@ async fn create_permissions(
     let unique = unique_permissions(permissions);
     let mut rtn = Vec::new();
 
+    if unique.is_empty() {
+        return Ok(rtn);
+    }
+
     let mut first = true;
     let mut params: db::ParamsVec<'_> = vec![&role.id, &added];
     let mut query = String::from(
@@ -609,51 +610,53 @@ async fn update_permissions(
 
     let added = Utc::now();
     let unique = unique_permissions(permissions);
-
     let mut rtn = Vec::new();
-    let mut first = true;
-    let mut params: db::ParamsVec<'_> = vec![&role.id, &added];
-    let mut query = String::from(
-        "insert into authz_permissions (role_id, scope, ability, added) values "
-    );
 
-    for (scope, abilities) in &unique {
-        let scope_index = db::push_param(&mut params, scope);
+    if !unique.is_empty() {
+        let mut first = true;
+        let mut params: db::ParamsVec<'_> = vec![&role.id, &added];
+        let mut query = String::from(
+            "insert into authz_permissions (role_id, scope, ability, added) values "
+        );
 
-        let mut known_scope = current.get_mut(scope);
+        for (scope, abilities) in &unique {
+            let scope_index = db::push_param(&mut params, scope);
 
-        for ability in abilities {
-            if first {
-                first = false;
-            } else {
-                query.push_str(", ");
+            let mut known_scope = current.get_mut(scope);
+
+            for ability in abilities {
+                if first {
+                    first = false;
+                } else {
+                    query.push_str(", ");
+                }
+
+                if let Some(abilities) = &mut known_scope {
+                    abilities.remove(ability);
+                }
+
+                write!(
+                    &mut query,
+                    "($1, ${scope_index}, ${}, $2)",
+                    db::push_param(&mut params, ability)
+                ).unwrap();
+
+                rtn.push(AttachedPermission {
+                    scope: scope.clone(),
+                    ability: ability.clone(),
+                    added
+                });
             }
-
-            if let Some(abilities) = &mut known_scope {
-                abilities.remove(ability);
-            }
-
-            write!(
-                &mut query,
-                "($1, ${scope_index}, ${}, $2)",
-                db::push_param(&mut params, ability)
-            ).unwrap();
-
-            rtn.push(AttachedPermission {
-                scope: scope.clone(),
-                ability: ability.clone(),
-                added
-            });
         }
-    }
 
-    tracing::debug!("current permissions: {current:#?}");
+        tracing::debug!("current permissions: {current:#?}");
 
-    tracing::debug!("insert sql: {query}");
+        tracing::debug!("insert sql: {query}");
 
-    let result = conn.execute(query.as_str(), params.as_slice())
-        .await
-        .context("failed in to insert updated psermissions")?;
+        let result = conn.execute(query.as_str(), params.as_slice())
+            .await
+            .context("failed in to insert updated psermissions")?;
+    };
 
     if !current.is_empty() {
         let mut id_list = Vec::new();

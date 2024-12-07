@@ -78,6 +78,7 @@ const AdministrativeGroup = () => {
             <SidebarMenu>
                 <MenuOption title="Users" path="/users"/>
                 <MenuOption title="Groups" path="/groups"/>
+                <MenuOption title="Roles" path="/roles"/>
             </SidebarMenu>
         </SidebarGroupContent>
     </SidebarGroup>
