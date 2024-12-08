@@ -95,6 +95,11 @@ pub struct RolePath {
     role_id: RoleId
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MaybeRolePath {
+    role_id: Option<RoleId>
+}
+
 #[derive(Debug, Serialize)]
 pub struct RoleFull {
     id: RoleId,
@@ -197,8 +202,14 @@ pub async fn retrieve_role(
     state: state::SharedState,
     headers: HeaderMap,
     uri: Uri,
-    Path(RolePath { role_id }): Path<RolePath>
+    Path(MaybeRolePath { role_id }): Path<MaybeRolePath>
 ) -> Result<Response, error::Error> {
+    macros::res_if_html!(state.templates(), &headers);
+
+    let Some(role_id) = role_id else {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    };
+
     let conn = state.db_conn().await?;
 
     let initiator = macros::require_initiator!(
@@ -206,8 +217,6 @@ pub async fn retrieve_role(
         &headers,
         Some(uri.clone())
     );
-
-    macros::res_if_html!(state.templates(), &headers);
 
     let perm_check = authz::has_permission(
         &conn,
@@ -547,7 +556,13 @@ async fn create_permissions(
         "insert into authz_permissions (role_id, scope, ability, added) values "
     );
 
+    tracing::debug!("unique permissions: {unique:#?}");
+
     for (scope, abilities) in &unique {
+        if abilities.is_empty() {
+            continue;
+        }
+
         let scope_index = db::push_param(&mut params, scope);
 
         for ability in abilities {
@@ -571,6 +586,8 @@ async fn create_permissions(
         }
     }
 
+    tracing::debug!("permissions query: {query}");
+    
     conn.execute(query.as_str(), params.as_slice())
         .await
         .context("failed to insert permissions")?;

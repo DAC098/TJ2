@@ -94,6 +94,7 @@ pub fn build(state: &state::SharedState) -> Router {
             .delete(groups::delete_group))
         .route("/roles", get(roles::retrieve_roles)
             .post(roles::create_role))
+        .route("/roles/new", get(roles::retrieve_role))
         .route("/roles/:role_id", get(roles::retrieve_role)
             .patch(roles::update_role)
             .delete(roles::delete_role))

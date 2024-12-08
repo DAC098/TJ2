@@ -14,6 +14,7 @@ import {
     FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import {
     Sheet,
@@ -120,9 +121,73 @@ interface AttachedPermission {
 
 interface RoleForm {
     name: string,
-    permissions: AttachedPermission[],
+    permissions: RolePermissions,
     users: AttachedUser[],
     groups: AttachedGroup[],
+}
+
+interface RolePermissions {
+    journals: Abilities,
+    entries: Abilities,
+    users: Abilities,
+    groups: Abilities,
+    roles: Abilities,
+}
+
+interface Abilities {
+    create: boolean,
+    read: boolean,
+    update: boolean,
+    delete: boolean,
+}
+
+function role_to_form(role: RoleFull): RoleForm {
+    let rtn = {
+        name: role.name,
+        permissions: {
+            journals: abilities_object(),
+            entries: abilities_object(),
+            users: abilities_object(),
+            groups: abilities_object(),
+            roles: abilities_object(),
+        },
+        users: role.users,
+        groups: role.groups,
+    };
+
+    for (let perm of role.permissions) {
+        if (perm.scope in rtn.permissions && perm.ability in rtn.permissions[perm.scope]) {
+            rtn.permissions[perm.scope][perm.ability] = true;
+        } else {
+            console.log("permission not in permissions object");
+        }
+    }
+
+    return rtn;
+}
+
+function blank_form(): RoleForm {
+    return {
+        name: "",
+        permissions: {
+            journals: abilities_object(),
+            entries: abilities_object(),
+            users: abilities_object(),
+            groups: abilities_object(),
+            roles: abilities_object(),
+        },
+        users: [],
+        groups: [],
+    };
+}
+
+function abilities_object(): Abilities {
+    return {
+        create: false,
+        read: false,
+        update: false,
+        delete: false,
+    };
 }
 
 async function get_role(role_id: string) {
@@ -169,6 +234,36 @@ function RoleHeader({role_id, on_delete}: RoleHeaderProps) {
     </div>;
 }
 
+function form_to_body(form: RoleForm) {
+    let rtn = {
+        name: form.name,
+        permissions: [],
+        users: form.users.map(attached => {
+            return attached.users_id;
+        }),
+        groups: form.groups.map(attached => {
+            return attached.groups_id
+        }),
+    };
+
+    for (let key in form.permissions) {
+        let abilities = [];
+
+        for (let ability in form.permissions[key]) {
+            if (form.permissions[key][ability]) {
+                abilities.push(ability);
+            }
+        }
+
+        rtn.permissions.push({
+            scope: key,
+            abilities,
+        });
+    }
+
+    return rtn;
+}
+
 export function Role() {
     const { role_id } = useParams();
     const navigate = useNavigate();
@@ -179,45 +274,26 @@ export function Role() {
 
     const form = useForm<RoleForm>({
         defaultValues: async () => {
-            let rtn = {
-                name: "",
-                permissions: [],
-                users: [],
-                groups: [],
-            };
-
             if (role_id === "new") {
-                return rtn;
+                return blank_form();
             }
 
             try {
                 let result = await get_role(role_id);
 
                 if (result != null) {
-                    rtn.name = result.name;
-                    rtn.permissions = result.permissions;
-                    rtn.users = result.users;
-                    rtn.groups = result.groups;
+                    return role_to_form(result);
                 }
             } catch (err) {
                 console.error("failed to retrieve role", err);
             }
 
-            return rtn;
+            return blank_form();
         }
     });
 
     const create_role = async (data: RoleForm) => {
-        let body = JSON.stringify({
-            name: data.name,
-            permissions: [],
-            users: data.users.map(attached => {
-                return attached.users_id;
-            }),
-            groups: data.groups.map(attached => {
-                return attached.groups_id;
-            }),
-        });
+        let body = JSON.stringify(form_to_body(data));
 
         let res = await fetch("/roles", {
             method: "POST",
@@ -248,16 +324,7 @@ export function Role() {
     };
 
     const update_role = async (role_id: string, data: RoleForm) => {
-        let body = JSON.stringify({
-            name: data.name,
-            permissions: [],
-            users: data.users.map(attached => {
-                return attached.users_id;
-            }),
-            groups: data.groups.map(attached => {
-                return attached.groups_id;
-            }),
-        });
+        let body = JSON.stringify(form_to_body(data));
 
         let res = await fetch(`/roles/${role_id}`, {
             method: "PATCH",
@@ -299,12 +366,7 @@ export function Role() {
                     return;
                 }
 
-                form.reset({
-                    name: created.name,
-                    permissions: created.permissions,
-                    users: created.users,
-                    groups: created.groups,
-                });
+                form.reset(role_to_form(created));
 
                 navigate(`/roles/${created.id}`);
             } catch (err) {
@@ -362,6 +424,11 @@ export function Role() {
                 <RoleHeader role_id={role_id} on_delete={delete_role}/>
                 <Separator/>
                 Permissions
+                <PermissionGroup id="journals" title="Journals"/>
+                <PermissionGroup id="entries" title="Entries"/>
+                <PermissionGroup id="users" title="Users"/>
+                <PermissionGroup id="groups" title="Groups"/>
+                <PermissionGroup id="roles" title="Roles"/>
                 <Separator/>
                 <div className="flex flex-row gap-x-4">
                     <UserList />
@@ -370,6 +437,67 @@ export function Role() {
             </form>
         }/>
 
+    </div>;
+}
+
+interface PermissionGroupProps {
+    id: string,
+    title: string,
+    description?: string
+}
+
+function PermissionGroup({id, title, description}: PermissionGroupProps) {
+    let form = useFormContext();
+
+    return <div className="space-y-4">
+        <FormLabel>{title}</FormLabel>
+        {description ?
+            <FormDescription>{description}</FormDescription>
+            :
+            null
+        }
+        <div className="flex flex-row gap-4">
+            <FormField control={form.control} name={`permissions.${id}.create`} render={({ field }) => {
+                let {value, onChange, ...rest} = field;
+
+                return <FormItem className="flex flex-row items-center space-y-0 space-x-2">
+                    <FormControl>
+                        <Checkbox checked={value} onCheckedChange={onChange} {...rest}/>
+                    </FormControl>
+                    <FormLabel className="space-y-0 space-x-2">Create</FormLabel>
+                </FormItem>
+            }}/>
+            <FormField control={form.control} name={`permissions.${id}.read`} render={({ field }) => {
+                let {value, onChange, ...rest} = field;
+
+                return <FormItem className="flex flex-row items-center space-y-0 space-x-2">
+                    <FormControl>
+                        <Checkbox checked={value} onCheckedChange={onChange} {...rest}/>
+                    </FormControl>
+                    <FormLabel>Read</FormLabel>
+                </FormItem>
+            }}/>
+            <FormField control={form.control} name={`permissions.${id}.update`} render={({ field }) => {
+                let {value, onChange, ...rest} = field;
+
+                return <FormItem className="flex flex-row items-center space-y-0 space-x-2">
+                    <FormControl>
+                        <Checkbox checked={value} onCheckedChange={onChange} {...rest}/>
+                    </FormControl>
+                    <FormLabel>Update</FormLabel>
+                </FormItem>
+            }}/>
+            <FormField control={form.control} name={`permissions.${id}.delete`} render={({ field }) => {
+                let {value, onChange, ...rest} = field;
+
+                return <FormItem className="flex flex-row items-center space-y-0 space-x-2">
+                    <FormControl>
+                        <Checkbox checked={value} onCheckedChange={onChange} {...rest}/>
+                    </FormControl>
+                    <FormLabel>Delete</FormLabel>
+                </FormItem>
+            }}/>
+        </div>
     </div>;
 }
 

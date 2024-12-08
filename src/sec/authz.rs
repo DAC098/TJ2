@@ -18,6 +18,7 @@ use crate::user::{User, Group};
 pub struct InvalidAbility;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Ability {
     Create,
     Read,
@@ -86,6 +87,7 @@ impl pg_types::ToSql for Ability {
 pub struct InvalidScope;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Scope {
     Users,
     Groups,
