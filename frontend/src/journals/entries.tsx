@@ -1,12 +1,10 @@
 import { format } from "date-fns";
-import { CalendarIcon, Trash, Save } from "lucide-react";
 import { useState, useEffect, JSX } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
+import { Plus, CalendarIcon, Trash, Save, ArrowLeft } from "lucide-react";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Calendar } from "@/components/ui/calendar";
 import {
     FormControl,
@@ -16,15 +14,23 @@ import {
     FormLabel,
     FormMessage,
 } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { CenterPage } from "@/components/ui/page";
 import {
     Popover,
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn } from "@/utils";
-import TagEntry from "@/Entry/TagEntry";
-import FileEntry from "@/Entry/FileEntry";
 import {
+    DataTable,
+    ColumnDef,
+} from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/utils";
+import TagEntry from "@/journals/TagEntry";
+import FileEntry from "@/journals/FileEntry";
+import {
+    EntryPartial,
     JournalEntry,
     JournalTag,
     EntryFileForm,
@@ -38,7 +44,88 @@ import {
     update_entry,
     delete_entry,
     upload_data,
-} from "@/journal";
+} from "@/journals/api";
+
+async function retrieve_entries(journals_id: string) {
+    let res = await fetch(`/journals/${journals_id}/entries`);
+
+    if (res.status !== 200) {
+        return null;
+    }
+
+    return await res.json() as EntryPartial[];
+}
+
+export function Entries() {
+    const { journals_id } = useParams();
+
+    let [loading, setLoading] = useState(false);
+    let [entries, setEntries] = useState<EntryPartial[]>([]);
+
+    useEffect(() => {
+        console.log("loading entries");
+
+        setLoading(true);
+
+        retrieve_entries(journals_id).then(json => {
+            setEntries(() => {
+                return json;
+            });
+        }).catch(err => {
+            console.error("failed to retrieve entries:", err);
+        }).finally(() => {
+            setLoading(false);
+        });
+    }, []);
+
+    const columns: ColumnDef<EntryPartial>[] = [
+        {
+            accessorKey: "date",
+            header: "Date",
+            cell: ({ row }) => {
+                return <Link to={`/journals/${journals_id}/entries/${row.original.id}`}>{row.original.date}</Link>;
+            }
+        },
+        {
+            accessorKey: "title",
+            header: "Title",
+        },
+        {
+            accessorKey: "tags",
+            header: "Tags",
+            cell: ({ row }) => {
+                let list = [];
+
+                for (let tag in row.original.tags) {
+                    list.push(<span key={tag}>{tag}</span>);
+                }
+
+                return <>{list}</>;
+            }
+        },
+        {
+            accessorKey: "mod",
+            header: "Mod",
+            cell: ({ row }) => {
+                return row.original.updated != null ? row.original.updated : row.original.created;
+            }
+        }
+    ];
+
+    return <CenterPage>
+        <div className="flex flex-row flex-nowrap gap-x-4">
+            <Link to="/journals">
+                <Button type="button" variant="ghost" size="icon">
+                    <ArrowLeft/>
+                </Button>
+            </Link>
+            <Link to={`/journals/${journals_id}/entries/new`}>
+                <Button type="button">New Entry<Plus/></Button>
+            </Link>
+        </div>
+        <DataTable columns={columns} data={entries}/>
+    </CenterPage>
+};
 
 interface EntrySecProps {
     title: JSX.Element,
@@ -61,15 +148,21 @@ const EntrySecTitle = ({title}: EntrySecTitleProps) => {
 };
 
 interface EntryHeaderProps {
+    journals_id: string,
     entries_id: string,
     loading: boolean
 }
 
-const EntryHeader = ({entries_id, loading}: EntryHeaderProps) => {
+function EntryHeader({journals_id, entries_id, loading}: EntryHeaderProps) {
     const navigate = useNavigate();
     const form = useFormContext<EntryForm>();
 
     return <div className="top-0 sticky flex flex-row flex-nowrap gap-x-4">
+        <Link to={`/journals/${journals_id}/entries`}>
+            <Button type="button" variant="ghost" size="icon">
+                <ArrowLeft/>
+            </Button>
+        </Link>
         <FormField control={form.control} name="date" render={({field}) => {
             return <FormItem>
                 <Popover>
@@ -103,10 +196,8 @@ const EntryHeader = ({entries_id, loading}: EntryHeaderProps) => {
         <Button type="submit" disabled={loading}>Save<Save/></Button>
         {entries_id != null && entries_id !== "new" ?
             <Button type="button" variant="destructive" disabled={loading} onClick={() => {
-                delete_entry(entries_id).then(() => {
-                    console.log("deleted entry");
-
-                    navigate("/entries");
+                delete_entry(journals_id, entries_id).then(() => {
+                    navigate(`/journals/${journals_id}/entries`);
                 }).catch(err => {
                     console.error("failed to delete journal entry:", err);
                 });
@@ -133,7 +224,10 @@ function create_file_map(files: EntryFileForm[]): EntryFileFormMap {
     return rtn;
 }
 
-async function parallel_uploads(entry_form: EntryForm, entry: JournalEntry): Promise<EntryFileForm[]> {
+async function parallel_uploads(
+    entry_form: EntryForm,
+    entry: JournalEntry,
+): Promise<EntryFileForm[]> {
     let mapped = create_file_map(entry_form.files);
     let to_upload = [];
     let uploaders = [];
@@ -172,7 +266,12 @@ async function parallel_uploads(entry_form: EntryForm, entry: JournalEntry): Pro
                 console.log("uploader:", index, "sending file:", file_entry.id);
 
                 try {
-                    let successful = await upload_data(entry.id, file_entry, ref);
+                    let successful = await upload_data(
+                        entry.journals_id,
+                        entry.id,
+                        file_entry,
+                        ref
+                    );
 
                     if (successful) {
                         console.log("file uploaded");
@@ -197,8 +296,8 @@ async function parallel_uploads(entry_form: EntryForm, entry: JournalEntry): Pro
     return failed;
 }
 
-function Entry() {
-    const { entries_id } = useParams();
+export function Entry() {
+    const { journals_id, entries_id } = useParams();
     const navigate = useNavigate();
 
     const form = useForm<EntryForm>({
@@ -210,7 +309,7 @@ function Entry() {
             }
 
             try {
-                let entry = await retrieve_entry(entries_id);
+                let entry = await retrieve_entry(journals_id, entries_id);
 
                 rtn = entry_to_form(entry);
             } catch (err) {
@@ -223,7 +322,7 @@ function Entry() {
     });
 
     const create_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
-        let result = await create_entry(entry);
+        let result = await create_entry(journals_id, entry);
 
         if (result.files.length === 0) {
             return [result, []];
@@ -235,7 +334,7 @@ function Entry() {
     };
 
     const update_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
-        let result = await update_entry(entries_id, entry);
+        let result = await update_entry(journals_id, entries_id, entry);
 
         if (result.files.length === 0) {
             return [result, []];
@@ -256,7 +355,7 @@ function Entry() {
                 if (failed.length === 0) {
                     form.reset(entry_to_form(result));
 
-                    navigate(`/entries/${result.id}`);
+                    navigate(`/journals/${journals_id}/entries/${result.id}`);
                 }
             } catch(err) {
                 console.error("failed to create entry:", err);
@@ -284,7 +383,11 @@ function Entry() {
     return <div className="max-w-3xl mx-auto my-auto">
         <FormProvider<EntryForm> {...form} children={
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                <EntryHeader entries_id={entries_id} loading={form.formState.isLoading || form.formState.isSubmitting}/>
+                <EntryHeader
+                    journals_id={journals_id}
+                    entries_id={entries_id}
+                    loading={form.formState.isLoading || form.formState.isSubmitting}
+                />
                 <FormField control={form.control} name="title" render={({field}) => {
                     return <FormItem className="w-2/4">
                         <FormLabel>Title</FormLabel>
@@ -307,5 +410,3 @@ function Entry() {
         }/>
     </div>
 };
-
-export default Entry;

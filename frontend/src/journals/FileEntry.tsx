@@ -12,10 +12,10 @@ import {
 } from "@/components/ui/form";
 import { uuidv4 } from "@/uuid";
 import { getUserMedia } from "@/media";
-import { EntryForm, LocalFile, timestamp_name } from "@/journal";
-import { RecordAudio, PlayAudio } from "@/Entry/audio";
-import { RecordVideo, PlayVideo } from "@/Entry/video";
-import { ViewImage } from "@/Entry/image";
+import { EntryForm, LocalFile, timestamp_name } from "@/journals/api";
+import { RecordAudio, PlayAudio } from "@/journals/audio";
+import { RecordVideo, PlayVideo } from "@/journals/video";
+import { ViewImage } from "@/journals/image";
 import { useObjectUrl } from "@/hooks";
 
 interface AddFileProps {

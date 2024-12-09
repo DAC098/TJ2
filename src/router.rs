@@ -22,7 +22,7 @@ pub mod macros;
 pub mod body;
 
 mod auth;
-mod entries;
+mod journals;
 mod users;
 mod groups;
 mod roles;
@@ -72,14 +72,7 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/login", get(auth::login)
             .post(auth::request_login))
         .route("/logout", post(auth::request_logout))
-        .route("/entries", get(entries::retrieve_entries)
-            .post(entries::create_entry))
-        .route("/entries/new", get(entries::retrieve_entry))
-        .route("/entries/:entries_id", get(entries::retrieve_entry)
-            .patch(entries::update_entry)
-            .delete(entries::delete_entry))
-        .route("/entries/:entries_id/:file_entry_id", get(entries::files::retrieve_file)
-            .put(entries::files::upload_file))
+        .nest("/journals", journals::build(state))
         .route("/users", get(users::retrieve_users)
             .post(users::create_user))
         .route("/users/new", get(users::retrieve_user))

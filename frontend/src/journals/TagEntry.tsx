@@ -10,7 +10,7 @@ import {
     FormItem,
     FormLabel,
 } from "@/components/ui/form";
-import { EntryForm } from "@/journal";
+import { EntryForm } from "@/journals/api";
 
 interface TagEntryProps {
     loading: boolean

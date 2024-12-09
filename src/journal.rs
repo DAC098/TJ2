@@ -27,26 +27,40 @@ pub struct Journal {
 }
 
 impl Journal {
-    pub async fn create(conn: &impl GenericClient, users_id: UserId, name: &str) -> Result<Self, PgError> {
+    pub async fn create(conn: &impl GenericClient, users_id: UserId, name: &str) -> Result<Option<Self>, PgError> {
         let uid = JournalUid::gen();
         let created = Utc::now();
 
-        conn.query_one(
+        let result = conn.query_one(
             "\
             insert into journals (uid, users_id, name, created) values \
             ($1, $2, $3, $4) \
             returning id",
             &[&uid, &users_id, &name, &created]
-        )
-            .await
-            .map(|row| Self {
+        ).await;
+
+        match result {
+            Ok(row) => Ok(Some(Self {
                 id: row.get(0),
                 uid,
                 users_id,
                 name: name.to_owned(),
                 created,
                 updated: None
-            })
+            })),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => if constraint == "journals_users_id_name_key" {
+                        Ok(None)
+                    } else {
+                        Err(err)
+                    },
+                    _ => Err(err)
+                }
+            } else {
+                Err(err)
+            }
+        }
     }
 
     pub async fn retrieve_default(conn: &impl GenericClient, users_id: UserId) -> Result<Option<Self>, PgError> {
@@ -62,6 +76,31 @@ impl Journal {
             where journals.name = 'default' and \
                   journals.users_id = $1",
             &[&users_id]
+        )
+            .await
+            .map(|maybe| maybe.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                users_id: row.get(2),
+                name: row.get(3),
+                created: row.get(4),
+                updated: row.get(5),
+            }))
+    }
+
+    pub async fn retrieve_id(conn: &impl GenericClient, journals_id: &JournalId, users_id: &UserId) -> Result<Option<Self>, PgError> {
+        conn.query_opt(
+            "\
+            select journals.id, \
+                   journals.uid, \
+                   journals.users_id, \
+                   journals.name, \
+                   journals.created, \
+                   journals.updated \
+            from journals \
+            where journals.id = $1 and \
+                  journals.users_id = $2",
+            &[journals_id, users_id]
         )
             .await
             .map(|maybe| maybe.map(|row| Self {
@@ -388,11 +427,23 @@ impl JournalDir {
         }
     }
 
-    pub async fn create(&self) -> Result<(), std::io::Error> {
+    pub async fn create_root_dir(&self) -> Result<PathBuf, std::io::Error> {
+        tokio::fs::create_dir(&self.root).await?;
+
+        Ok(self.root.clone())
+    }
+
+    pub async fn create_files_dir(&self) -> Result<PathBuf, std::io::Error> {
         let files_dir = self.root.join("files");
 
-        tokio::fs::create_dir(&self.root).await?;
         tokio::fs::create_dir(&files_dir).await?;
+
+        Ok(files_dir)
+    }
+
+    pub async fn create(&self) -> Result<(), std::io::Error> {
+        self.create_root_dir().await?;
+        self.create_files_dir().await?;
 
         Ok(())
     }

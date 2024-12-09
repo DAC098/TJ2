@@ -4,14 +4,14 @@ use axum::body::Body;
 use axum::extract::Path;
 use axum::http::{StatusCode, HeaderMap};
 use axum::response::{IntoResponse, Response};
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use futures::StreamExt;
 use serde::Deserialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
 use crate::state;
-use crate::db::ids::{EntryId, FileEntryId};
+use crate::db::ids::{JournalId, EntryId, FileEntryId};
 use crate::error::{self, Context};
 use crate::fs::FileUpdater;
 use crate::journal::{Journal, FileEntry};
@@ -23,6 +23,7 @@ use super::auth;
 
 #[derive(Debug, Deserialize)]
 pub struct FileEntryPath {
+    journals_id: JournalId,
     entries_id: EntryId,
     file_entry_id: FileEntryId,
 }
@@ -30,13 +31,17 @@ pub struct FileEntryPath {
 pub async fn retrieve_file(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(FileEntryPath { entries_id, file_entry_id }): Path<FileEntryPath>,
+    Path(FileEntryPath {
+        journals_id,
+        entries_id,
+        file_entry_id
+    }): Path<FileEntryPath>,
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
     let initiator = macros::require_initiator!(&conn, &headers, None::<&'static str>);
 
-    let result = Journal::retrieve_default(&conn, initiator.user.id)
+    let result = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -76,7 +81,11 @@ pub async fn retrieve_file(
 pub async fn upload_file(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(FileEntryPath { entries_id, file_entry_id }): Path<FileEntryPath>,
+    Path(FileEntryPath {
+        journals_id,
+        entries_id,
+        file_entry_id,
+    }): Path<FileEntryPath>,
     stream: Body
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
@@ -86,7 +95,7 @@ pub async fn upload_file(
 
     let initiator = macros::require_initiator!(&transaction, &headers, None::<&'static str>);
 
-    let result = Journal::retrieve_default(&transaction, initiator.user.id)
+    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 

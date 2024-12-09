@@ -75,7 +75,8 @@ pub async fn create_journal(
 ) -> Result<(), Error> {
     let journal = Journal::create(conn, users_id, "default")
         .await
-        .context("failed to create journal for test user")?;
+        .context("failed to create journal for test user")?
+        .context("journal already exists for this user")?;
 
     let journal_dir = state.storage()
         .journal_dir(&journal);

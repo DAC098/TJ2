@@ -5,12 +5,11 @@ import {
     SidebarTrigger,
 } from "@/components/ui/sidebar";
 
-import Entries from "@/Entries";
-import Entry from "@/Entry";
 import { Groups, Group } from "@/groups";
 import { Roles, Role } from "@/roles";
 import { AppSidebar } from "@/sidebar";
 import { Users, User } from "@/users";
+import { JournalRoutes } from "@/journals";
 
 function App() {
     return <div className="flex flex-row flex-nowrap w-full h-full">
@@ -20,8 +19,7 @@ function App() {
                 <div className="pt-2 pr-2 pl-2">
                     <Routes>
                         <Route path="/" element={<div>root page</div>}/>
-                        <Route path="/entries" element={<Entries />}/>
-                        <Route path="/entries/:entries_id" element={<Entry />}/>
+                        <Route path="/journals/*" element={<JournalRoutes />}/>
                         <Route path="/users" element={<Users />}/>
                         <Route path="/users/:users_id" element={<User />}/>
                         <Route path="/groups" element={<Groups />}/>

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use axum::extract::{Path, Request};
+use axum::extract::Path;
 use axum::http::{StatusCode, Uri, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
@@ -22,6 +22,23 @@ mod auth;
 
 pub mod files;
 
+#[derive(Debug, Deserialize)]
+pub struct JournalPath {
+    journals_id: JournalId,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MaybeEntryPath {
+    journals_id: JournalId,
+    entries_id: Option<EntryId>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EntryPath {
+    journals_id: JournalId,
+    entries_id: EntryId,
+}
+
 #[derive(Debug, Serialize)]
 pub struct EntryPartial {
     pub id: EntryId,
@@ -37,19 +54,21 @@ pub struct EntryPartial {
 
 pub async fn retrieve_entries(
     state: state::SharedState,
-    req: Request,
+    uri: Uri,
+    headers: HeaderMap,
+    Path(JournalPath { journals_id }): Path<JournalPath>,
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
     let initiator = macros::require_initiator!(
         &conn,
-        req.headers(),
-        Some(req.uri().clone())
+        &headers,
+        Some(uri.clone())
     );
 
-    macros::res_if_html!(state.templates(), req.headers());
+    macros::res_if_html!(state.templates(), &headers);
 
-    let result = Journal::retrieve_default(&conn, initiator.user.id)
+    let result = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -155,21 +174,11 @@ pub async fn retrieve_entries(
     Ok(body::Json(found).into_response())
 }
 
-#[derive(Debug, Deserialize)]
-pub struct MaybeEntryPath {
-    entries_id: Option<EntryId>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EntryPath {
-    entries_id: EntryId,
-}
-
 pub async fn retrieve_entry(
     state: state::SharedState,
     uri: Uri,
     headers: HeaderMap,
-    Path(MaybeEntryPath { entries_id}): Path<MaybeEntryPath>,
+    Path(MaybeEntryPath { journals_id, entries_id }): Path<MaybeEntryPath>,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
@@ -181,7 +190,7 @@ pub async fn retrieve_entry(
 
     let initiator = macros::require_initiator!(&conn, &headers, Some(uri));
 
-    let result = Journal::retrieve_default(&conn, initiator.user.id)
+    let result = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -294,6 +303,7 @@ fn opt_non_empty_str(given: Option<String>) -> Option<String> {
 pub async fn create_entry(
     state: state::SharedState,
     headers: HeaderMap,
+    Path(JournalPath { journals_id }): Path<JournalPath>,
     body::Json(json): body::Json<NewEntryBody>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
@@ -303,7 +313,7 @@ pub async fn create_entry(
 
     let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
 
-    let result = Journal::retrieve_default(&transaction, initiator.user.id)
+    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -431,7 +441,7 @@ pub async fn create_entry(
 pub async fn update_entry(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(EntryPath { entries_id }): Path<EntryPath>,
+    Path(EntryPath { journals_id, entries_id }): Path<EntryPath>,
     body::Json(json): body::Json<UpdatedEntryBody>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
@@ -440,7 +450,8 @@ pub async fn update_entry(
         .context("failed to create transaction")?;
 
     let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
-    let result = Journal::retrieve_default(&transaction, initiator.user.id)
+
+    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
@@ -552,7 +563,7 @@ pub async fn update_entry(
     let mut removed_files = RemovedFiles::new();
 
     let files = {
-        let mut journal_dir = state.storage()
+        let journal_dir = state.storage()
             .journal_dir(&journal);
         let mut files = Vec::new();
         let mut new_files = Vec::new();
@@ -710,7 +721,7 @@ pub async fn update_entry(
 pub async fn delete_entry(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(EntryPath { entries_id }): Path<EntryPath>,
+    Path(EntryPath { journals_id, entries_id }): Path<EntryPath>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
     let transaction = conn.transaction()
@@ -718,7 +729,8 @@ pub async fn delete_entry(
         .context("failed to create transaction")?;
 
     let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
-    let result = Journal::retrieve_default(&transaction, initiator.user.id)
+
+    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 

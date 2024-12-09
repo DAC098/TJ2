@@ -65,7 +65,7 @@ const JournalGroup = () => {
         <SidebarGroupLabel>Journals</SidebarGroupLabel>
         <SidebarGroupContent>
             <SidebarMenu>
-                <MenuOption title="Default" path="/entries"/>
+                <MenuOption title="All Journals" path="/journals"/>
             </SidebarMenu>
         </SidebarGroupContent>
     </SidebarGroup>

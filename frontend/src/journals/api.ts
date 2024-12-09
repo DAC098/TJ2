@@ -1,4 +1,34 @@
-import { res_as_json } from "./net";
+import { res_as_json } from "@/net";
+
+export interface JournalPartial {
+    id: number,
+    uid: string,
+    users_id: number,
+    name: string,
+    created: string,
+    updated: string | null
+}
+
+export interface JournalFull {
+    id: number,
+    uid: string,
+    users_id: number,
+    name: string,
+    created: string,
+    updated: string | null
+}
+
+export interface EntryPartial {
+    id: number,
+    date: string,
+    created: string,
+    updated: string | null,
+    tags: TagsPartial
+}
+
+export interface TagsPartial {
+    [key: string]: string | null
+}
 
 export interface JournalEntry {
     id: number,
@@ -193,8 +223,31 @@ export function get_date(date: Date): string {
     return `${date.getFullYear()}-${month}-${day}`;
 }
 
-export async function retrieve_entry(entries_id: string): Promise<JournalEntry | null> {
-    let res = await fetch(`/entries/${entries_id}`);
+export async function get_journals() {
+    let res = await fetch("/journals");
+
+    if (res.status !== 200) {
+        return null;
+    }
+
+    return await res.json() as JournalPartial[];
+}
+
+export async function get_journal(journals_id: string) {
+    let res = await fetch(`/journals/${journals_id}`);
+
+    if (res.status !== 200) {
+        return null;
+    }
+
+    return await res.json() as JournalFull;
+}
+
+export async function retrieve_entry(
+    journals_id: string,
+    entries_id: string,
+): Promise<JournalEntry | null> {
+    let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`);
 
     if (res.status === 404) {
         return null;
@@ -207,7 +260,10 @@ export async function retrieve_entry(entries_id: string): Promise<JournalEntry |
     return await res_as_json<JournalEntry>(res);
 }
 
-export async function create_entry(entry: EntryForm) {
+export async function create_entry(
+    journals_id: string,
+    entry: EntryForm,
+) {
     console.log("given entry:", entry);
 
     let sending = {
@@ -233,7 +289,7 @@ export async function create_entry(entry: EntryForm) {
     }
 
     let body = JSON.stringify(sending);
-    let res = await fetch("/entries", {
+    let res = await fetch(`/journals/${journals_id}/entries`, {
         method: "POST",
         headers: {
             "content-type": "application/json",
@@ -249,7 +305,11 @@ export async function create_entry(entry: EntryForm) {
     return await res_as_json<JournalEntry>(res);
 }
 
-export async function update_entry(entries_id: string, entry: EntryForm) {
+export async function update_entry(
+    journals_id: string,
+    entries_id: string,
+    entry: EntryForm,
+) {
     let sending = {
         date: get_date(entry.date),
         title: entry.title,
@@ -273,7 +333,7 @@ export async function update_entry(entries_id: string, entry: EntryForm) {
     }
 
     let body = JSON.stringify(sending);
-    let res = await fetch(`/entries/${entries_id}`, {
+    let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`, {
         method: "PATCH",
         headers: {
             "content-type": "application/json",
@@ -289,8 +349,11 @@ export async function update_entry(entries_id: string, entry: EntryForm) {
     return await res_as_json<JournalEntry>(res);
 }
 
-export async function delete_entry(entries_id: string) {
-    let res = await fetch(`/entries/${entries_id}`, {
+export async function delete_entry(
+    journals_id: string,
+    entries_id: string,
+) {
+    let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`, {
         method: "DELETE"
     });
 
@@ -300,12 +363,13 @@ export async function delete_entry(entries_id: string) {
 }
 
 export async function upload_data(
+    journals_id: number,
     entries_id: number,
     file_entry: JournalFile,
     ref: LocalFile | InMemoryFile | ServerFile,
 ): Promise<boolean> {
     try {
-        let path = `/entries/${entries_id}/${file_entry.id}`;
+        let path = `/journals/${journals_id}/entries/${entries_id}/${file_entry.id}`;
 
         console.log(ref);
 
