@@ -11,7 +11,7 @@ use crate::state;
 use crate::db;
 use crate::db::ids::{JournalId, JournalUid, UserId};
 use crate::error::{self, Context};
-use crate::journal::Journal;
+use crate::journal::{Journal, JournalCreateError, JournalUpdateError};
 use crate::router::body;
 use crate::router::macros;
 use crate::sec::authz::{self, Scope, Ability};
@@ -23,7 +23,8 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         .route("/", get(retrieve_journals)
             .post(create_journal))
         .route("/new", get(retrieve_journal))
-        .route("/:journals_id", get(retrieve_journal))
+        .route("/:journals_id", get(retrieve_journal)
+            .patch(update_journal))
         .route("/:journals_id/entries", get(entries::retrieve_entries)
             .post(entries::create_entry))
         .route("/:journals_id/entries/new", get(entries::retrieve_entry))
@@ -40,6 +41,7 @@ pub struct JournalPartial {
     pub uid: JournalUid,
     pub users_id: UserId,
     pub name: String,
+    pub description: Option<String>,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
 }
@@ -84,6 +86,7 @@ async fn retrieve_journals(
                search_journals.uid, \
                search_journals.users_id, \
                search_journals.name, \
+               search_journals.description, \
                search_journals.created, \
                search_journals.updated \
         from search_journals \
@@ -105,8 +108,9 @@ async fn retrieve_journals(
             uid: record.get(1),
             users_id: record.get(2),
             name: record.get(3),
-            created: record.get(4),
-            updated: record.get(5),
+            description: record.get(4),
+            created: record.get(5),
+            updated: record.get(6),
         });
     }
 
@@ -129,6 +133,7 @@ pub struct JournalFull {
     pub uid: JournalUid,
     pub users_id: UserId,
     pub name: String,
+    pub description: Option<String>,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
 }
@@ -175,6 +180,7 @@ async fn retrieve_journal(
         uid: journal.uid,
         users_id: journal.users_id,
         name: journal.name,
+        description: journal.description,
         created: journal.created,
         updated: journal.updated,
     }).into_response())
@@ -182,7 +188,8 @@ async fn retrieve_journal(
 
 #[derive(Debug, Deserialize)]
 pub struct NewJournal {
-    name: String
+    name: String,
+    description: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -217,15 +224,31 @@ async fn create_journal(
         return Ok(StatusCode::UNAUTHORIZED.into_response());
     }
 
-    let result = Journal::create(&transaction, initiator.user.id, &json.name)
-        .await
-        .context("failed to create new journal")?;
+    let mut options = Journal::create_options(initiator.user.id, json.name);
 
-    let Some(journal) = result else {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            body::Json(NewJournalResult::NameExists)
-        ).into_response());
+    if let Some(description) = json.description {
+        options = options.description(description);
+    }
+
+    let result = Journal::create(&transaction, options).await;
+
+    let journal = match result {
+        Ok(journal) => journal,
+        Err(err) => match err {
+            JournalCreateError::NameExists => return Ok((
+                StatusCode::BAD_REQUEST,
+                body::Json(NewJournalResult::NameExists)
+            ).into_response()),
+            JournalCreateError::UserNotFound => return Err(
+                error::Error::context("specified user does not exist")
+            ),
+            JournalCreateError::Db(err) => return Err(
+                error::Error::context_source(
+                    "failed to create journal",
+                    err
+                )
+            ),
+        }
     };
 
     let journal_dir= state.storage()
@@ -273,7 +296,103 @@ async fn create_journal(
         uid: journal.uid,
         users_id: journal.users_id,
         name: journal.name,
+        description: journal.description,
         created: journal.created,
         updated: journal.updated,
     })).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateJournal {
+    name: Option<String>,
+    #[serde(default, deserialize_with = "crate::serde::nested_opt")]
+    description: Option<Option<String>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub enum UpdateJournalResult {
+    NameExists,
+    Updated,
+}
+
+async fn update_journal(
+    state: state::SharedState,
+    headers: HeaderMap,
+    Path(JournalPath { journals_id }): Path<JournalPath>,
+    body::Json(json): body::Json<UpdateJournal>,
+) -> Result<Response, error::Error> {
+    let mut conn = state.db_conn().await?;
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
+
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
+
+    let perm_check = authz::has_permission(
+        &transaction,
+        initiator.user.id,
+        Scope::Journals,
+        Ability::Update
+    )
+        .await
+        .context("failed to retrieve permission for user")?;
+
+    if !perm_check {
+        return Ok(StatusCode::UNAUTHORIZED.into_response());
+    }
+
+    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+        .await
+        .context("failed to retrieve journal")?;
+
+    let Some(mut journal) = result else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let mut changed = false;
+
+    if let Some(name) = json.name {
+        journal.name = name;
+
+        changed = true;
+    }
+
+    if let Some(description) = json.description {
+        journal.description = description;
+
+        changed = true;
+    }
+
+    if changed {
+        journal.updated = Some(Utc::now());
+
+        if let Err(err) = journal.update(&transaction).await {
+            match err {
+                JournalUpdateError::NameExists => return Ok((
+                    StatusCode::BAD_REQUEST,
+                    body::Json(UpdateJournalResult::NameExists)
+                ).into_response()),
+                JournalUpdateError::NotFound => return Err(
+                    error::Error::context(
+                        "attempted to update journal that no longer exists"
+                    )
+                ),
+                JournalUpdateError::Db(err) => return Err(
+                    error::Error::context_source(
+                        "failed to update journal",
+                        err
+                    )
+                )
+            }
+        }
+    }
+
+    transaction.commit()
+        .await
+        .context("failed to commit transaction")?;
+
+    Ok(body::Json(
+        UpdateJournalResult::Updated
+    ).into_response())
 }

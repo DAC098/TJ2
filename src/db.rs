@@ -10,7 +10,6 @@ use tokio_postgres::error::SqlState;
 
 use crate::config::Config;
 use crate::error::{Error, Context};
-use crate::journal::Journal;
 use crate::sec::authz::{Scope, Ability, Role};
 use crate::sec::password;
 use crate::state;
@@ -157,11 +156,14 @@ pub async fn gen_test_data(state: &state::SharedState) -> Result<(), Error> {
         .context("failed to check if admin user was found")?;
 
     if let Some(admin) = maybe_admin {
-        let default_check = Journal::retrieve_default(&transaction, admin.id)
+        let check = transaction.execute(
+            "select * from journals where id = $1",
+            &[&admin.id]
+        )
             .await
-            .context("failed to check for admin default journal")?;
+            .context("failed to retrieve journals for admin")?;
 
-        if default_check.is_none() {
+        if check == 0 {
             test_data::create_journal(
                 state,
                 &transaction,

@@ -78,6 +78,7 @@ create table journals (
     uid varchar not null unique,
     users_id bigint not null references users (id),
     name varchar not null,
+    description varchar,
     created timestamp with time zone not null,
     updated timestamp with time zone,
     unique (users_id, name)

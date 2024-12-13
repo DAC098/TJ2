@@ -7,6 +7,7 @@ use futures::stream::FuturesUnordered;
 use tokio::runtime::Builder;
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 
+mod serde;
 mod error;
 mod path;
 mod fs;

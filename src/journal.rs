@@ -16,76 +16,116 @@ use crate::db::ids::{
     UserId
 };
 
+#[derive(Debug, thiserror::Error)]
+pub enum JournalCreateError {
+    #[error("the given journal name already exists for this user")]
+    NameExists,
+
+    #[error("the specified user does not exist")]
+    UserNotFound,
+
+    #[error(transparent)]
+    Db(#[from] PgError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum JournalUpdateError {
+    #[error("the given journal name already exists for this user")]
+    NameExists,
+
+    #[error("the specified journal does not exist")]
+    NotFound,
+
+    #[error(transparent)]
+    Db(#[from] PgError),
+}
+
+#[derive(Debug)]
+pub struct JournalCreateOptions {
+    users_id: UserId,
+    name: String,
+    description: Option<String>,
+}
+
+impl JournalCreateOptions {
+    pub fn description<T>(mut self, value: T) -> Self
+    where
+        T: Into<String>
+    {
+        self.description = Some(value.into());
+        self
+    }
+}
+
 #[derive(Debug)]
 pub struct Journal {
     pub id: JournalId,
     pub uid: JournalUid,
     pub users_id: UserId,
     pub name: String,
+    pub description: Option<String>,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
 }
 
 impl Journal {
-    pub async fn create(conn: &impl GenericClient, users_id: UserId, name: &str) -> Result<Option<Self>, PgError> {
-        let uid = JournalUid::gen();
-        let created = Utc::now();
-
-        let result = conn.query_one(
-            "\
-            insert into journals (uid, users_id, name, created) values \
-            ($1, $2, $3, $4) \
-            returning id",
-            &[&uid, &users_id, &name, &created]
-        ).await;
-
-        match result {
-            Ok(row) => Ok(Some(Self {
-                id: row.get(0),
-                uid,
-                users_id,
-                name: name.to_owned(),
-                created,
-                updated: None
-            })),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => if constraint == "journals_users_id_name_key" {
-                        Ok(None)
-                    } else {
-                        Err(err)
-                    },
-                    _ => Err(err)
-                }
-            } else {
-                Err(err)
-            }
+    pub fn create_options<N>(users_id: UserId, name: N) -> JournalCreateOptions
+    where
+        N: Into<String>
+    {
+        JournalCreateOptions {
+            users_id,
+            name: name.into(),
+            description: None
         }
     }
 
-    pub async fn retrieve_default(conn: &impl GenericClient, users_id: UserId) -> Result<Option<Self>, PgError> {
-        conn.query_opt(
+    pub async fn create(conn: &impl GenericClient, options: JournalCreateOptions) -> Result<Self, JournalCreateError> {
+        let uid = JournalUid::gen();
+        let created = Utc::now();
+        let users_id = options.users_id;
+        let name = options.name;
+        let description = options.description;
+
+        let result = conn.query_one(
             "\
-            select journals.id, \
-                   journals.uid, \
-                   journals.users_id, \
-                   journals.name, \
-                   journals.created, \
-                   journals.updated \
-            from journals \
-            where journals.name = 'default' and \
-                  journals.users_id = $1",
-            &[&users_id]
-        )
-            .await
-            .map(|maybe| maybe.map(|row| Self {
+            insert into journals (uid, users_id, name, description, created) values \
+            ($1, $2, $3, $4, $5) \
+            returning id",
+            &[
+                &uid,
+                &users_id,
+                &name,
+                &description,
+                &created
+            ]
+        ).await;
+
+        match result {
+            Ok(row) => Ok(Self {
                 id: row.get(0),
-                uid: row.get(1),
-                users_id: row.get(2),
-                name: row.get(3),
-                created: row.get(4),
-                updated: row.get(5),
-            }))
+                uid,
+                users_id,
+                name,
+                description,
+                created,
+                updated: None
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "journals_users_id_name_key" => Err(JournalCreateError::NameExists),
+                        _ => Err(JournalCreateError::Db(err))
+                    }
+                    db::ErrorKind::ForeignKey(constraint) => match constraint {
+                        "journals_users_id_fkey" => Err(JournalCreateError::UserNotFound),
+                        _ => Err(JournalCreateError::Db(err))
+                    }
+                }
+            } else {
+                Err(JournalCreateError::Db(err))
+            }
+        }
     }
 
     pub async fn retrieve_id(conn: &impl GenericClient, journals_id: &JournalId, users_id: &UserId) -> Result<Option<Self>, PgError> {
@@ -95,6 +135,7 @@ impl Journal {
                    journals.uid, \
                    journals.users_id, \
                    journals.name, \
+                   journals.description, \
                    journals.created, \
                    journals.updated \
             from journals \
@@ -108,9 +149,43 @@ impl Journal {
                 uid: row.get(1),
                 users_id: row.get(2),
                 name: row.get(3),
-                created: row.get(4),
-                updated: row.get(5),
+                description: row.get(4),
+                created: row.get(5),
+                updated: row.get(6),
             }))
+    }
+
+    pub async fn update(&self, conn: &impl GenericClient) -> Result<(), JournalUpdateError> {
+        let result = conn.execute(
+            "\
+            update journals \
+            set updated = $2, \
+                name = $3, \
+                description = $4 \
+            where id = $1",
+            &[&self.id, &self.updated, &self.name, &self.description]
+        ).await;
+
+        match result {
+            Ok(result) => match result {
+                1 => Ok(()),
+                0 => Err(JournalUpdateError::NotFound),
+                _ => unreachable!(),
+            }
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "journals_users_id_name_key" => Err(JournalUpdateError::NameExists),
+                        _ => Err(JournalUpdateError::Db(err)),
+                    }
+                    // this should not happen as we are not updating foreign
+                    // key fields
+                    db::ErrorKind::ForeignKey(_) => unreachable!()
+                }
+            } else {
+                Err(JournalUpdateError::Db(err))
+            }
+        }
     }
 }
 

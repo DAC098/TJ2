@@ -27,6 +27,7 @@ import {
     DataTable,
     ColumnDef,
 } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import {
     JournalPartial,
     JournalFull,
@@ -88,7 +89,11 @@ function Journals() {
                                 </Button>
                             </Link>
                         </div>
-                        <p className="w-1/2">i am a description of the journal</p>
+                        {journal.description != null ?
+                            <p className="w-1/2">{journal.description}</p>
+                            :
+                            null
+                        }
                         <div className="flex flex-row flex-nowrap gap-x-4">
                             <span>created: {journal.created}</span>
                             {journal.updated != null ? <span>updated {journal.updated}</span> : null}
@@ -101,18 +106,21 @@ function Journals() {
 }
 
 interface JournalForm {
-    name: string
+    name: string,
+    description: string
 }
 
 function blank_form() {
     return {
-        name: ""
+        name: "",
+        description: "",
     };
 }
 
 function journal_to_form(journal: JournalFull) {
     return {
-        name: journal.name
+        name: journal.name,
+        description: journal.description ?? "",
     };
 }
 
@@ -183,8 +191,11 @@ function Journal() {
     });
 
     const create_journal = async (data: JournalForm) => {
+        let description = data.description.trim();
+
         let body = JSON.stringify({
-            name: data.name
+            name: data.name,
+            description: description.length === 0 ? null : description
         });
 
         let res = await fetch("/journals", {
@@ -215,6 +226,45 @@ function Journal() {
         return null;
     };
 
+    const update_journal = async (data: JournalForm) => {
+        let description = data.description.trim();
+
+        let body = JSON.stringify({
+            name: data.name,
+            description: description.length === 0 ? null : description
+        });
+
+        let res = await fetch(`/journals/${journals_id}`, {
+            method: "PATCH",
+            headers: {
+                "content-type": "application/json",
+                "content-length": body.length.toString(10),
+            },
+            body
+        });
+
+        switch (res.status) {
+        case 200:
+            return true;
+        case 400:
+            let json = await res.json();
+
+            console.error("failed to update journal", json);
+            break;
+        case 403:
+            console.error("you do not have permission to update journals");
+            break;
+        case 404:
+            console.error("journal not found");
+            break;
+        default:
+            console.warn("unhandled response status code");
+            break;
+        }
+
+        return false;
+    };
+
     const on_delete = () => {
         
     };
@@ -235,7 +285,13 @@ function Journal() {
                 console.error("error when creating new journal", err);
             }
         } else {
-            console.log("updating journal");
+            try {
+                if (await update_journal(data)) {
+                    form.reset(data);
+                }
+            } catch (err) {
+                console.error("error when updating journal", err);
+            }
         }
     };
 
@@ -249,6 +305,14 @@ function Journal() {
         <FormProvider<JournalForm> {...form} children={
             <form onSubmit={form.handleSubmit(on_submit)} className="space-y-4">
                 <JournalHeader journals_id={journals_id} on_delete={on_delete}/>
+                <FormField control={form.control} name="description" render={({ field }) => {
+                    return <FormItem>
+                        <FormLabel>Description</FormLabel>
+                        <FormControl>
+                            <Textarea type="text" {...field}/>
+                        </FormControl>
+                    </FormItem>
+                }}/>
             </form>
         }/>
     </CenterPage>;

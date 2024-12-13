@@ -5,6 +5,7 @@ export interface JournalPartial {
     uid: string,
     users_id: number,
     name: string,
+    description: string | null,
     created: string,
     updated: string | null
 }
@@ -14,6 +15,7 @@ export interface JournalFull {
     uid: string,
     users_id: number,
     name: string,
+    description: string | null,
     created: string,
     updated: string | null
 }
