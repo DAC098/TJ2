@@ -153,6 +153,7 @@ function JournalHeader({journals_id, on_delete}: JournalHeaderProps) {
             <Button
                 type="button"
                 variant="destructive"
+                disabled
                 onClick={() => {
                     on_delete();
                 }}
@@ -306,7 +307,7 @@ function Journal() {
             <form onSubmit={form.handleSubmit(on_submit)} className="space-y-4">
                 <JournalHeader journals_id={journals_id} on_delete={on_delete}/>
                 <FormField control={form.control} name="description" render={({ field }) => {
-                    return <FormItem>
+                    return <FormItem className="w-1/2">
                         <FormLabel>Description</FormLabel>
                         <FormControl>
                             <Textarea type="text" {...field}/>
