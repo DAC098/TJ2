@@ -1,8 +1,10 @@
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
+use axum::extract::ConnectInfo;
 use axum::http::{Uri, Request, HeaderMap, StatusCode};
 use axum::response::{Response, IntoResponse};
 use axum::routing::{get, post};
@@ -105,22 +107,27 @@ pub fn build(state: &state::SharedState) -> Router {
 }
 
 fn make_span_with(request: &Request<Body>) -> Span {
-    let req_id = layer::RequestId::from_request(request).expect("missing request id");
+    let req_id = layer::RequestId::from_request(request)
+        .expect("missing request id");
+    let socket = request.extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .expect("missing connect info");
 
     tracing::info_span!(
         "REQ",
-        i = req_id.id(),
-        v = ?request.version(),
-        m = %request.method(),
-        u = %request.uri(),
-        s = tracing::field::Empty
+        ip = %socket.0,
+        id = req_id.id(),
+        ver = ?request.version(),
+        mth = %request.method(),
+        uri = %request.uri(),
+        sts = tracing::field::Empty
     )
 }
 
 fn on_request(_request: &Request<Body>, _span: &Span) {}
 
 fn on_response(response: &Response<Body>, latency: Duration, span: &Span) {
-    span.record("s", tracing::field::display(response.status()));
+    span.record("sts", tracing::field::display(response.status()));
 
     tracing::info!("{:#?}", latency)
 }

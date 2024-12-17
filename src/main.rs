@@ -175,7 +175,7 @@ async fn create_server(
 
         axum_server::from_tcp_rustls(listener, tls_config)
             .handle(handle)
-            .serve(router.into_make_service())
+            .serve(router.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .context("error when running server")
     } else {
@@ -183,7 +183,7 @@ async fn create_server(
 
         axum_server::from_tcp(listener)
             .handle(handle)
-            .serve(router.into_make_service())
+            .serve(router.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .context("error when running server")
     }
