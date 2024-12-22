@@ -10,4 +10,6 @@
 /frontend/assets/index.js
 /frontend/assets/**/*.map
 
+*.ignore.*
+
 server.config.toml
