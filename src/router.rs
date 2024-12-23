@@ -25,9 +25,7 @@ pub mod body;
 
 mod auth;
 mod journals;
-mod users;
-mod groups;
-mod roles;
+mod admin;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -75,24 +73,7 @@ pub fn build(state: &state::SharedState) -> Router {
             .post(auth::request_login))
         .route("/logout", post(auth::request_logout))
         .nest("/journals", journals::build(state))
-        .route("/users", get(users::retrieve_users)
-            .post(users::create_user))
-        .route("/users/new", get(users::retrieve_user))
-        .route("/users/:users_id", get(users::retrieve_user)
-            .patch(users::update_user)
-            .delete(users::delete_user))
-        .route("/groups", get(groups::retrieve_groups)
-            .post(groups::create_group))
-        .route("/groups/new", get(groups::retrieve_group))
-        .route("/groups/:groups_id", get(groups::retrieve_group)
-            .patch(groups::update_group)
-            .delete(groups::delete_group))
-        .route("/roles", get(roles::retrieve_roles)
-            .post(roles::create_role))
-        .route("/roles/new", get(roles::retrieve_role))
-        .route("/roles/:role_id", get(roles::retrieve_role)
-            .patch(roles::update_role)
-            .delete(roles::delete_role))
+        .nest("/admin", admin::build(state))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())

@@ -3,19 +3,30 @@ import commonjs from "@rollup/plugin-commonjs";
 import replace from "@rollup/plugin-replace";
 import { nodeResolve } from "@rollup/plugin-node-resolve";
 
-export default {
-    input: "./frontend/src/index.tsx",
-    onwarn: (warning, warn) => {
-        if (warning.code === "MODULE_LEVEL_DIRECTIVE") {
-            return;
-        }
+function manual_chunks(id, {getModuleInfo, getModuleIds}) {
+    if (id.includes("node_modules")) {
+        return "vendor";
+    }
+}
 
-        warn(warning);
+function onwarn(warning, warn) {
+    if (warning.code === "MODULE_LEVEL_DIRECTIVE") {
+        return;
+    }
+
+    warn(warning);
+}
+
+export default {
+    input: {
+        index: "./frontend/src/index.tsx",
     },
+    onwarn,
     output: {
-        file: "./frontend/assets/index.js",
-        format: "umd",
+        dir: "./frontend/assets/",
+        format: "es",
         sourcemap: true,
+        manualChunks: manual_chunks,
     },
     plugins: [
         replace({

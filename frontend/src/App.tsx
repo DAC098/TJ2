@@ -5,32 +5,25 @@ import {
     SidebarTrigger,
 } from "@/components/ui/sidebar";
 
-import { Groups, Group } from "@/groups";
-import { Roles, Role } from "@/roles";
 import { AppSidebar } from "@/sidebar";
-import { Users, User } from "@/users";
 import { JournalRoutes } from "@/journals";
+import { AdminRoutes } from "@/admin";
 
 function App() {
     return <div className="flex flex-row flex-nowrap w-full h-full">
-        <SidebarProvider>
+        <SidebarProvider style={{"--sidebar-width": "350px"}}>
             <AppSidebar/>
             <main className="relative flex-auto overflow-auto">
-                <div className="pt-2 pr-2 pl-2">
+                <div className="pt-2 pr-2 pl-2 h-full">
                     <Routes>
-                        <Route path="/" element={<div>root page</div>}/>
+                        <Route index element={<div>root page</div>}/>
                         <Route path="/journals/*" element={<JournalRoutes />}/>
-                        <Route path="/users" element={<Users />}/>
-                        <Route path="/users/:users_id" element={<User />}/>
-                        <Route path="/groups" element={<Groups />}/>
-                        <Route path="/groups/:groups_id" element={<Group />}/>
-                        <Route path="/roles" element={<Roles />}/>
-                        <Route path="/roles/:role_id" element={<Role />}/>
+                        <Route path="/admin/*" element={<AdminRoutes />}/>
                     </Routes>
                 </div>
             </main>
         </SidebarProvider>
-    </div>
+    </div>;
 }
 
 export default App;

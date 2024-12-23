@@ -6,10 +6,6 @@
 /certs/localhost.ecdsa.*
 /certs/localhost.rsa.*
 
-/frontend/assets/stylesheet.css
-/frontend/assets/index.js
-/frontend/assets/**/*.map
-
 *.ignore.*
 
 server.config.toml

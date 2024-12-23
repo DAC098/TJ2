@@ -39,7 +39,7 @@ interface UserPartial {
 }
 
 async function get_users() {
-    let res = await fetch("/users");
+    let res = await fetch("/admin/users");
 
     if (res.status !== 200) {
         console.log("non 200 response status:", res);
@@ -55,7 +55,7 @@ const columns: ColumnDef<UserPartial>[] = [
         accessorKey: "username",
         header: "Username",
         cell: ({ row }) => {
-            return <Link to={`/users/${row.original.id}`}>{row.original.username}</Link>;
+            return <Link to={`/admin/users/${row.original.id}`}>{row.original.username}</Link>;
         }
     },
     {
@@ -89,7 +89,7 @@ export function Users() {
 
     return <div className="max-w-3xl mx-auto my-auto space-y-4">
         <div className="flex flex-row flex-nowrap gap-x-4">
-            <Link to="/users/new">
+            <Link to="/admin/users/new">
                 <Button type="button">New User<Plus/></Button>
             </Link>
         </div>
@@ -122,7 +122,7 @@ export interface AttachedUser {
 }
 
 async function get_user(id: string) {
-    let res = await fetch(`/users/${id}`);
+    let res = await fetch(`/admin/users/${id}`);
 
     if (res.status !== 200) {
         return null;
@@ -193,7 +193,7 @@ export function User() {
             })
         });
 
-        let res = await fetch("/users", {
+        let res = await fetch("/admin/users", {
             method: "POST",
             headers: {
                 "content-type": "application/json",
@@ -233,7 +233,7 @@ export function User() {
             })
         });
 
-        let res = await fetch(`/users/${users_id}`, {
+        let res = await fetch(`/admin/users/${users_id}`, {
             method: "PATCH",
             headers: {
                 "content-type": "application/json",
@@ -294,7 +294,7 @@ export function User() {
 
                 form.reset(form_reset);
 
-                navigate(`/users/${created.id}`);
+                navigate(`/admin/users/${created.id}`);
             } catch (err) {
                 console.error("error when creating new user", err);
             }
@@ -318,13 +318,13 @@ export function User() {
         }
 
         try {
-            let res = await fetch(`/users/${users_id}`, {
+            let res = await fetch(`/admin/users/${users_id}`, {
                 method: "DELETE"
             });
 
             switch (res.status) {
             case 200:
-                navigate("/users");
+                navigate("/admin/users");
                 break;
             case 403:
                 console.error("you do not have permission to delete users");
@@ -503,7 +503,7 @@ function AddUsers({on_added}: AddUsersProps) {
         set_loading(true);
 
         try {
-            let res = await fetch("/users");
+            let res = await fetch("/admin/users");
 
             if (res.status === 200) {
                 let json = await res.json();

@@ -76,7 +76,7 @@ export function Entries() {
         }).finally(() => {
             setLoading(false);
         });
-    }, []);
+    }, [journals_id]);
 
     const columns: ColumnDef<EntryPartial>[] = [
         {
@@ -114,11 +114,6 @@ export function Entries() {
 
     return <CenterPage>
         <div className="flex flex-row flex-nowrap gap-x-4">
-            <Link to="/journals">
-                <Button type="button" variant="ghost" size="icon">
-                    <ArrowLeft/>
-                </Button>
-            </Link>
             <Link to={`/journals/${journals_id}/entries/new`}>
                 <Button type="button">New Entry<Plus/></Button>
             </Link>

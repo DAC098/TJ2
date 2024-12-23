@@ -45,7 +45,7 @@ export interface AttachedGroup {
 }
 
 async function get_groups() {
-    let res = await fetch("/groups");
+    let res = await fetch("/admin/groups");
 
     if (res.status !== 200) {
         console.log("non 200 response status:", res);
@@ -60,7 +60,7 @@ const columns: ColumnDef<GroupPartial>[] = [
     {
         header: "Name",
         cell: ({ row }) => {
-            return <Link to={`/groups/${row.original.id}`}>{row.original.name}</Link>;
+            return <Link to={`/admin/groups/${row.original.id}`}>{row.original.name}</Link>;
         }
     },
     {
@@ -93,7 +93,7 @@ export function Groups() {
 
     return <div className="max-w-3xl mx-auto my-auto space-y-4">
         <div className="flex flex-row flex-nowrap gap-x-4">
-            <Link to="/groups/new">
+            <Link to="/admin/groups/new">
                 <Button type="button">New Group<Plus /></Button>
             </Link>
         </div>
@@ -118,7 +118,7 @@ interface GroupForm {
 }
 
 async function get_group(id: string) {
-    let res = await fetch(`/groups/${id}`);
+    let res = await fetch(`/admin/groups/${id}`);
 
     if (res.status !== 200) {
         return null;
@@ -204,7 +204,7 @@ export function Group() {
             }),
         });
 
-        let res = await fetch("/groups", {
+        let res = await fetch("/admin/groups", {
             method: "POST",
             headers: {
                 "content-type": "application/json",
@@ -243,7 +243,7 @@ export function Group() {
             }),
         });
 
-        let res = await fetch(`/groups/${groups_id}`, {
+        let res = await fetch(`/admin/groups/${groups_id}`, {
             method: "PATCH",
             headers: {
                 "content-type": "application/json",
@@ -289,7 +289,7 @@ export function Group() {
                     roles: created.roles,
                 });
 
-                navigate(`/groups/${created.id}`);
+                navigate(`/admin/groups/${created.id}`);
             } catch (err) {
                 console.error("error when creating new group", err);
             }
@@ -310,13 +310,13 @@ export function Group() {
         }
 
         try {
-            let res = await fetch(`/groups/${groups_id}`, {
+            let res = await fetch(`/admin/groups/${groups_id}`, {
                 method: "DELETE",
             });
 
             switch (res.status) {
             case 200:
-                navigate("/groups");
+                navigate("/admin/groups");
                 break;
             case 403:
                 console.error("you do not have permission to delete groups");
@@ -445,7 +445,7 @@ function AddGroups({on_added}: AddGroupsProps) {
         set_loading(true);
 
         try {
-            let res = await fetch("/groups");
+            let res = await fetch("/admin/groups");
 
             if (res.status === 200) {
                 let json = await res.json();

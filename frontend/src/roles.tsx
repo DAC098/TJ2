@@ -46,7 +46,7 @@ export interface AttachedRole {
 }
 
 async function get_roles() {
-    let res = await fetch("/roles");
+    let res = await fetch("/admin/roles");
 
     if (res.status !== 200) {
         console.log("non 200 response status:", res);
@@ -61,7 +61,7 @@ const columns: ColumnDef<RolePartial>[] = [
     {
         header: "Name",
         cell: ({ row }) => {
-            return <Link to={`/roles/${row.original.id}`}>{row.original.name}</Link>;
+            return <Link to={`/admin/roles/${row.original.id}`}>{row.original.name}</Link>;
         },
     },
     {
@@ -94,7 +94,7 @@ export function Roles() {
 
     return <div className="max-w-3xl mx-auto my-auto space-y-4">
         <div className="flex flex-row flex-nowrap gap-x-4">
-            <Link to="/roles/new">
+            <Link to="/admin/roles/new">
                 <Button type="button">New Role<Plus/></Button>
             </Link>
         </div>
@@ -191,7 +191,7 @@ function abilities_object(): Abilities {
 }
 
 async function get_role(role_id: string) {
-    let res = await fetch(`/roles/${role_id}`);
+    let res = await fetch(`/admin/roles/${role_id}`);
 
     if (res.status !== 200) {
         return null;
@@ -295,7 +295,7 @@ export function Role() {
     const create_role = async (data: RoleForm) => {
         let body = JSON.stringify(form_to_body(data));
 
-        let res = await fetch("/roles", {
+        let res = await fetch("/admin/roles", {
             method: "POST",
             headers: {
                 "content-type": "application/json",
@@ -326,7 +326,7 @@ export function Role() {
     const update_role = async (role_id: string, data: RoleForm) => {
         let body = JSON.stringify(form_to_body(data));
 
-        let res = await fetch(`/roles/${role_id}`, {
+        let res = await fetch(`/admin/roles/${role_id}`, {
             method: "PATCH",
             headers: {
                 "content-type": "application/json",
@@ -368,7 +368,7 @@ export function Role() {
 
                 form.reset(role_to_form(created));
 
-                navigate(`/roles/${created.id}`);
+                navigate(`/admin/roles/${created.id}`);
             } catch (err) {
                 console.error("error when creating new role", err);
             }
@@ -389,13 +389,13 @@ export function Role() {
         }
 
         try {
-            let res = await fetch(`/roles/${role_id}`, {
+            let res = await fetch(`/admin/roles/${role_id}`, {
                 method: "DELETE",
             });
 
             switch (res.status) {
             case 200:
-                navigate("/roles");
+                navigate("/admin/roles");
                 break;
             case 403:
                 console.error("you do not have permission to delete roles");
@@ -591,7 +591,7 @@ function AddRoles({on_added}: AddRolesProps) {
         set_loading(true);
 
         try {
-            let res = await fetch("/roles");
+            let res = await fetch("/admin/roles");
 
             if (res.status === 200) {
                 let json = await res.json();

@@ -38,69 +38,18 @@ import { Entry, Entries } from "@/journals/entries";
 
 export function JournalRoutes() {
     return <Routes>
-        <Route index element={<Journals />}/>
+        <Route index element={<JournalsIndex />}/>
         <Route path="/:journals_id" element={<Journal />}/>
         <Route path="/:journals_id/entries" element={<Entries />}/>
         <Route path="/:journals_id/entries/:entries_id" element={<Entry />}/>
     </Routes>;
 }
 
-function Journals() {
-    let [loading, set_loading] = useState(false);
-    let [data, set_data] = useState<JournalPartial[]>([]);
-
-    useEffect(() => {
-        set_loading(true);
-
-        get_journals().then(list=> {
-            if (list == null) {
-                return;
-            }
-
-            set_data(list);
-        }).catch(err => {
-            console.error("failed to load journal list");
-        }).finally(() => {
-            set_loading(false);
-        });
-    }, []);
-
-    return <CenterPage>
-        <div className="flex flex-row flex-nowrap gap-x-4">
-            <Link to="/journals/new">
-                <Button type="button">New Journal<Plus/></Button>
-            </Link>
-        </div>
-        <div className="space-y-4">
-            {data.map((journal, index) => {
-                return <Fragment key={journal.id}>
-                    {index > 0 ? <Separator/> : null}
-                    <div className="space-y-4">
-                        <div className="flex flex-row flex-nowrap gap-x-4 items-center">
-                            <h2 className="text-2xl">{journal.name}</h2>
-                            <Link to={`/journals/${journal.id}`}>
-                                <Button type="button" variant="secondary">
-                                    Edit <Pencil/>
-                                </Button>
-                            </Link>
-                            <Link to={`/journals/${journal.id}/entries`}>
-                                <Button type="button" variant="secondary">
-                                    Entries
-                                </Button>
-                            </Link>
-                        </div>
-                        {journal.description != null ?
-                            <p className="w-1/2">{journal.description}</p>
-                            :
-                            null
-                        }
-                        <div className="flex flex-row flex-nowrap gap-x-4">
-                            <span>created: {journal.created}</span>
-                            {journal.updated != null ? <span>updated {journal.updated}</span> : null}
-                        </div>
-                    </div>
-                </Fragment>;
-            })}
+function JournalsIndex() {
+    return <CenterPage className="flex items-center justify-center h-full">
+        <div className="w-1/2 flex flex-col flex-nowrap items-center">
+            <h2 className="text-2xl">Nothing to see here</h2>
+            <p>Select a journal on the sidebar to view its entries</p>
         </div>
     </CenterPage>;
 }
