@@ -428,10 +428,6 @@ impl CreatedFiles {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.processed.is_empty()
-    }
-
     pub async fn add(&mut self, path: PathBuf) -> Result<(), CreatedFileError> {
         self.processed.push(CreatedFile::create(path).await?);
 

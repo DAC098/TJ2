@@ -670,7 +670,7 @@ async fn update_permissions(
 
         tracing::debug!("insert sql: {query}");
 
-        let result = conn.execute(query.as_str(), params.as_slice())
+        conn.execute(query.as_str(), params.as_slice())
             .await
             .context("failed in to insert updated psermissions")?;
     };
@@ -678,8 +678,8 @@ async fn update_permissions(
     if !current.is_empty() {
         let mut id_list = Vec::new();
 
-        for (scope, abilities) in current {
-            for (ability, record) in abilities {
+        for (_scope, abilities) in current {
+            for (_ability, record) in abilities {
                 id_list.push(record.id);
             }
         }

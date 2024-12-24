@@ -34,7 +34,6 @@ create table authn_totp (
 create table authn_sessions (
     token bytea primary key not null,
     users_id bigint not null references users (id),
-    dropped boolean not null default false,
     issued_on timestamp with time zone not null,
     expires_on timestamp with time zone not null,
     authenticated boolean not null default false,

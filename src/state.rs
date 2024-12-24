@@ -109,19 +109,8 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn get_path(&self) -> &Path {
-        &self.path
-    }
-
     pub fn journal_dir(&self, journal: &Journal) -> JournalDir {
         JournalDir::new(&self.path, journal)
-    }
-
-    pub fn journal_files(
-        &self,
-        journal_id: JournalId
-    ) -> PathBuf {
-        self.path.join(format!("journals/{journal_id}/files"))
     }
 
     pub fn journal_file_entry(

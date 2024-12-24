@@ -29,34 +29,6 @@ where
     }
 }
 
-pub fn normalize<P>(path: P) -> PathBuf
-where
-    P: AsRef<Path>
-{
-    let components = path.as_ref().components();
-    let mut rtn = PathBuf::new();
-
-    for comp in components {
-        match comp {
-            Component::Prefix(prefix) => {
-                rtn.push(prefix.as_os_str());
-            }
-            Component::ParentDir => {
-                rtn.pop();
-            }
-            Component::Normal(c) => {
-                rtn.push(c);
-            }
-            Component::RootDir => {
-                rtn.push(comp.as_os_str());
-            }
-            Component::CurDir => {}
-        }
-    }
-
-    rtn
-}
-
 pub fn normalize_from<R,P>(root: R, path: P) -> PathBuf
 where
     R: AsRef<Path>,

@@ -4,10 +4,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
 use crate::state;
-use crate::db;
 use crate::error;
 use crate::router::{body, macros};
-use crate::sec::authz::{self, Scope, Ability};
 
 mod users;
 mod groups;
@@ -43,7 +41,7 @@ async fn retrieve_admin(
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator!(
+    let _initiator = macros::require_initiator!(
         &conn,
         &headers,
         Some(uri.clone())

@@ -24,10 +24,6 @@ pub struct InvalidBase64;
 pub struct Token([u8; SESSION_TOKEN_LEN]);
 
 impl Token {
-    pub fn empty() -> Self {
-        Token([0; SESSION_TOKEN_LEN])
-    }
-
     pub fn new() -> Result<Self, rand::Error> {
         let mut bytes = [0; SESSION_TOKEN_LEN];
 
@@ -94,7 +90,6 @@ impl<'a> pg_types::FromSql<'a> for Token {
 pub struct Session {
     pub token: Token,
     pub users_id: db::ids::UserId,
-    pub dropped: bool,
     pub issued_on: DateTime<Utc>,
     pub expires_on: DateTime<Utc>,
     pub authenticated: bool,
@@ -125,7 +120,6 @@ impl SessionOptions {
 impl Session {
     pub async fn create(conn: &impl db::GenericClient, options: SessionOptions) -> Result<Self, error::Error> {
         let users_id = options.users_id;
-        let dropped = false;
         let issued_on = Utc::now();
         let expires_on = issued_on.checked_add_signed(options.duration)
             .context("failed to add duration to expires_on")?;
@@ -160,7 +154,6 @@ impl Session {
         Ok(Self {
             token,
             users_id,
-            dropped,
             issued_on,
             expires_on,
             authenticated,
@@ -173,7 +166,6 @@ impl Session {
             "\
             select token, \
                    users_id, \
-                   dropped, \
                    issued_on, \
                    expires_on, \
                    authenticated, \
@@ -187,11 +179,10 @@ impl Session {
             Ok(Some(Self {
                 token: row.get(0),
                 users_id: row.get(1),
-                dropped: row.get(2),
-                issued_on: row.get(3),
-                expires_on: row.get(4),
-                authenticated: row.get(5),
-                verified: row.get(6),
+                issued_on: row.get(2),
+                expires_on: row.get(3),
+                authenticated: row.get(4),
+                verified: row.get(5),
             }))
         } else {
             Ok(None)
