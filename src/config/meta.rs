@@ -1,3 +1,5 @@
+//! traits and helpers when loading configuration files
+
 use std::path::{Path, PathBuf};
 use std::fmt::{Display, Formatter};
 use std::sync::OnceLock;
@@ -5,14 +7,19 @@ use std::sync::OnceLock;
 use crate::error::{self, Context};
 use crate::path::{metadata, normalize_from};
 
+/// works similar to Default but allows for defaults that can throw an error
 pub trait TryDefault: Sized {
+    /// the error type that can be returned by try_default
     type Error;
 
+    /// the default values that a struct has that can potentially fail
     fn try_default() -> Result<Self, Self::Error>;
 }
 
+/// the current working directory of the server
 static CWD: OnceLock<Box<Path>> = OnceLock::new();
 
+/// retrieves that cached current working directory of the server
 pub fn get_cwd() -> Result<&'static Path, error::Error> {
     if let Some(cwd) = CWD.get() {
         return Ok(cwd);
@@ -28,13 +35,21 @@ pub fn get_cwd() -> Result<&'static Path, error::Error> {
     }
 }
 
+/// the paths of a config file
 #[derive(Debug)]
 pub struct SrcFile<'a> {
+    /// the parent directory of the config file
     parent: &'a Path,
+
+    /// the full path of the config file
     src: &'a Path,
 }
 
 impl<'a> SrcFile<'a> {
+    /// creates the SrcFile from a reference to the given path.
+    ///
+    /// if it is unable to retrieve the parent directory of the current path
+    /// this will fail
     pub fn new(src: &'a Path) -> Result<Self, error::Error> {
         let parent = src.parent().context(format!(
             "failed to retrieve parent path from source file \"{}\"", src.display()
@@ -46,6 +61,7 @@ impl<'a> SrcFile<'a> {
         })
     }
 
+    /// normalizes a given path using the parent directory of the src file
     pub fn normalize(&self, given: PathBuf) -> PathBuf {
         normalize_from(self.parent, given)
     }
@@ -57,6 +73,8 @@ impl<'a> Display for SrcFile<'a> {
     }
 }
 
+/// a helper struct for applying quotes to anything that implements the
+/// Display trait
 pub struct Quote<'a>(pub &'a dyn Display);
 
 impl<'a> Display for Quote<'a> {
@@ -65,14 +83,18 @@ impl<'a> Display for Quote<'a> {
     }
 }
 
+/// a list of values that represent a dot path to a given object
 #[derive(Clone)]
 pub struct DotPath<'a>(Vec<&'a dyn Display>);
 
 impl<'a> DotPath<'a> {
+    /// creates a new DotPath with a single value
     pub fn new(name: &'a (dyn Display)) -> Self {
         DotPath(vec![name])
     }
 
+    /// extends the current dot path with a new value and returning the new
+    /// extended path.
     pub fn push(&self, name: &'a (dyn Display)) -> Self {
         let mut path = self.0.clone();
         path.push(name);
@@ -99,6 +121,9 @@ impl<'a> Display for DotPath<'a> {
     }
 }
 
+/// checks to see if a given path exists as a file or a directory
+///
+/// the path exists if this returns without an error
 pub fn check_path<P>(given: P, src: &SrcFile<'_>, dot: DotPath<'_>, is_file: bool) -> Result<(), error::Error>
 where
     P: AsRef<Path>
@@ -128,6 +153,7 @@ where
     Ok(())
 }
 
+/// sanitizes a given string as a url and returns the resulting string
 pub fn sanitize_url_key(given: &str, src: &SrcFile<'_>, dot: DotPath<'_>) -> Result<String, error::Error> {
     let trimmed = given.trim();
     let rtn: String;

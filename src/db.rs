@@ -23,11 +23,18 @@ mod test_data;
 
 pub mod ids;
 
+/// type alias for tokio_postgres::types::Json
 pub type PgJson<T> = types::Json<T>;
 
+/// type alias for creating a Vec of ToSql references
 pub type ParamsVec<'a> = Vec<&'a (dyn ToSql + Sync)>;
+
+/// type alias for creating a fixed size array of ToSql references
 pub type ParamsArray<'a, const N: usize> = [&'a (dyn ToSql + Sync); N];
 
+/// creates the postgres database connection pool
+///
+/// the connection pool will be limited for 4
 pub async fn from_config(config: &Config) -> Result<Pool, Error> {
     let mut pg_config = PgConfig::new();
 
@@ -56,6 +63,12 @@ pub async fn from_config(config: &Config) -> Result<Pool, Error> {
     Ok(pool)
 }
 
+/// checks to make sure that the admin account exists in the database with
+/// the necessary permissions.
+///
+/// if the admin account is not found then it will attempt to create the
+/// user and role. this is a quick check will assume that if the admin
+/// user exists then the role will as well.
 pub async fn check_database(pool: &Pool) -> Result<(), Error> {
     let mut conn = pool.get()
         .await
@@ -88,6 +101,7 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
     Ok(())
 }
 
+/// creates the default admin user
 async fn create_admin_user(conn: &impl GenericClient) -> Result<Option<User>, Error> {
     let hash = password::create("password")
         .context("failed to create admin password")?;
@@ -97,6 +111,7 @@ async fn create_admin_user(conn: &impl GenericClient) -> Result<Option<User>, Er
         .context("failed to create admin user")
 }
 
+/// creates the default admin role
 async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> {
     let admin_role = Role::create(conn, "admin")
         .await
@@ -143,6 +158,7 @@ async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> 
     Ok(admin_role)
 }
 
+/// generates test data for the server to use for testing purposes
 pub async fn gen_test_data(state: &state::SharedState) -> Result<(), Error> {
     let mut rng = rand::thread_rng();
     let mut conn = state.db_conn().await?;
@@ -182,6 +198,9 @@ pub async fn gen_test_data(state: &state::SharedState) -> Result<(), Error> {
     Ok(())
 }
 
+/// helper method to push a new ToSql reference and returning the new length
+///
+/// used for query parameters when dynmaically creating sql queries
 pub fn push_param<'a, T>(params: &mut ParamsVec<'a>, v: &'a T) -> usize
 where
     T: ToSql + Sync
@@ -190,6 +209,8 @@ where
     params.len()
 }
 
+/// helper method for converting a database value to the serde deserializable
+/// object
 #[inline]
 pub fn de_from_sql<'a, T>(value: PgJson<T>) -> T
 where
@@ -198,6 +219,8 @@ where
     value.0
 }
 
+/// helper method for converting a serde serializable object to a database
+/// value
 #[inline]
 pub fn ser_to_sql<'a, T> (value: &'a T) -> PgJson<&'a T>
 where
@@ -206,12 +229,20 @@ where
     types::Json(value)
 }
 
+/// helper enum for determing if the database error is one of the variants
+/// specified
 pub enum ErrorKind<'a> {
+    /// in the event that the database error is a UNIQUE_VIOLOATION and
+    /// provides the constraint that caused the violation
     Unique(&'a str),
+
+    /// in the vent that the database error is a FOREIGN_KEY_VIOLATION and
+    /// provides the constraint that caused the violation
     ForeignKey(&'a str),
 }
 
 impl<'a> ErrorKind<'a> {
+    /// checks to see if the database error fills one of the variants
     pub fn check(error: &'a PgError) -> Option<Self> {
         let Some(db_error) = error.as_db_error() else {
             return None;
@@ -234,9 +265,13 @@ impl<'a> ErrorKind<'a> {
 }
 
 // could directly implement FromRequestParts for Object
+/// allows for getting access to a database connection without having to
+/// manually handle the errors
 pub struct Conn(pub Object);
 
 impl Conn {
+    /// attempts to retrieve a database transaction from the current
+    /// connection
     pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
         self.0.transaction()
             .await

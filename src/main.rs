@@ -70,6 +70,7 @@ fn main() {
     }
 }
 
+/// configures the tokio runtime and starts the init process for the server
 fn setup(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
     let mut builder = if config.settings.thread_pool == 1 {
         Builder::new_current_thread()
@@ -86,6 +87,8 @@ fn setup(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
     rt.block_on(init(args, config))
 }
 
+/// initializes the server with the shared state, router configuration, and
+/// database setup
 async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
     let state = state::SharedState::new(&config)
         .await
@@ -121,6 +124,7 @@ async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error
     Ok(())
 }
 
+/// creates a TCP lister socket with the given socket address
 fn create_listener(addr: &SocketAddr) -> Result<TcpListener, error::Error> {
     let listener = std::net::TcpListener::bind(addr)
         .context(format!("failed binding to listener address {addr}"))?;
@@ -137,12 +141,16 @@ fn create_listener(addr: &SocketAddr) -> Result<TcpListener, error::Error> {
     Ok(listener)
 }
 
+/// entry point for a tokio task to start the server
 async fn start_server(listener: config::Listener, router: Router, handle: axum_server::Handle) {
     if let Err(err) = create_server(listener, router, handle).await {
         error::log_error(&err);
     }
 }
 
+/// creates an http server
+///
+/// if the listener is specified to be a tls server it will be ignored
 #[cfg(not(feature = "rustls"))]
 async fn create_server(
     listener: config::Listener,
@@ -158,6 +166,10 @@ async fn create_server(
         .context("error when running server")
 }
 
+/// creates an http server
+///
+/// if the listener is specified to be a tls server it will attempt to create
+/// the listener with the provided tls options.
 #[cfg(feature = "rustls")]
 async fn create_server(
     listener: config::Listener,
@@ -189,6 +201,7 @@ async fn create_server(
     }
 }
 
+/// a signal handle that will shutdown all known listening servers
 async fn handle_signal(handles: Vec<axum_server::Handle>) {
     if let Err(err) = tokio::signal::ctrl_c().await {
         tracing::error!("error when listening for ctrl-c. {err}");

@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 
 use crate::error::{self, Context};
 
+/// the list of values available
 pub enum SameSite {
     Strict,
     Lax,
@@ -19,6 +20,7 @@ pub enum SameSite {
 }
 
 impl SameSite {
+    /// returns the enum representation as a string
     pub fn as_str(&self) -> &str {
         match self {
             SameSite::Strict => "Strict",
@@ -28,6 +30,7 @@ impl SameSite {
     }
 }
 
+/// represents the configuration of the "set-cookie" header for http requests
 pub struct SetCookie {
     pub key: String,
     pub value: String,
@@ -42,6 +45,10 @@ pub struct SetCookie {
 }
 
 impl SetCookie {
+    /// creates a new SetCookie with the given key and value.
+    ///
+    /// all options are left unspecified with "secure" and "http_only" being
+    /// set to false.
     pub fn new<K,V>(key: K, value: V) -> SetCookie
     where
         K: Into<String>,
@@ -60,62 +67,76 @@ impl SetCookie {
         }
     }
 
+    /// returns the current value of key
     pub fn key(&self) -> &str {
         &self.key
     }
 
+    /// returns the current value of value
     pub fn value(&self) -> &str {
         &self.value
     }
 
+    /// returns the current value of "expires"
     pub fn expires(&self) -> Option<&DateTime<Utc>> {
         self.expires.as_ref()
     }
 
+    /// returns the current value of "max-age"
     pub fn max_age(&self) -> Option<&Duration> {
         self.max_age.as_ref()
     }
 
+    /// returns the current value of "domain"
     pub fn domain(&self) -> Option<&str> {
         self.domain.as_deref()
     }
 
+    /// returns the current value of "path"
     pub fn path(&self) -> Option<&str> {
         self.path.as_deref()
     }
 
+    /// returns the current value of "secure"
     pub fn secure(&self) -> &bool {
         &self.secure
     }
 
+    /// returns the current value of "http-only"
     pub fn http_only(&self) -> &bool {
         &self.http_only
     }
 
+    /// returns the current value of "same-site"
     pub fn same_site(&self) -> Option<&SameSite> {
         self.same_site.as_ref()
     }
 
+    /// sets the current value of "expires"
     pub fn set_expires(&mut self, expires: DateTime<Utc>) -> &mut Self {
         self.expires = Some(expires);
         self
     }
 
+    /// attaches a new value to "expires"
     pub fn with_expires(mut self, expires: DateTime<Utc>) -> Self {
         self.expires = Some(expires);
         self
     }
 
+    /// sets the current value of "max-age"
     pub fn set_max_age(&mut self, max_age: Duration) -> &mut Self {
         self.max_age = Some(max_age);
         self
     }
 
+    /// attaches a new value to "max-age"
     pub fn with_max_age(mut self, max_age: Duration) -> Self {
         self.max_age = Some(max_age);
         self
     }
 
+    /// sets the current value of "domain"
     pub fn set_domain<D>(&mut self, domain: D) -> &mut Self
     where
         D: Into<String>
@@ -124,6 +145,7 @@ impl SetCookie {
         self
     }
 
+    /// attaches a new value to "domain"
     pub fn with_domain<D>(mut self, domain: D) -> Self
     where
         D: Into<String>
@@ -132,6 +154,7 @@ impl SetCookie {
         self
     }
 
+    /// sets the current value of "path"
     pub fn set_path<P>(&mut self, path: P) -> &mut Self
     where
         P: Into<String>
@@ -140,6 +163,7 @@ impl SetCookie {
         self
     }
 
+    /// attaches a new value to "path"
     pub fn with_path<P>(mut self, path: P) -> Self
     where
         P: Into<String>
@@ -148,36 +172,43 @@ impl SetCookie {
         self
     }
 
+    /// sets the current value of "secure"
     pub fn set_secure(&mut self, secure: bool) -> &mut Self {
         self.secure = secure;
         self
     }
 
+    /// attaches a new value to "secure"
     pub fn with_secure(mut self, secure: bool) -> Self {
         self.secure = secure;
         self
     }
 
+    /// sets the current value of "http-only"
     pub fn set_http_only(&mut self, http_only: bool) -> &mut Self {
         self.http_only = http_only;
         self
     }
 
+    /// attaches a new value to "http-only"
     pub fn with_http_only(mut self, http_only: bool) -> Self {
         self.http_only = http_only;
         self
     }
 
+    /// sets the current value of "same-site"
     pub fn set_same_site(&mut self, same_site: SameSite) -> &mut Self {
         self.same_site = Some(same_site);
         self
     }
 
+    /// attaches a new value to "same-site"
     pub fn with_same_site(mut self, same_site: SameSite) -> Self {
         self.same_site = Some(same_site);
         self
     }
 
+    /// attempts to convert the current SetCookie into a valid HeaderValue
     pub fn into_header_value(self) -> Result<HeaderValue, InvalidHeaderValue> {
         let mut rtn = format!("{}={}", self.key, self.value);
 

@@ -1,3 +1,6 @@
+//! all data pertaining to loading configuration files needed for server
+//! operation.
+
 use std::collections::HashMap;
 use std::default::Default;
 use std::io::Read;
@@ -23,6 +26,7 @@ use meta::{
     sanitize_url_key,
 };
 
+/// specifies the verbosity level of the tracing logs
 #[derive(Debug, Clone, ValueEnum)]
 pub enum Verbosity {
     Error,
@@ -32,10 +36,13 @@ pub enum Verbosity {
     Trace,
 }
 
+/// the list of command line arguments that the server accepts
 #[derive(Debug, Parser)]
 pub struct CliArgs {
+    /// specifies the config file to use when starting the server
     pub config_path: PathBuf,
 
+    /// specifies the verbosity level of the tracing logs
     #[arg(short = 'V', long)]
     pub verbosity: Option<Verbosity>,
 
@@ -45,6 +52,7 @@ pub struct CliArgs {
     pub gen_test_data: bool
 }
 
+/// a stack struct used when creating the Config struct
 #[derive(Debug)]
 struct ConfigStack {
     shape: SettingsShape,
@@ -52,12 +60,20 @@ struct ConfigStack {
     preload: std::vec::IntoIter<PathBuf>,
 }
 
+/// the final server configuration created from the loaded config file
 #[derive(Debug)]
 pub struct Config {
     pub settings: Settings,
 }
 
 impl Config {
+    /// attempts to create the Config struct from the provided command line
+    /// arguments
+    ///
+    /// when parsing a config file, it can specify a list of other files to
+    /// load before working on the current file. each file loaded can
+    /// overwrite the settings of the other and each file can also specify
+    /// a list of files to preload before the current file.
     pub fn from_args(args: &CliArgs) -> Result<Self, error::Error> {
         let resolved = normalize_from(get_cwd()?, args.config_path.clone());
         let mut shape = Self::load_file(&resolved)?;
@@ -146,6 +162,9 @@ impl Config {
         })
     }
 
+    /// attempts to load a specified config file
+    ///
+    /// is capable of parsing JSON, YAML, and TOML files
     fn load_file(path: &PathBuf) -> Result<SettingsShape, error::Error> {
         let ext = path.extension().context(format!(
             "failed to retrieve the file extension from the config specified: \"{}\"", path.display()
@@ -181,6 +200,7 @@ impl Config {
     }
 }
 
+/// the structure of a config file that can be loaded
 #[derive(Debug, Deserialize)]
 pub struct SettingsShape {
     preload: Option<Vec<PathBuf>>,
@@ -194,19 +214,48 @@ pub struct SettingsShape {
     db: Option<DbShape>,
 }
 
+/// the root settings that are avaible for the server to use
 #[derive(Debug)]
 pub struct Settings {
+    /// specifies the directory for the server to store information that is
+    /// needed during operation
+    ///
+    /// defaults to "{CWD}/data"
     pub data: PathBuf,
+
+    /// specifies the directory for the server to store user information that
+    /// is created during operation
+    ///
+    /// defaults to "{CWD}/storage"
     pub storage: PathBuf,
+
+    /// the number of asynchronous threads that tokio will use for the thread
+    /// pool.
+    ///
+    /// defaults to 1
     pub thread_pool: usize,
+
+    /// the number of blocking threads that tokio will use for synchronous
+    /// operations.
+    ///
+    /// defaults to 1
     pub blocking_pool: usize,
+
+    /// the list of available listeners for the server to use
     pub listeners: Vec<Listener>,
+
+    /// the list of available public assets for the server to respond with
     pub assets: Assets,
+
+    /// the available options for the template rendering system
     pub templates: Templates,
+
+    /// configuration information for connecting to the database
     pub db: Db,
 }
 
 impl Settings {
+    /// merges the given SettingsShape into the final Settings struct
     fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, settings: SettingsShape) -> Result<(), error::Error> {
         if let Some(data) = settings.data {
             self.data = src.normalize(data);
@@ -290,6 +339,7 @@ impl TryDefault for Settings {
     }
 }
 
+/// the structure of a listener loaded from a config file
 #[derive(Debug, Deserialize)]
 pub struct ListenerShape {
     addr: String,
@@ -298,15 +348,19 @@ pub struct ListenerShape {
     tls: Option<tls::TlsShape>,
 }
 
+/// the final structure of a listener
 #[derive(Debug)]
 pub struct Listener {
+    /// the ipv4/ipv6 ip and port for the server to listen on
     pub addr: SocketAddr,
 
+    /// additional tls information for the specific listener to use
     #[cfg(feature = "rustls")]
     pub tls: Option<tls::Tls>,
 }
 
 impl Listener {
+    /// merges the given ListenerShape into the final Listener struct
     fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, listener: ListenerShape) -> Result<(), error::Error> {
         self.addr = match SocketAddr::from_str(&listener.addr) {
             Ok(valid) => valid,
@@ -351,19 +405,25 @@ pub mod tls {
     use crate::error;
     use super::meta::{SrcFile, DotPath, check_path};
 
+    /// the structure of a tls listener from a config file
     #[derive(Debug, Deserialize)]
     pub struct TlsShape {
         key: PathBuf,
         cert: PathBuf,
     }
 
+    /// the settings available to create a tls listener
     #[derive(Debug, Default)]
     pub struct Tls {
+        /// the specified path of the private key to use
         pub key: PathBuf,
+
+        /// the speicifed path of the certificate to use
         pub cert: PathBuf,
     }
 
     impl Tls {
+        /// merges a given TlsShape into a Tls structure
         pub(super) fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, tls: TlsShape) -> Result<(), error::Error> {
             self.key = src.normalize(tls.key);
             self.cert = src.normalize(tls.cert);
@@ -376,19 +436,34 @@ pub mod tls {
     }
 }
 
+/// the structure of an assets config
 #[derive(Debug, Deserialize)]
 pub struct AssetsShape {
     files: Option<HashMap<String, PathBuf>>,
     directories: Option<HashMap<String, PathBuf>>,
 }
 
+/// lists the available files and directories that are publicly available for
+/// the server to respond with.
 #[derive(Debug, Default)]
 pub struct Assets {
+    /// lists individual files that the server will respond with when directly
+    /// requested.
+    ///
+    /// when loading config files, the provided files will be merged with the
+    /// known list. if a file is specified in more than one config then the
+    /// last entry will be used.
     pub files: HashMap<String, PathBuf>,
+
+    /// lists directories that the server will do lookups in when a file is
+    /// requested but not found in the files map.
+    ///
+    /// similar to the files map in how config files are loaded
     pub directories: HashMap<String, PathBuf>,
 }
 
 impl Assets {
+    /// merges a given AssetsShape into an Assets structure
     fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, assets: AssetsShape) -> Result<(), error::Error> {
         if let Some(files) = assets.files {
             let files_dot = dot.push(&"files");
@@ -432,17 +507,24 @@ impl Assets {
     }
 }
 
+/// the structure of a templates config
 #[derive(Debug, Deserialize)]
 pub struct TemplatesShape {
     directory: Option<PathBuf>
 }
 
+/// the list of available options when configuring the templates for a server
+/// to use.
 #[derive(Debug)]
 pub struct Templates {
+    /// the directory that contains all templates for the server to load
+    ///
+    /// defaults to "{CWD}/templates"
     pub directory: PathBuf
 }
 
 impl Templates {
+    /// merges a given TemplatesShape into a Templates structure
     fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, templates: TemplatesShape) -> Result<(), error::Error> {
         if let Some(directory) = templates.directory {
             self.directory = src.normalize(directory);
@@ -464,6 +546,7 @@ impl TryDefault for Templates {
     }
 }
 
+/// the structure of a db config
 #[derive(Debug, Deserialize)]
 pub struct DbShape {
     user: Option<String>,
@@ -473,16 +556,37 @@ pub struct DbShape {
     dbname: Option<String>,
 }
 
+/// the available options when connecting to the database
 #[derive(Debug)]
 pub struct Db {
+    /// the user for connecting to the database
+    ///
+    /// defaults to "postgres"
     pub user: String,
+
+    /// the optional password for the user
+    ///
+    /// defaults to None
     pub password: Option<String>,
+
+    /// the hostname of the database
+    ///
+    /// defaults to "localhost"
     pub host: String,
+
+    /// the port the database is listening on
+    ///
+    /// defaults to 5432
     pub port: u16,
+
+    /// the name of the database to connect to
+    ///
+    /// defaults to "tj2"
     pub dbname: String,
 }
 
 impl Db {
+    /// merges a given DbShape into a Db structure
     fn merge(&mut self, _src: &SrcFile<'_>, _dot: DotPath<'_>, db: DbShape) -> Result<(), error::Error> {
         if let Some(user) = db.user {
             self.user = user;
