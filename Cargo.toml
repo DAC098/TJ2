@@ -7,6 +7,14 @@ edition = "2021"
 default = ["rustls"]
 rustls = ["axum-server/tls-rustls"]
 
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[[bin]]
+name = "cli"
+path = "src/cli.rs"
+
 # -----------------------------------------------------------------------------
 # serde
 # -----------------------------------------------------------------------------
@@ -27,6 +35,9 @@ version = "0.0"
 # -----------------------------------------------------------------------------
 # utility
 # -----------------------------------------------------------------------------
+
+[dependencies.anyhow]
+version = "1"
 
 [dependencies.clap]
 version = "4"
@@ -67,6 +78,9 @@ version = "1"
 version = "1"
 features = ["v4"]
 
+[dependencies.rpassword]
+version = "7"
+
 # -----------------------------------------------------------------------------
 # security
 # -----------------------------------------------------------------------------
@@ -106,7 +120,15 @@ version = "1"
 
 [dependencies.tokio]
 version = "1"
-features = ["signal", "time", "rt-multi-thread", "net", "fs", "tracing"]
+features = [
+    "signal",
+    "time",
+    "rt-multi-thread",
+    "net",
+    "fs",
+    "tracing",
+    "macros"
+]
 
 [dependencies.tokio-util]
 version = "0.7"

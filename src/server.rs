@@ -33,11 +33,11 @@ fn main() {
 
     if let Some(verbosity) = &args.verbosity {
         let log_str = match verbosity {
-            config::Verbosity::Error => "TJ2=error",
-            config::Verbosity::Warn => "TJ2=warn",
-            config::Verbosity::Info => "TJ2=info",
-            config::Verbosity::Debug => "TJ2=debug",
-            config::Verbosity::Trace => "TJ2=trace",
+            config::Verbosity::Error => "server=error",
+            config::Verbosity::Warn => "server=warn",
+            config::Verbosity::Info => "server=info",
+            config::Verbosity::Debug => "server=debug",
+            config::Verbosity::Trace => "server=trace",
         };
 
         filter = filter.add_directive(log_str.parse().unwrap());
