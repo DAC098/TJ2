@@ -16,11 +16,14 @@ use crate::db::ids::{
     UserId
 };
 
+/// the potential errors when creating a journal
 #[derive(Debug, thiserror::Error)]
 pub enum JournalCreateError {
+    /// the given jounrla name already exists for this user
     #[error("the given journal name already exists for this user")]
     NameExists,
 
+    /// the specified user does not exist
     #[error("the specified user does not exist")]
     UserNotFound,
 
@@ -28,11 +31,14 @@ pub enum JournalCreateError {
     Db(#[from] PgError),
 }
 
+/// the potential errors when updating a journal
 #[derive(Debug, thiserror::Error)]
 pub enum JournalUpdateError {
+    /// the given journal name already exists for this user
     #[error("the given journal name already exists for this user")]
     NameExists,
 
+    /// the specified journal does not exist
     #[error("the specified journal does not exist")]
     NotFound,
 
@@ -40,14 +46,21 @@ pub enum JournalUpdateError {
     Db(#[from] PgError),
 }
 
+/// the different optionals available when creating a journal
 #[derive(Debug)]
 pub struct JournalCreateOptions {
+    /// the user to assign the journal to
     users_id: UserId,
+
+    /// the name of the journal
     name: String,
+
+    /// an optional description of the journal
     description: Option<String>,
 }
 
 impl JournalCreateOptions {
+    /// assigns a description to the journal
     pub fn description<T>(mut self, value: T) -> Self
     where
         T: Into<String>
@@ -57,18 +70,33 @@ impl JournalCreateOptions {
     }
 }
 
+/// the database representation of a journal
 #[derive(Debug)]
 pub struct Journal {
+    /// the assigned journal id from the database
     pub id: JournalId,
+
+    /// the generated journal uid from the server
     pub uid: JournalUid,
+
+    /// the assigned owner of the journal
     pub users_id: UserId,
+
+    /// the name of the journal
     pub name: String,
+
+    /// the optional description of the journal
     pub description: Option<String>,
+
+    /// timestamp of when the journal was created
     pub created: DateTime<Utc>,
+
+    /// timestamp of when the journal was updated
     pub updated: Option<DateTime<Utc>>,
 }
 
 impl Journal {
+    /// creates the [`JournalCreateOptions`] with the given [`UserId`] and name
     pub fn create_options<N>(users_id: UserId, name: N) -> JournalCreateOptions
     where
         N: Into<String>
@@ -80,6 +108,7 @@ impl Journal {
         }
     }
 
+    /// attempts to create a new [`Journal`] with the given options
     pub async fn create(conn: &impl GenericClient, options: JournalCreateOptions) -> Result<Self, JournalCreateError> {
         let uid = JournalUid::gen();
         let created = Utc::now();
@@ -128,6 +157,8 @@ impl Journal {
         }
     }
 
+    /// attempts to retrieve the journal with the specified [`JournalId`] with
+    /// the specified [`UserId`]
     pub async fn retrieve_id(conn: &impl GenericClient, journals_id: &JournalId, users_id: &UserId) -> Result<Option<Self>, PgError> {
         conn.query_opt(
             "\
@@ -155,6 +186,10 @@ impl Journal {
             }))
     }
 
+    /// attempst to update the journal with new data
+    ///
+    /// only the fields updated, name, and description will be sent to the
+    /// database
     pub async fn update(&self, conn: &impl GenericClient) -> Result<(), JournalUpdateError> {
         let result = conn.execute(
             "\
@@ -189,20 +224,40 @@ impl Journal {
     }
 }
 
+/// represents an entry in a journal
 #[derive(Debug)]
 pub struct Entry {
+    /// the assigned entry id from the database
     pub id: EntryId,
+
+    /// the generated uid from the server
     pub uid: EntryUid,
+
+    /// the journal that the entry belongs to
     pub journals_id: JournalId,
+
+    /// the user that created the entry
     pub users_id: UserId,
+
+    /// the associated date the entry is for
     pub date: NaiveDate,
+
+    /// an optional title to assign then entry
     pub title: Option<String>,
+
+    /// optional text that can describe anything about the entry
     pub contents: Option<String>,
+
+    /// timestamp of when the entry was created
     pub created: DateTime<Utc>,
+
+    /// timestamp of when the entry was updated
     pub updated: Option<DateTime<Utc>>,
 }
 
 impl Entry {
+    /// attempts to retrieve the specified entry for the [`JournalId`],
+    /// [`UserId`], and [`EntryId`]
     pub async fn retrieve_id(
         conn: &impl GenericClient,
         journals_id: &JournalId,

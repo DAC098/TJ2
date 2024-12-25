@@ -11,6 +11,7 @@ use tokio::io::AsyncWrite;
 use crate::error;
 use crate::path::{add_extension, tokio_metadata};
 
+/// the possible error variants when working with a FileUpdater struct
 #[derive(Debug, thiserror::Error)]
 pub enum FileUpdaterError {
     #[error("the provided file has no file_name value")]
@@ -33,12 +34,36 @@ pub enum FileUpdaterError {
     Io(#[from] std::io::Error)
 }
 
+/// helps to provide a transactional file to update without modifying the
+/// contents of the current file.
+///
+/// this is a multistep process that will involve 3 different files.
+///  - the "curr" file that will be updated
+///  - the "temp" file that will be the new version of "curr"
+///  - the "prev" file that will be the previous version of "curr"
+///
+/// as data is written to the object, "temp" will be updated with the changes.
+/// when directed to, you can [`update`] the changes which have "curr" moved to
+/// "prev" and "temp" moved to "curr". if the changes are to be disregarded
+/// then use "clean" to delete changes and "curr" unmodified. once [`update`]
+/// has been called, it will consume the updater and return an [`UpdatedFile`]
+///
+///
+/// this will only work for files that are on the file system.
 #[pin_project]
 pub struct FileUpdater {
+    /// the underlying File that will be written to
     #[pin]
     file: File,
+
+    /// the file what will be updated when changes are committed
     curr: PathBuf,
+
+    /// the temp file that will be written to before commiting to current
     temp: PathBuf,
+
+    /// the previous version of the file that will be created when changes
+    /// have been committed
     prev: PathBuf,
 }
 
@@ -96,6 +121,7 @@ impl FileUpdater {
         })
     }
 
+    /// attempst to update the current file with new data written into "temp"
     pub async fn update(self) -> Result<UpdatedFile, UpdateError> {
         if let Err(err) = tokio::fs::rename(&self.curr, &self.prev).await {
             // no changes have been made to the file system so there is nothing
@@ -132,6 +158,7 @@ impl FileUpdater {
         }
     }
 
+    /// attempts to remove "temp" and consume self
     pub async fn clean(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::remove_file(&self.temp).await {
             // similar to the rollback, nothing has happened so just return
@@ -175,18 +202,24 @@ impl AsyncWrite for FileUpdater {
     }
 }
 
+/// the potential errors that can arise when updating a file
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
+    /// failed to move the current file to previous
     #[error("failed to move the current file to previous")]
     PrevMove {
         temp: PathBuf,
         err: std::io::Error
     },
+
+    /// failed to move the temp file to current
     #[error("failed to move the temp file to current")]
     TempMove {
         temp: PathBuf,
         err: std::io::Error,
     },
+
+    /// failed recovery after temp move error
     #[error("failed recovery after temp move error")]
     TempMoveRecovery {
         prev: PathBuf,
@@ -196,6 +229,7 @@ pub enum UpdateError {
     }
 }
 
+/// the resulting files after a file has been updated
 #[derive(Debug)]
 pub struct UpdatedFile {
     curr: PathBuf,
@@ -203,6 +237,8 @@ pub struct UpdatedFile {
 }
 
 impl UpdatedFile {
+    /// attempts to rollback the changes of an update by moving "prev" back
+    /// to "curr"
     pub async fn rollback(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::rename(&self.prev, &self.curr).await {
             // since nothing has happened we can just return the struct with
@@ -215,6 +251,7 @@ impl UpdatedFile {
         }
     }
 
+    /// attempts to remove "prev"
     pub async fn clean(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::remove_file(&self.prev).await {
             // similar to the rollback, nothing has happened so just return
@@ -228,14 +265,18 @@ impl UpdatedFile {
     }
 }
 
+/// the potential errors that arise when removing a file
 #[derive(Debug, thiserror::Error)]
 pub enum RemovedFileError {
+    /// the provided file has no file_name value
     #[error("the provided file has no file_name value")]
     NoFileName,
 
+    /// the provided file was not found in the file system
     #[error("the provided file was not found in the file system")]
     CurrNotFound,
 
+    /// a previous mark failed to be cleaned up and the marked file exists
     #[error("a previous mark failed to be cleaned up and the marked file exists")]
     MarkExists,
 
@@ -243,6 +284,10 @@ pub enum RemovedFileError {
     Io(#[from] std::io::Error)
 }
 
+/// represents a file that has been marked for deletion.
+///
+/// similar to the [`UpdatedFile`] in that the file has not yet been deleted
+/// and can still be recovered. it has only been "mark"ed
 #[derive(Debug)]
 pub struct RemovedFile {
     curr: PathBuf,
@@ -250,6 +295,7 @@ pub struct RemovedFile {
 }
 
 impl RemovedFile {
+    /// marks the specified file for deletion
     pub async fn mark(curr: PathBuf) -> Result<Self, RemovedFileError> {
         let mark = add_extension(&curr, "mark")
             .ok_or(RemovedFileError::NoFileName)?;
@@ -275,6 +321,7 @@ impl RemovedFile {
         })
     }
 
+    /// attempts to remove the marked file
     pub async fn clean(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::remove_file(&self.mark).await {
             Err((self, err))
@@ -283,6 +330,7 @@ impl RemovedFile {
         }
     }
 
+    /// attempts to recover the marked file
     pub async fn rollback(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::rename(&self.mark, &self.curr).await {
             Err((self, err))
@@ -292,28 +340,38 @@ impl RemovedFile {
     }
 }
 
+/// contains a list of files marked for deletion
 #[derive(Debug)]
 pub struct RemovedFiles {
     processed: Vec<RemovedFile>
 }
 
 impl RemovedFiles {
+    /// creates an empty RemovedFiles struct
     pub fn new() -> Self {
         Self {
             processed: Vec::new()
         }
     }
 
+    /// checks to see if any files have been processed
     pub fn is_empty(&self) -> bool {
         self.processed.is_empty()
     }
 
+    /// attempts to mark a file for deletion.
+    ///
+    /// if the file is failed to be marked then an error will be returned
     pub async fn add(&mut self, to_drop: PathBuf) -> Result<(), RemovedFileError> {
         self.processed.push(RemovedFile::mark(to_drop).await?);
 
         Ok(())
     }
 
+    /// attempts to remove all marked files
+    ///
+    /// in the event that a file was not removed, a list of failed files will
+    /// be returned along with the associated error that caused the failure.
     pub async fn clean(self) -> Vec<(RemovedFile, std::io::Error)> {
         let mut futs = FuturesOrdered::new();
 
@@ -332,6 +390,10 @@ impl RemovedFiles {
         failed
     }
 
+    /// attempts to restore all marked files
+    ///
+    /// in the event that a files was not restored, a list of failed files will
+    /// be returned along with the associated error that caused the failure.
     pub async fn rollback(self) -> Vec<(RemovedFile, std::io::Error)> {
         let mut futs = FuturesOrdered::new();
 
@@ -350,6 +412,7 @@ impl RemovedFiles {
         failed
     }
 
+    /// attempts to remove all marked files and logs any failures
     pub async fn log_clean(self) {
         let failed = self.clean().await;
 
@@ -363,6 +426,7 @@ impl RemovedFiles {
         }
     }
 
+    /// attempts to restore all marked files and logs any failures
     pub async fn log_rollback(self) {
         let failed = self.rollback().await;
 
@@ -377,8 +441,10 @@ impl RemovedFiles {
     }
 }
 
+/// the potential errors when creating a file
 #[derive(Debug, thiserror::Error)]
 pub enum CreatedFileError {
+    /// the provided file already exists
     #[error("the provided file already exists")]
     AlreadyExists,
 
@@ -386,10 +452,12 @@ pub enum CreatedFileError {
     Io(#[from] std::io::Error)
 }
 
+/// similar to [`RemovedFile`] except will only create a single file
 #[derive(Debug)]
 pub struct CreatedFile(PathBuf);
 
 impl CreatedFile {
+    /// attempts to create the specified file
     pub async fn create(path: PathBuf) -> Result<Self, CreatedFileError> {
         let result = tokio::fs::OpenOptions::new()
             .write(true)
@@ -407,6 +475,7 @@ impl CreatedFile {
         }
     }
 
+    /// attempts to remove the created file
     pub async fn rollback(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::remove_file(&self.0).await {
             Err((self, err))
@@ -416,24 +485,33 @@ impl CreatedFile {
     }
 }
 
+/// contains a list of files created
 #[derive(Debug)]
 pub struct CreatedFiles {
     processed: Vec<CreatedFile>
 }
 
 impl CreatedFiles {
+    /// creates an empty CreatedFiles struct
     pub fn new() -> Self {
         Self {
             processed: Vec::new()
         }
     }
 
+    /// attempts to create the desired file
+    ///
+    /// if the file is not created then the resulting error is returned
     pub async fn add(&mut self, path: PathBuf) -> Result<(), CreatedFileError> {
         self.processed.push(CreatedFile::create(path).await?);
 
         Ok(())
     }
 
+    /// attempts to remove all created files
+    ///
+    /// all failed that failed to be removed will be returned in a list with
+    /// the error that caused the failure.
     pub async fn rollback(self) -> Vec<(CreatedFile, std::io::Error)> {
         let mut futs = FuturesOrdered::new();
 
@@ -452,6 +530,7 @@ impl CreatedFiles {
         failed
     }
 
+    /// attempts to remove all created files and logs any errors
     pub async fn log_rollback(self) {
         let failed = self.rollback().await;
 

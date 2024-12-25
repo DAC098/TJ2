@@ -8,11 +8,13 @@ use axum::response::{Response, ResponseParts, IntoResponse, IntoResponseParts};
 
 use crate::error::{self, Context};
 
+/// an iterator over all values found in the "accept" header
 pub struct AcceptIter<'a> {
     iter: std::str::Split<'a, &'static str>
 }
 
 impl<'a> AcceptIter<'a> {
+    /// attempts to retrieve all values in the "accept" header if present
     pub fn from_headers(headers: &'a HeaderMap) -> Result<Option<Self>, ToStrError> {
         if let Some(accept) = headers.get("accept") {
             let accept_str = accept.to_str()?;
@@ -44,6 +46,8 @@ impl<'a> Iterator for AcceptIter<'a> {
     }
 }
 
+/// checks to see if the header map contains the "accept" header nad is looking
+/// for "text/html"
 pub fn is_accepting_html(headers: &HeaderMap) -> Result<bool, ToStrError> {
     if let Some(iter) = AcceptIter::from_headers(headers)? {
         for mime in iter {
@@ -56,14 +60,24 @@ pub fn is_accepting_html(headers: &HeaderMap) -> Result<bool, ToStrError> {
     Ok(false)
 }
 
+/// a helper struct for creating the "location" header for redirects
 pub struct Location(String);
 
 impl Location {
+    /// creates the Location for a given value
     pub fn to(location: String) -> Self {
         Self(location)
     }
 
-    pub fn login<U>(maybe_prev: Option<U>) -> Self 
+    /// creates a Location to the login page and will also include the given
+    /// url as a prev query param if provided.
+    ///
+    /// if the url does not contain a path and or query value then only the
+    /// login path will be specified.
+    ///
+    /// the function will panic if the provided value cannot be parsed to a
+    /// valid [`Uri`]
+    pub fn login<U>(maybe_prev: Option<U>) -> Self
     where
         Uri: TryFrom<U>
     {
@@ -84,6 +98,7 @@ impl Location {
         }
     }
 
+    /// attempts to convert the struct into a [`HeaderValue`]
     pub fn into_header_value(self) -> Result<HeaderValue, InvalidHeaderValue> {
         HeaderValue::from_str(&self.0)
     }

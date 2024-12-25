@@ -7,6 +7,7 @@ use axum::response::{Response, IntoResponse};
 
 pub type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
 
+/// creates an error response with the given message
 pub fn error_response<S>(msg: S) -> Response<Body>
 where
     S: Into<String>
@@ -21,6 +22,7 @@ where
         .unwrap()
 }
 
+/// the common error struct for use in the server
 #[derive(Debug, thiserror::Error)]
 pub struct Error {
     cxt: String,
@@ -30,6 +32,7 @@ pub struct Error {
 }
 
 impl Error {
+    /// creates a new error with the given context
     pub fn context<C>(cxt: C) -> Error
     where
         C: Into<String>
@@ -40,6 +43,7 @@ impl Error {
         }
     }
 
+    /// creates a new error with the given context and source error
     pub fn context_source<C, S>(cxt: C, src: S) -> Error
     where
         C: Into<String>,
@@ -66,6 +70,7 @@ impl IntoResponse for Error {
     }
 }
 
+/// a helper trait that works similarly to anyhow::Context
 pub trait Context<T, E> {
     fn context<C>(self, cxt: C) -> std::result::Result<T, Error>
     where
@@ -99,6 +104,10 @@ impl<T> Context<T, ()> for std::option::Option<T> {
     }
 }
 
+/// logs the given mesage and error
+///
+/// will recursively print any errors that are contained inside the current
+/// one.
 pub fn log_prefix_error<D, E>(prefix: &D, err: &E)
 where
     D: Display + ?Sized,
@@ -122,6 +131,7 @@ where
     tracing::error!("{prefix}:\n{msg}");
 }
 
+/// wrapper method to just log an error
 pub fn log_error<E>(err: &E)
 where
     E: std::error::Error
