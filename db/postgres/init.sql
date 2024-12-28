@@ -83,6 +83,19 @@ create table journals (
     unique (users_id, name)
 );
 
+create table custom_fields (
+    id bigint primary key generated always as identity,
+    uid varchar not null unique,
+    journals_id bigint not null references journals (id),
+    name varchar not null,
+    "order" integer default 0,
+    config jsonb not null,
+    description varchar,
+    created timestamp with time zone not null,
+    updated timestamp with time zone,
+    unique (journals_id, name)
+);
+
 create table entries (
     id bigint primary key generated always as identity,
     uid varchar not null unique,
@@ -116,4 +129,13 @@ create table file_entries (
     size bigint default 0,
     created timestamp with time zone not null,
     updated timestamp with time zone
+);
+
+create table custom_field_entries (
+    custom_fields_id bigint not null references custom_fields (id),
+    entries_id bigint not null references entries (id),
+    value jsonb not null,
+    created timestamp with time zone not null,
+    updated timestamp with time zone,
+    primary key (custom_fields_id, entries_id)
 );

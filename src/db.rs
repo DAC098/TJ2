@@ -1,12 +1,10 @@
-use std::fmt::Debug;
-
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
-use serde::{Serialize, Deserialize};
 use tokio_postgres::{Config as PgConfig, NoTls};
 use tokio_postgres::error::SqlState;
+use tokio_postgres::types::ToSql;
 
 use crate::config::Config;
 use crate::error::{Error, Context};
@@ -17,14 +15,10 @@ use crate::user::User;
 
 pub use deadpool_postgres::{Pool, GenericClient, Object, Transaction};
 pub use tokio_postgres::Error as PgError;
-pub use tokio_postgres::types::{self, ToSql};
 
 mod test_data;
 
 pub mod ids;
-
-/// type alias for tokio_postgres::types::Json
-pub type PgJson<T> = types::Json<T>;
 
 /// type alias for creating a Vec of ToSql references
 pub type ParamsVec<'a> = Vec<&'a (dyn ToSql + Sync)>;
@@ -207,26 +201,6 @@ where
 {
     params.push(v);
     params.len()
-}
-
-/// helper method for converting a database value to the serde deserializable
-/// object
-#[inline]
-pub fn de_from_sql<'a, T>(value: PgJson<T>) -> T
-where
-    T: Deserialize<'a>
-{
-    value.0
-}
-
-/// helper method for converting a serde serializable object to a database
-/// value
-#[inline]
-pub fn ser_to_sql<'a, T> (value: &'a T) -> PgJson<&'a T>
-where
-    T: Serialize + Debug
-{
-    types::Json(value)
 }
 
 /// helper enum for determing if the database error is one of the variants

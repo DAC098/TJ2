@@ -38,11 +38,19 @@ macro_rules! id_type {
 
         impl $name {
             pub fn new(value: i64) -> Result<Self, InvalidIdInteger> {
-                if value <= 0 {
+                if value < 0 {
                     Err(InvalidIdInteger)
                 } else {
                     Ok(Self(value))
                 }
+            }
+
+            pub fn zero() -> Self {
+                Self(0)
+            }
+
+            pub fn is_zero(&self) -> bool {
+                self.0 == 0
             }
 
             pub fn inner(&self) -> &i64 {
@@ -81,7 +89,7 @@ macro_rules! id_type {
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
                 if let Ok(int) = FromStr::from_str(s) {
-                    if int <= 0 {
+                    if int < 0 {
                         Err(InvalidIdString)
                     } else {
                         Ok($name(int))
@@ -306,6 +314,9 @@ id_type!(RoleId);
 uid_type!(RoleUid);
 
 id_type!(PermissionId);
+
+id_type!(CustomFieldId);
+uid_type!(CustomFieldUid);
 
 /// creates a list of unique ids from a given list
 ///

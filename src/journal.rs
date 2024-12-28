@@ -13,8 +13,12 @@ use crate::db::ids::{
     FileEntryUid,
     JournalId,
     JournalUid,
-    UserId
+    UserId,
+    CustomFieldId,
+    CustomFieldUid,
 };
+
+pub mod custom_field;
 
 /// the potential errors when creating a journal
 #[derive(Debug, thiserror::Error)]
@@ -540,6 +544,58 @@ impl FileEntry {
         ).await?;
 
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct CustomField {
+    pub id: CustomFieldId,
+    pub uid: CustomFieldUid,
+    pub journals_id: JournalId,
+    pub name: String,
+    pub order: i32,
+    pub config: custom_field::Type,
+    pub description: Option<String>,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
+}
+
+impl CustomField {
+    pub async fn retrieve_journal_stream(
+        conn: &impl GenericClient,
+        journals_id: &JournalId,
+    ) -> Result<impl Stream<Item = Result<Self, PgError>>, PgError> {
+        let params: db::ParamsArray<'_, 1> = [journals_id];
+
+        Ok(conn.query_raw(
+            "\
+            select custom_fields.id, \
+                   custom_fields.uid, \
+                   custom_fields.journals_id, \
+                   custom_fields.name, \
+                   custom_fields.\"order\", \
+                   custom_fields.config, \
+                   custom_fields.description, \
+                   custom_fields.created, \
+                   custom_fields.updated \
+            from custom_fields \
+            where custom_fields.journals_id = $1 \
+            order by custom_fields.\"order\", \
+                     custom_fields.name",
+            params
+        )
+            .await?
+            .map(|stream| stream.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                journals_id: row.get(2),
+                name: row.get(3),
+                order: row.get(4),
+                config: row.get(5),
+                description: row.get(6),
+                created: row.get(7),
+                updated: row.get(8),
+            })))
     }
 }
 

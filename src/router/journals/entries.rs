@@ -96,7 +96,7 @@ pub async fn retrieve_entries(
                search_entries.created, \
                search_entries.updated, \
                entry_tags.key, \
-               entry_tags.value
+               entry_tags.value \
         from search_entries \
             left join entry_tags on \
                 search_entries.id = entry_tags.entries_id \
