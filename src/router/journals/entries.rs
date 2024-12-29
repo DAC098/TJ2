@@ -13,7 +13,7 @@ use crate::db;
 use crate::db::ids::{EntryId, EntryUid, FileEntryId, FileEntryUid, JournalId, UserId};
 use crate::error::{self, Context};
 use crate::fs::{CreatedFiles, RemovedFiles};
-use crate::journal::{Journal, EntryTag, Entry, EntryFull, FileEntry, JournalDir};
+use crate::journal::{Journal, EntryTag, Entry, FileEntry, JournalDir};
 use crate::router::body;
 use crate::router::macros;
 use crate::sec::authz::{Scope, Ability};
@@ -172,6 +172,70 @@ pub async fn retrieve_entries(
     }
 
     Ok(body::Json(found).into_response())
+}
+
+#[derive(Debug, Serialize)]
+pub struct EntryFull<Files = FileEntry>
+where
+    Files: Serialize,
+{
+    id: EntryId,
+    uid: EntryUid,
+    journals_id: JournalId,
+    users_id: UserId,
+    date: NaiveDate,
+    title: Option<String>,
+    contents: Option<String>,
+    created: DateTime<Utc>,
+    updated: Option<DateTime<Utc>>,
+    tags: Vec<EntryTag>,
+    files: Vec<Files>,
+}
+
+impl EntryFull {
+    pub async fn retrieve_id(
+        conn: &impl db::GenericClient,
+        journals_id: &JournalId,
+        users_id: &UserId,
+        entries_id: &EntryId,
+    ) -> Result<Option<Self>, db::PgError> {
+        if let Some(found) = Entry::retrieve_id(conn, journals_id, users_id, entries_id).await ? {
+            let tags_fut = EntryTag::retrieve_entry(conn, found.id);
+            let files_fut = FileEntry::retrieve_entry(conn, &found.id);
+
+            match tokio::join!(tags_fut, files_fut) {
+                (Ok(tags), Ok(files)) => Ok(Some(Self {
+                    id: found.id,
+                    uid: found.uid,
+                    journals_id: found.journals_id,
+                    users_id: found.users_id,
+                    date: found.date,
+                    title: found.title,
+                    contents: found.contents,
+                    created: found.created,
+                    updated: found.updated,
+                    tags,
+                    files,
+                })),
+                (Ok(_), Err(err)) => Err(err),
+                (Err(err), Ok(_)) => Err(err),
+                (Err(tags_err), Err(_files_err)) => Err(tags_err)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileEntryFull {
+    id: FileEntryId,
+    uid: FileEntryUid,
+    name: Option<String>,
+    mime: String,
+    size: i64,
+    created: DateTime<Utc>,
+    updated: Option<DateTime<Utc>>,
 }
 
 pub async fn retrieve_entry(

@@ -16,7 +16,7 @@ fn default_as_12hr() -> bool {
     false
 }
 
-fn default_step() -> f64 {
+fn default_step() -> f32 {
     0.01
 }
 
@@ -40,7 +40,7 @@ pub enum Type {
         minimum: Option<f32>,
         maximum: Option<f32>,
         #[serde(default = "default_step")]
-        step: f64,
+        step: f32,
         #[serde(default = "default_precision")]
         precision: i32
     },
@@ -48,7 +48,7 @@ pub enum Type {
         minimum: Option<f32>,
         maximum: Option<f32>,
         #[serde(default = "default_step")]
-        step: f64,
+        step: f32,
         #[serde(default = "default_precision")]
         precision: i32
     },
@@ -64,6 +64,75 @@ pub enum Type {
         #[serde(default = "default_as_12hr")]
         as_12hr: bool
     },
+}
+
+impl Type {
+    pub fn validate(&self, given: Value) -> Result<Value, Value> {
+        match self {
+            Type::Integer {
+                minimum,
+                maximum
+            } => match given {
+                Value::Integer { value } => match (minimum, maximum) {
+                    (Some(min), Some(max)) if value >= *min && value <= *max => Ok(Value::Integer { value }),
+                    (Some(min), None) if value >= *min => Ok(Value::Integer { value }),
+                    (None, Some(max)) if value <= *max => Ok(Value::Integer { value }),
+                    (None, None) => Ok(Value::Integer { value }),
+                    _ => Err(Value::Integer { value }),
+                }
+                _ => Err(given),
+            }
+            Type::IntegerRange {
+                minimum,
+                maximum,
+            } => match given {
+                Value::IntegerRange { low, high } => match (minimum, maximum) {
+                    (Some(min), Some(max)) if low >= *min && low < high && high <= *max => Ok(Value::IntegerRange { low, high }),
+                    (Some(min), None) if low >= *min && low < high => Ok(Value::IntegerRange { low, high }),
+                    (None, Some(max)) if low < high && high <= *max => Ok(Value::IntegerRange { low, high }),
+                    (None, None) if low < high => Ok(Value::IntegerRange { low, high }),
+                    _ => Err(Value::IntegerRange { low, high }),
+                }
+                _ => Err(given),
+            }
+            Type::Float {
+                minimum,
+                maximum,
+                ..
+            } => match given {
+                Value::Float { value } => match (minimum, maximum) {
+                    (Some(min), Some(max)) if value >= *min && value <= *max => Ok(Value::Float { value }),
+                    (Some(min), None) if value >= *min => Ok(Value::Float { value }),
+                    (None, Some(max)) if value <= *max => Ok(Value::Float { value }),
+                    (None, None) => Ok(Value::Float { value }),
+                    _ => Err(Value::Float { value }),
+                }
+                _ => Err(given),
+            }
+            Type::FloatRange {
+                minimum,
+                maximum,
+                ..
+            } => match given {
+                Value::FloatRange { low, high } => match (minimum, maximum) {
+                    (Some(min), Some(max)) if low >= *min && low < high && high <= *max => Ok(Value::FloatRange { low, high }),
+                    (Some(min), None) if low >= *min && low < high => Ok(Value::FloatRange { low, high }),
+                    (None, Some(max)) if low < high && high <= *max => Ok(Value::FloatRange { low, high }),
+                    (None, None) if low < high => Ok(Value::FloatRange { low, high }),
+                    _ => Err(Value::FloatRange { low, high }),
+                }
+                _ => Err(given),
+            }
+            Type::Time {..} => match given {
+                Value::Time { value } => Ok(Value::Time { value }),
+                _ => Err(given),
+            }
+            Type::TimeRange {..} => match given {
+                Value::TimeRange { low, high } if low < high => Ok(Value::TimeRange { low, high }),
+                _ => Err(given),
+            }
+        }
+    }
 }
 
 impl pg_types::ToSql for Type {
@@ -121,14 +190,10 @@ pub enum Value {
     },
 
     Time {
-        //#[serde(with = "ts_seconds")]
         value: DateTime<Utc>
     },
     TimeRange {
-        //#[serde(with = "ts_seconds")]
         low: DateTime<Utc>,
-
-        //#[serde(with = "ts_seconds")]
         high: DateTime<Utc>
     },
 }
@@ -185,5 +250,339 @@ impl<'a> pg_types::FromSql<'a> for Value {
 
     fn accepts(ty: &pg_types::Type) -> bool {
         <pg_types::Json<Self> as pg_types::FromSql>::accepts(ty)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use chrono::{Utc, Duration};
+
+    const INT: Type = Type::Integer {
+        minimum: Some(1),
+        maximum: Some(10),
+    };
+    const INT_LOW: Type = Type::Integer {
+        minimum: Some(1),
+        maximum: None,
+    };
+    const INT_HIGH: Type = Type::Integer {
+        minimum: None,
+        maximum: Some(10),
+    };
+    const INT_NO_LIMIT: Type = Type::Integer {
+        minimum: None,
+        maximum: None,
+    };
+
+    const INT_RANGE: Type = Type::IntegerRange {
+        minimum: Some(1),
+        maximum: Some(10),
+    };
+    const INT_RANGE_LOW: Type = Type::IntegerRange {
+        minimum: Some(1),
+        maximum: None,
+    };
+    const INT_RANGE_HIGH: Type = Type::IntegerRange {
+        minimum: None,
+        maximum: Some(10),
+    };
+    const INT_RANGE_NO_LIMIT: Type = Type::IntegerRange {
+        minimum: None,
+        maximum: None,
+    };
+
+    const FLOAT: Type = Type::Float {
+        minimum: Some(1.0),
+        maximum: Some(10.0),
+        step: 0.1,
+        precision: 2,
+    };
+    const FLOAT_LOW: Type = Type::Float {
+        minimum: Some(1.0),
+        maximum: None,
+        step: 0.1,
+        precision: 2,
+    };
+    const FLOAT_HIGH: Type = Type::Float {
+        minimum: None,
+        maximum: Some(10.0),
+        step: 0.1,
+        precision: 2,
+    };
+    const FLOAT_NO_LIMIT: Type = Type::Float {
+        minimum: None,
+        maximum: None,
+        step: 0.1,
+        precision: 2,
+    };
+
+    const FLOAT_RANGE: Type = Type::FloatRange {
+        minimum: Some(1.0),
+        maximum: Some(10.0),
+        step: 0.1,
+        precision: 2,
+    };
+    const FLOAT_RANGE_LOW: Type = Type::FloatRange {
+        minimum: Some(1.0),
+        maximum: None,
+        step: 0.1,
+        precision: 2,
+    };
+    const FLOAT_RANGE_HIGH: Type = Type::FloatRange {
+        minimum: None,
+        maximum: Some(10.0),
+        step: 0.1,
+        precision: 2,
+    };
+    const FLOAT_RANGE_NO_LIMIT: Type = Type::FloatRange {
+        minimum: None,
+        maximum: None,
+        step: 0.1,
+        precision: 2,
+    };
+
+    const TIME: Type = Type::Time {
+        as_12hr: false
+    };
+    const TIME_RANGE: Type = Type::TimeRange {
+        show_diff: false,
+        as_12hr: false
+    };
+
+    #[test]
+    fn integer() {
+        let given = Value::Integer { value: 5 };
+        let given_low = Value::Integer { value: 1 };
+        let given_high = Value::Integer { value: 10 };
+
+        assert!(INT.validate(given).is_ok());
+        assert!(INT.validate(given_low).is_ok());
+        assert!(INT.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn integer_low() {
+        let given = Value::Integer { value: 5 };
+        let given_low = Value::Integer { value: 1 };
+        let given_high = Value::Integer { value: i32::MAX };
+
+        assert!(INT_LOW.validate(given).is_ok());
+        assert!(INT_LOW.validate(given_low).is_ok());
+        assert!(INT_LOW.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn integer_high() {
+        let given = Value::Integer { value: 5 };
+        let given_low = Value::Integer { value: i32::MIN };
+        let given_high = Value::Integer { value: 10 };
+
+        assert!(INT_HIGH.validate(given).is_ok());
+        assert!(INT_HIGH.validate(given_low).is_ok());
+        assert!(INT_HIGH.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn integer_no_limit() {
+        let given = Value::Integer { value: 5 };
+        let given_low = Value::Integer { value: i32::MIN };
+        let given_high = Value::Integer { value: i32::MAX };
+
+        assert!(INT_NO_LIMIT.validate(given).is_ok());
+        assert!(INT_NO_LIMIT.validate(given_low).is_ok());
+        assert!(INT_NO_LIMIT.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn integer_mismatch() {
+        let given = Value::IntegerRange { low: 0, high: 1 };
+
+        assert!(INT.validate(given).is_err());
+    }
+
+    #[test]
+    fn integer_range() {
+        let given = Value::IntegerRange { low: 3, high: 7 };
+        let given_low = Value::IntegerRange { low: 1, high: 7 };
+        let given_high = Value::IntegerRange { low: 3, high: 10 };
+        let given_bounds = Value::IntegerRange { low: 1, high: 10 };
+
+        assert!(INT_RANGE.validate(given).is_ok());
+        assert!(INT_RANGE.validate(given_low).is_ok());
+        assert!(INT_RANGE.validate(given_high).is_ok());
+        assert!(INT_RANGE.validate(given_bounds).is_ok());
+    }
+
+    #[test]
+    fn integer_range_low() {
+        let given = Value::IntegerRange { low: 3, high: 7 };
+        let given_low = Value::IntegerRange { low: 1, high: i32::MAX };
+        let given_high = Value::IntegerRange { low: 3, high: i32::MAX };
+
+        assert!(INT_RANGE_LOW.validate(given).is_ok());
+        assert!(INT_RANGE_LOW.validate(given_low).is_ok());
+        assert!(INT_RANGE_LOW.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn integer_range_high() {
+        let given = Value::IntegerRange { low: 3, high: 7 };
+        let given_low = Value::IntegerRange { low: i32::MIN, high: 7 };
+        let given_high = Value::IntegerRange { low: i32::MIN, high: 10 };
+
+        assert!(INT_RANGE_HIGH.validate(given).is_ok());
+        assert!(INT_RANGE_HIGH.validate(given_low).is_ok());
+        assert!(INT_RANGE_HIGH.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn integer_range_no_limit() {
+        let given = Value::IntegerRange { low: 3, high: 7 };
+        let given_bounds = Value::IntegerRange { low: i32::MIN, high: i32::MAX };
+
+        assert!(INT_RANGE_NO_LIMIT.validate(given).is_ok());
+        assert!(INT_RANGE_NO_LIMIT.validate(given_bounds).is_ok());
+    }
+
+    #[test]
+    fn integer_range_mismatch() {
+        let given = Value::Integer { value: 5 };
+
+        assert!(INT_RANGE.validate(given).is_err());
+    }
+
+    #[test]
+    fn float() {
+        let given = Value::Float { value: 5.0 };
+        let given_low = Value::Float { value: 1.0 };
+        let given_high = Value::Float { value: 10.0 };
+
+        assert!(FLOAT.validate(given).is_ok());
+        assert!(FLOAT.validate(given_low).is_ok());
+        assert!(FLOAT.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn float_low() {
+        let given = Value::Float { value: 5.0 };
+        let given_low = Value::Float { value: 1.0 };
+        let given_high = Value::Float { value: f32::MAX };
+
+        assert!(FLOAT_LOW.validate(given).is_ok());
+        assert!(FLOAT_LOW.validate(given_low).is_ok());
+        assert!(FLOAT_LOW.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn float_high() {
+        let given = Value::Float { value: 5.0 };
+        let given_low = Value::Float { value: f32::MIN };
+        let given_high = Value::Float { value: 10.0 };
+
+        assert!(FLOAT_HIGH.validate(given).is_ok());
+        assert!(FLOAT_HIGH.validate(given_low).is_ok());
+        assert!(FLOAT_HIGH.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn float_no_limit() {
+        let given = Value::Float { value: 5.0 };
+        let given_low = Value::Float { value: f32::MIN };
+        let given_high = Value::Float { value: f32::MAX };
+
+        assert!(FLOAT_NO_LIMIT.validate(given).is_ok());
+        assert!(FLOAT_NO_LIMIT.validate(given_low).is_ok());
+        assert!(FLOAT_NO_LIMIT.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn float_mismatch() {
+        let given = Value::Integer { value: 5 };
+
+        assert!(FLOAT.validate(given).is_err());
+    }
+
+    #[test]
+    fn float_range() {
+        let given = Value::FloatRange { low: 3.0, high: 7.0 };
+        let given_low = Value::FloatRange { low: 1.0, high: 7.0 };
+        let given_high = Value::FloatRange { low: 3.0, high: 10.0 };
+        let given_bounds = Value::FloatRange { low: 1.0, high: 10.0 };
+
+        assert!(FLOAT_RANGE.validate(given).is_ok());
+        assert!(FLOAT_RANGE.validate(given_low).is_ok());
+        assert!(FLOAT_RANGE.validate(given_high).is_ok());
+        assert!(FLOAT_RANGE.validate(given_bounds).is_ok());
+    }
+
+    #[test]
+    fn float_range_low() {
+        let given = Value::FloatRange { low: 3.0, high: 7.0 };
+        let given_low = Value::FloatRange { low: 1.0, high: f32::MAX };
+        let given_high = Value::FloatRange { low: 3.0, high: f32::MAX };
+
+        assert!(FLOAT_RANGE_LOW.validate(given).is_ok());
+        assert!(FLOAT_RANGE_LOW.validate(given_low).is_ok());
+        assert!(FLOAT_RANGE_LOW.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn float_range_high() {
+        let given = Value::FloatRange { low: 3.0, high: 7.0 };
+        let given_low = Value::FloatRange { low: f32::MIN, high: 7.0 };
+        let given_high = Value::FloatRange { low: f32::MIN, high: 10.0 };
+
+        assert!(FLOAT_RANGE_HIGH.validate(given).is_ok());
+        assert!(FLOAT_RANGE_HIGH.validate(given_low).is_ok());
+        assert!(FLOAT_RANGE_HIGH.validate(given_high).is_ok());
+    }
+
+    #[test]
+    fn float_range_no_limit() {
+        let given = Value::FloatRange { low: 3.0, high: 7.0 };
+        let given_bounds = Value::FloatRange { low: f32::MIN, high: f32::MAX };
+
+        assert!(FLOAT_RANGE_NO_LIMIT.validate(given).is_ok());
+        assert!(FLOAT_RANGE_NO_LIMIT.validate(given_bounds).is_ok());
+    }
+
+    #[test]
+    fn float_range_mismatch() {
+        let given = Value::Integer { value: 5 };
+
+        assert!(FLOAT_RANGE.validate(given).is_err());
+    }
+
+    #[test]
+    fn time() {
+        let given = Value::Time { value: Utc::now() };
+
+        assert!(TIME.validate(given).is_ok());
+    }
+
+    #[test]
+    fn time_mismatch() {
+        let given = Value::Integer { value: 5 };
+
+        assert!(TIME.validate(given).is_err());
+    }
+
+    #[test]
+    fn time_range() {
+        let given = Value::TimeRange {
+            low: Utc::now(),
+            high: Utc::now() + Duration::new(10, 0).unwrap(),
+        };
+
+        assert!(TIME_RANGE.validate(given).is_ok());
+    }
+
+    #[test]
+    fn time_range_mismatch() {
+        let given = Value::Integer { value: 5 };
+
+        assert!(TIME_RANGE.validate(given).is_err());
     }
 }
