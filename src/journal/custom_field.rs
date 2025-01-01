@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
@@ -6,7 +8,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::error::BoxDynError;
 use crate::db::{self, GenericClient, PgError};
-use crate::db::ids::{EntryId, CustomFieldId};
+use crate::db::ids::{JournalId, EntryId, CustomFieldId};
 
 fn default_time_range_show_diff() -> bool {
     false
@@ -67,6 +69,34 @@ pub enum Type {
 }
 
 impl Type {
+    pub async fn retrieve_journal_map(
+        conn: &impl db::GenericClient,
+        journals_id: &JournalId,
+    ) -> Result<HashMap<CustomFieldId, Self>, PgError> {
+        let params: db::ParamsArray<'_, 1> = [journals_id];
+
+        let stream = conn.query_raw(
+            "\
+            select custom_fields.id, \
+                   custom_fields.config \
+            from custom_fields \
+            where custom_fields.journals_id = $1",
+            params
+        ).await?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = HashMap::new();
+
+        while let Some(result) = stream.next().await {
+            let row = result?;
+
+            rtn.insert(row.get(0), row.get(1));
+        }
+
+        Ok(rtn)
+    }
+
     pub fn validate(&self, given: Value) -> Result<Value, Value> {
         match self {
             Type::Integer {
@@ -199,7 +229,7 @@ pub enum Value {
 }
 
 impl Entry {
-    pub async fn retrieve_entries_id_stream(
+    pub async fn retrieve_entry_stream(
         conn: &impl GenericClient,
         entries_id: &EntryId
     ) -> Result<impl Stream<Item = Result<Self, PgError>>, PgError> {
@@ -224,6 +254,25 @@ impl Entry {
                 created: row.get(3),
                 updated: row.get(4),
             })))
+    }
+
+    pub async fn retrieve_entry(
+        conn: &impl GenericClient,
+        entries_id: &EntryId,
+    ) -> Result<Vec<Self>, PgError> {
+        let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = Vec::new();
+
+        while let Some(try_record) = stream.next().await {
+            let record = try_record?;
+
+            rtn.push(record);
+        }
+
+        Ok(rtn)
     }
 }
 

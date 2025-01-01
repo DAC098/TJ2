@@ -6,7 +6,7 @@ use rand::distributions::{Alphanumeric, Bernoulli};
 use super::{GenericClient, ids};
 
 use crate::error::{Error, Context};
-use crate::journal::Journal;
+use crate::journal::{custom_field, Journal, CustomField, CustomFieldOptions};
 use crate::user::{User, Group, assign_user_group};
 use crate::sec::password;
 use crate::sec::authz::{Role, Scope, Ability};
@@ -79,6 +79,29 @@ pub async fn create_journal(
         .await
         .context("failed to create journal for test user")?;
 
+    let custom_fields = vec![
+        CustomField::create_field(conn, CustomFieldOptions::new(
+            journal.id,
+            "mood",
+            custom_field::Type::Integer {
+                minimum: Some(1),
+                maximum: Some(10),
+            }
+        ))
+            .await
+            .context("failed to create mood field for journal")?,
+        CustomField::create_field(conn, CustomFieldOptions::new(
+            journal.id,
+            "sleep",
+            custom_field::Type::TimeRange {
+                show_diff: true,
+                as_12hr: false
+            }
+        ))
+            .await
+            .context("failed to create sleep field for journal")?,
+    ];
+
     let journal_dir = state.storage()
         .journal_dir(&journal);
 
@@ -96,7 +119,7 @@ pub async fn create_journal(
 
         //tracing::debug!("creating entry: {date}");
 
-        create_journal_entry(conn, rng, journal.id, users_id, date).await?;
+        create_journal_entry(conn, rng, journal.id, users_id, date, &custom_fields).await?;
     }
 
     tracing::info!("created {total_entries} entries");
@@ -110,6 +133,7 @@ async fn create_journal_entry(
     journals_id: ids::JournalId,
     users_id: ids::UserId,
     date: NaiveDate,
+    custom_fields: &Vec<CustomField>,
 ) -> Result<(), Error> {
     let dist = Bernoulli::from_ratio(6, 10)
         .context("failed to create Bernoulli distribution")?;
@@ -152,6 +176,24 @@ async fn create_journal_entry(
         )
             .await
             .context("failed to insert journal tag")?;
+    }
+
+    for field in custom_fields {
+        let created = Utc::now();
+        let value = gen_custom_field_value(
+            rng,
+            &field.config,
+            date
+        );
+
+        conn.execute(
+            "\
+            insert into custom_field_entries (custom_fields_id, entries_id, value, created) \
+            values ($1, $2, $3, $4)",
+            &[&field.id, &entries_id, &value, &created]
+        )
+            .await
+            .context("failed to insert custom field value")?;
     }
 
     Ok(())
@@ -235,5 +277,199 @@ fn gen_entry_title(rng: &mut ThreadRng, dist: Bernoulli) -> Option<String> {
             .collect())
     } else {
         None
+    }
+}
+
+fn gen_custom_field_value(
+    rng: &mut ThreadRng,
+    config: &custom_field::Type,
+    date: NaiveDate,
+) -> custom_field::Value {
+    match config {
+        custom_field::Type::Integer {
+            minimum,
+            maximum,
+        } => match (minimum, maximum) {
+            (Some(min), Some(max)) => {
+                let value = rng.gen_range(*min..*max);
+
+                custom_field::Value::Integer { value }
+            }
+            (Some(min), None) => {
+                let upper = rng.gen_range(5..10);
+                let value = rng.gen_range(*min..(*min + upper));
+
+                custom_field::Value::Integer { value }
+            }
+            (None, Some(max)) => {
+                let lower = rng.gen_range(5..10);
+                let value = rng.gen_range((*max - lower)..*max);
+
+                custom_field::Value::Integer { value }
+            }
+            (None, None) => {
+                let value = rng.gen_range(-10..10);
+
+                custom_field::Value::Integer { value }
+            }
+        }
+        custom_field::Type::IntegerRange {
+            minimum,
+            maximum,
+        } => match (minimum, maximum) {
+            (Some(min), Some(max)) => {
+                let diff = *max - *min;
+
+                if diff < 2 {
+                    custom_field::Value::IntegerRange {
+                        low: *min,
+                        high: *max,
+                    }
+                } else {
+                    let mid = diff / 2;
+                    let low = rng.gen_range(*min..mid);
+                    let high = rng.gen_range(mid..*max);
+
+                    custom_field::Value::IntegerRange { low, high }
+                }
+            }
+            (Some(min), None) => {
+                let diff = rng.gen_range(2..8);
+                let upper = rng.gen_range(2..8);
+
+                let mid = *min + diff;
+
+                let low = rng.gen_range(*min..mid);
+                let high = rng.gen_range(mid..(mid + upper));
+
+                custom_field::Value::IntegerRange { low, high }
+            }
+            (None, Some(max)) => {
+                let diff = rng.gen_range(2..8);
+                let lower = rng.gen_range(2..8);
+
+                let mid = *max - diff;
+
+                let low = rng.gen_range((mid - lower)..mid);
+                let high = rng.gen_range(mid..*max);
+
+                custom_field::Value::IntegerRange { low, high }
+            }
+            (None, None) => {
+                let low = rng.gen_range(1..5);
+                let high = rng.gen_range(5..10);
+
+                custom_field::Value::IntegerRange { low, high }
+            }
+        }
+        custom_field::Type::Float {
+            minimum,
+            maximum,
+            ..
+        } => match (minimum, maximum) {
+            (Some(min), Some(max)) => {
+                let value = rng.gen_range(*min..*max);
+
+                custom_field::Value::Float { value }
+            }
+            (Some(min), None) => {
+                let upper = rng.gen_range(5.0..10.0);
+                let value = rng.gen_range(*min..(*min + upper));
+
+                custom_field::Value::Float { value }
+            }
+            (None, Some(max)) => {
+                let lower = rng.gen_range(5.0..10.0);
+                let value = rng.gen_range((*max - lower)..*max);
+
+                custom_field::Value::Float { value }
+            }
+            (None, None) => {
+                let value = rng.gen_range(1.0..10.0);
+
+                custom_field::Value::Float { value }
+            }
+        }
+        custom_field::Type::FloatRange {
+            minimum,
+            maximum,
+            ..
+        } => match (minimum, maximum) {
+            (Some(min), Some(max)) => {
+                let diff = *max - *min;
+
+                if diff < 2.0 {
+                    custom_field::Value::FloatRange {
+                        low: *min,
+                        high: *max
+                    }
+                } else {
+                    let mid = diff / 2.0;
+                    let low = rng.gen_range(*min..mid);
+                    let high = rng.gen_range(mid..*max);
+
+                    custom_field::Value::FloatRange { low, high }
+                }
+            }
+            (Some(min), None) => {
+                let diff = rng.gen_range(2.0..8.0);
+                let upper = rng.gen_range(2.0..8.0);
+
+                let mid = *min + diff;
+
+                let low = rng.gen_range(*min..mid);
+                let high = rng.gen_range(mid..(mid + upper));
+
+                custom_field::Value::FloatRange { low, high }
+            }
+            (None, Some(max)) => {
+                let diff = rng.gen_range(2.0..8.0);
+                let lower = rng.gen_range(2.0..8.0);
+
+                let mid = *max - diff;
+
+                let low = rng.gen_range((mid - lower)..mid);
+                let high = rng.gen_range(mid..*max);
+
+                custom_field::Value::FloatRange { low, high }
+            }
+            (None, None) => {
+                let low = rng.gen_range(1.0..5.0);
+                let high = rng.gen_range(5.0..10.0);
+
+                custom_field::Value::FloatRange { low, high }
+            }
+        }
+        custom_field::Type::Time {..} => {
+            let hours = rng.gen_range(1..=23);
+            let minutes = rng.gen_range(1..60);
+            let seconds = rng.gen_range(1..60);
+
+            let value = date.and_hms_opt(hours, minutes, seconds)
+                .unwrap()
+                .and_utc();
+
+            custom_field::Value::Time { value }
+        }
+        custom_field::Type::TimeRange {..} => {
+            let hours = rng.gen_range(6..=8);
+            let minuts = rng.gen_range(1..60);
+            let seconds = rng.gen_range(1..60);
+
+            let start_hr = rng.gen_range(7..10);
+            let start_min = rng.gen_range(1..60);
+            let start_sec = rng.gen_range(1..60);
+
+            let low = date.and_hms_opt(start_hr, start_min, start_sec)
+                .unwrap()
+                .and_utc();
+            let high = low + chrono::Duration::seconds(
+                hours * 60 * 60 +
+                minuts * 60 +
+                seconds
+            );
+
+            custom_field::Value::TimeRange { low, high }
+        }
     }
 }

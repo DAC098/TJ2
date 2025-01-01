@@ -318,41 +318,6 @@ where
     pub files: Vec<Files>,
 }
 
-impl EntryFull {
-    pub async fn retrieve_id(
-        conn: &impl GenericClient,
-        journals_id: &JournalId,
-        users_id: &UserId,
-        entries_id: &EntryId,
-    ) -> Result<Option<Self>, PgError> {
-        if let Some(found) = Entry::retrieve_id(conn, journals_id, users_id, entries_id).await ? {
-            let tags_fut = EntryTag::retrieve_entry(conn, found.id);
-            let files_fut = FileEntry::retrieve_entry(conn, &found.id);
-
-            match tokio::join!(tags_fut, files_fut) {
-                (Ok(tags), Ok(files)) => Ok(Some(Self {
-                    id: found.id,
-                    uid: found.uid,
-                    journals_id: found.journals_id,
-                    users_id: found.users_id,
-                    date: found.date,
-                    title: found.title,
-                    contents: found.contents,
-                    created: found.created,
-                    updated: found.updated,
-                    tags,
-                    files,
-                })),
-                (Ok(_), Err(err)) => Err(err),
-                (Err(err), Ok(_)) => Err(err),
-                (Err(tags_err), Err(_files_err)) => Err(tags_err)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct EntryTag {
     pub key: String,
@@ -494,22 +459,6 @@ impl FileEntry {
             }))
     }
 
-    pub async fn retrieve_entry(
-        conn: &impl GenericClient,
-        entries_id: &EntryId
-    ) -> Result<Vec<Self>, PgError> {
-        let stream = Self::retrieve_entry_stream(conn, &entries_id).await?;
-        let mut rtn = Vec::new();
-
-        futures::pin_mut!(stream);
-
-        while let Some(item) = stream.try_next().await? {
-            rtn.push(item);
-        }
-
-        Ok(rtn)
-    }
-
     pub fn get_mime(&self) -> mime::Mime {
         let parse = if let Some(param) = &self.mime_param {
             format!("{}/{};{param}", self.mime_type, self.mime_subtype)
@@ -547,6 +496,48 @@ impl FileEntry {
     }
 }
 
+pub struct CustomFieldOptions {
+    journals_id: JournalId,
+    name: String,
+    pub order: i32,
+    pub config: custom_field::Type,
+    pub description: Option<String>,
+}
+
+impl CustomFieldOptions {
+    pub fn new<N>(
+        journals_id: JournalId,
+        name: N,
+        config: custom_field::Type
+    ) -> Self
+    where
+        N: Into<String>
+    {
+        CustomFieldOptions {
+            journals_id,
+            name: name.into(),
+            order: 0,
+            config,
+            description: None,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CreateCustomFieldError {
+    #[error("the given custom field uid already exists")]
+    UidExists,
+
+    #[error("the given name already exists for this journal")]
+    NameExists,
+
+    #[error("the specified journal does not exist")]
+    JournalNotFound,
+
+    #[error(transparent)]
+    Db(#[from] PgError),
+}
+
 #[derive(Debug)]
 pub struct CustomField {
     pub id: CustomFieldId,
@@ -561,6 +552,68 @@ pub struct CustomField {
 }
 
 impl CustomField {
+    pub async fn create_field(
+        conn: &impl GenericClient,
+        options: CustomFieldOptions
+    ) -> Result<Self, CreateCustomFieldError> {
+        let uid = CustomFieldUid::gen();
+        let created = Utc::now();
+        let CustomFieldOptions {
+            journals_id,
+            name,
+            order,
+            config,
+            description
+        } = options;
+
+        let result = conn.query_one(
+            "\
+            insert into custom_fields (\
+                uid, \
+                journals_id, \
+                name, \
+                \"order\", \
+                config, \
+                description, \
+                created \
+            ) values ($1, $2, $3, $4, $5, $6, $7) \
+            returning id",
+            &[&uid, &journals_id, &name, &order, &config, &description, &created]
+        ).await;
+
+        match result {
+            Ok(row) => Ok(Self {
+                id: row.get(0),
+                uid,
+                journals_id,
+                name,
+                order,
+                config,
+                description,
+                created,
+                updated: None,
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "custom_fields_journals_id_name_key" =>
+                            Err(CreateCustomFieldError::NameExists),
+                        "custom_fields_uid_key" =>
+                            Err(CreateCustomFieldError::UidExists),
+                        _ => Err(CreateCustomFieldError::Db(err)),
+                    }
+                    db::ErrorKind::ForeignKey(constraint) => match constraint {
+                        "custom_fields_journals_id_fkey" =>
+                            Err(CreateCustomFieldError::JournalNotFound),
+                        _ => Err(CreateCustomFieldError::Db(err))
+                    }
+                }
+            } else {
+                Err(CreateCustomFieldError::Db(err))
+            }
+        }
+    }
+
     pub async fn retrieve_journal_stream(
         conn: &impl GenericClient,
         journals_id: &JournalId,
@@ -634,7 +687,7 @@ impl JournalDir {
         Ok(())
     }
 
-    pub fn file_path(&self, file_entry: &FileEntry) -> PathBuf {
-        self.root.join(format!("files/{}.file", file_entry.id))
+    pub fn file_path(&self, file_entries_id: &FileEntryId) -> PathBuf {
+        self.root.join(format!("files/{}.file", file_entries_id))
     }
 }
