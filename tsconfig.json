@@ -1,0 +1,17 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ES2022",
+        "jsx": "react-jsx",
+        "moduleResolution": "Bundler",
+        "sourceMap": true,
+        "baseUrl": "./frontend/src/",
+        "paths": {
+            "@/*": ["./*"]
+        }
+    },
+    "include": [
+        "./frontend/src/**/*.tsx",
+        "./frontend/src/**/*.ts"
+    ]
+}

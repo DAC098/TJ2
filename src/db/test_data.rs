@@ -95,7 +95,6 @@ pub async fn create_journal(
             "sleep",
             custom_field::Type::TimeRange {
                 show_diff: true,
-                as_12hr: false
             }
         ))
             .await

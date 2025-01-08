@@ -1,4 +1,145 @@
-import { res_as_json } from "@/net";
+import { res_as_json, send_json } from "@/net";
+
+export namespace custom_field {
+    export enum TypeName {
+        Integer = "Integer",
+        IntegerRange = "IntegerRange",
+        Float = "Float",
+        FloatRange = "FloatRange",
+        Time = "Time",
+        TimeRange = "TimeRange",
+    }
+
+    export interface IntegerType {
+        type: TypeName.Integer,
+        minimum: number | null,
+        maximum: number | null,
+    }
+
+    export interface IntegerValue {
+        type: TypeName.Integer,
+        value: number
+    }
+
+    export interface IntegerRangeType {
+        type: TypeName.IntegerRange,
+        minimum: number | null,
+        maximum: number | null,
+    }
+
+    export interface IntegerRangeValue {
+        type: TypeName.IntegerRange,
+        low: number,
+        high: number,
+    }
+
+    export interface FloatType {
+        type: TypeName.Float,
+        minimum: number | null,
+        maximum: number | null,
+        step: number,
+        precision: number,
+    }
+
+    export interface FloatValue {
+        type: TypeName.Float,
+        value: number,
+    }
+
+    export interface FloatRangeType {
+        type: TypeName.FloatRange,
+        minimum: number | null,
+        maximum: number | null,
+        step: number,
+        precision: number,
+    }
+
+    export interface FloatRangeValue {
+        type: TypeName.FloatRange,
+        low: number,
+        high: number,
+    }
+
+    export interface TimeType {
+        type: TypeName.Time,
+    }
+
+    export interface TimeValue {
+        type: TypeName.Time,
+        value: string,
+    }
+
+    export interface TimeRangeType {
+        type: TypeName.TimeRange,
+        show_diff: boolean,
+    }
+
+    export interface TimeRangeValue {
+        type: TypeName.TimeRange,
+        low: string,
+        high: string,
+    }
+
+    export type Type =
+        IntegerType |
+        IntegerRangeType |
+        FloatType |
+        FloatRangeType |
+        TimeType |
+        TimeRangeType;
+
+    export type Value =
+        IntegerValue |
+        IntegerRangeValue |
+        FloatValue |
+        FloatRangeValue |
+        TimeValue |
+        TimeRangeValue;
+
+    export function make_type(given: TypeName): Type {
+        switch (given) {
+        case TypeName.Integer:
+            return {
+                type: TypeName.Integer,
+                minimum: null,
+                maximum: null,
+            };
+        case TypeName.IntegerRange:
+            return {
+                type: TypeName.IntegerRange,
+                minimum: null,
+                maximum: null,
+            };
+        case TypeName.Float:
+            return {
+                type: TypeName.Float,
+                minimum: null,
+                maximum: null,
+                step: 0.01,
+                precision: 2,
+            };
+        case TypeName.FloatRange:
+            return {
+                type: TypeName.FloatRange,
+                minimum: null,
+                maximum: null,
+                step: 0.01,
+                precision: 2,
+            };
+        case TypeName.Time:
+            return {
+                type: TypeName.Time,
+            };
+        case TypeName.TimeRange:
+            return {
+                type: TypeName.TimeRange,
+                show_diff: false
+            };
+        default:
+            throw new Error("unknown type name given");
+        }
+    }
+}
 
 export interface JournalPartial {
     id: number,
@@ -10,6 +151,17 @@ export interface JournalPartial {
     updated: string | null
 }
 
+export interface JournalCustomField {
+    id: number,
+    uid: string,
+    name: string,
+    order: number,
+    config: custom_field.Type,
+    description: string | null,
+    created: string,
+    updated: string | null,
+}
+
 export interface JournalFull {
     id: number,
     uid: string,
@@ -17,7 +169,8 @@ export interface JournalFull {
     name: string,
     description: string | null,
     created: string,
-    updated: string | null
+    updated: string | null,
+    custom_fields: JournalCustomField[],
 }
 
 export interface EntryPartial {
@@ -25,14 +178,21 @@ export interface EntryPartial {
     date: string,
     created: string,
     updated: string | null,
-    tags: TagsPartial
+    tags: EntryTagsPartial
 }
 
-export interface TagsPartial {
+export interface EntryTagsPartial {
     [key: string]: string | null
 }
 
-export interface JournalEntry {
+export interface EntryCustomField {
+    custom_fields_id: number,
+    value: custom_field.Value,
+    created: string,
+    updated: string | null,
+}
+
+export interface Entry {
     id: number,
     uid: string,
     journals_id: number,
@@ -42,18 +202,19 @@ export interface JournalEntry {
     contents: string | null,
     created: string,
     updated: string | null,
-    tags: JournalTag[],
-    files: JournalFile[],
+    tags: EntryTag[],
+    files: EntryFile[],
+    custom_fields: EntryCustomField[],
 }
 
-export interface JournalTag {
+export interface EntryTag {
     key: string,
     value: string | null,
     created: string,
     updated: string | null,
 }
 
-export interface JournalFile {
+export interface EntryFile {
     id: number,
     uid: string,
     entries_id: number,
@@ -64,11 +225,16 @@ export interface JournalFile {
     size: number,
     created: string,
     updated: string | null,
-    attached?: JournalClientData,
+    attached?: ClientData,
 }
 
-export interface JournalClientData {
+export interface ClientData {
     key: string
+}
+
+export interface EntryCustomFieldForm {
+    custom_fields_id: number,
+    value: custom_field.Value,
 }
 
 export interface EntryTagForm {
@@ -121,6 +287,7 @@ export interface EntryForm {
     contents: string,
     tags: EntryTagForm[],
     files: EntryFileForm[],
+    custom_fields: EntryCustomFieldForm[],
 }
 
 function pad_num(num: number): string {
@@ -153,6 +320,7 @@ export function blank_form(): EntryForm {
         contents: "",
         tags: [],
         files: [],
+        custom_fields: [],
     };
 }
 
@@ -172,9 +340,10 @@ export function parse_date(given: string): ParsedDate {
     };
 }
 
-export function entry_to_form(entry: JournalEntry): EntryForm {
+export function entry_to_form(entry: Entry): EntryForm {
     let tags = [];
     let files = [];
+    let custom_fields = [];
 
     for (let tag of entry.tags) {
         tags.push({
@@ -197,6 +366,13 @@ export function entry_to_form(entry: JournalEntry): EntryForm {
         });
     }
 
+    for (let field of entry.custom_fields) {
+        custom_fields.push({
+            custom_fields_id: field.custom_fields_id,
+            value: field.value,
+        });
+    }
+
     let date = new Date();
     let parsed = parse_date(entry.date);
     date.setFullYear(parsed.year);
@@ -211,6 +387,7 @@ export function entry_to_form(entry: JournalEntry): EntryForm {
         contents: entry.contents ?? "",
         tags,
         files,
+        custom_fields,
     };
 }
 
@@ -248,7 +425,7 @@ export async function get_journal(journals_id: string) {
 export async function retrieve_entry(
     journals_id: string,
     entries_id: string,
-): Promise<JournalEntry | null> {
+): Promise<Entry | null> {
     let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`);
 
     if (res.status === 404) {
@@ -259,15 +436,13 @@ export async function retrieve_entry(
         throw new Error("non 200 response status");
     }
 
-    return await res_as_json<JournalEntry>(res);
+    return await res_as_json<Entry>(res);
 }
 
 export async function create_entry(
     journals_id: string,
     entry: EntryForm,
 ) {
-    console.log("given entry:", entry);
-
     let sending = {
         date: get_date(entry.date),
         title: entry.title,
@@ -290,21 +465,17 @@ export async function create_entry(
         }
     }
 
-    let body = JSON.stringify(sending);
-    let res = await fetch(`/journals/${journals_id}/entries`, {
-        method: "POST",
-        headers: {
-            "content-type": "application/json",
-            "content-length": body.length.toString(10),
-        },
-        body: body
-    });
+    let res = await send_json(
+        "POST",
+        `/journals/${journals_id}/entries`,
+        sending
+    );
 
     if (res.status !== 201) {
         throw new Error("failed to create new entry");
     }
 
-    return await res_as_json<JournalEntry>(res);
+    return await res_as_json<Entry>(res);
 }
 
 export async function update_entry(
@@ -334,21 +505,17 @@ export async function update_entry(
         }
     }
 
-    let body = JSON.stringify(sending);
-    let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`, {
-        method: "PATCH",
-        headers: {
-            "content-type": "application/json",
-            "content-length": body.length.toString(10),
-        },
-        body: body
-    });
+    let res = await send_json(
+        "PATCH",
+        `/journals/${journals_id}/entries/${entries_id}`,
+        sending
+    );
 
     if (res.status !== 200) {
         throw new Error("failed to update entry");
     }
 
-    return await res_as_json<JournalEntry>(res);
+    return await res_as_json<Entry>(res);
 }
 
 export async function delete_entry(
@@ -367,7 +534,7 @@ export async function delete_entry(
 export async function upload_data(
     journals_id: number,
     entries_id: number,
-    file_entry: JournalFile,
+    file_entry: EntryFile,
     ref: LocalFile | InMemoryFile | ServerFile,
 ): Promise<boolean> {
     try {

@@ -31,8 +31,7 @@ import TagEntry from "@/journals/TagEntry";
 import FileEntry from "@/journals/FileEntry";
 import {
     EntryPartial,
-    JournalEntry,
-    JournalTag,
+    Entry,
     EntryFileForm,
     EntryForm,
     EntryTagForm,
@@ -63,8 +62,6 @@ export function Entries() {
     let [entries, setEntries] = useState<EntryPartial[]>([]);
 
     useEffect(() => {
-        console.log("loading entries");
-
         setLoading(true);
 
         retrieve_entries(journals_id).then(json => {
@@ -221,7 +218,7 @@ function create_file_map(files: EntryFileForm[]): EntryFileFormMap {
 
 async function parallel_uploads(
     entry_form: EntryForm,
-    entry: JournalEntry,
+    entry: Entry,
 ): Promise<EntryFileForm[]> {
     let mapped = create_file_map(entry_form.files);
     let to_upload = [];
@@ -316,7 +313,7 @@ export function Entry() {
         disabled: false,
     });
 
-    const create_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
+    const create_and_upload = async (entry: EntryForm): Promise<[Entry, EntryFileForm[]]> => {
         let result = await create_entry(journals_id, entry);
 
         if (result.files.length === 0) {
@@ -328,7 +325,7 @@ export function Entry() {
         return [result, failed_uploads];
     };
 
-    const update_and_upload = async (entry: EntryForm): Promise<[JournalEntry, EntryFileForm[]]> => {
+    const update_and_upload = async (entry: EntryForm): Promise<[Entry, EntryFileForm[]]> => {
         let result = await update_entry(journals_id, entries_id, entry);
 
         if (result.files.length === 0) {

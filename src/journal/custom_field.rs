@@ -14,10 +14,6 @@ fn default_time_range_show_diff() -> bool {
     false
 }
 
-fn default_as_12hr() -> bool {
-    false
-}
-
 fn default_step() -> f32 {
     0.01
 }
@@ -55,16 +51,10 @@ pub enum Type {
         precision: i32
     },
 
-    Time {
-        #[serde(default = "default_as_12hr")]
-        as_12hr: bool
-    },
+    Time {},
     TimeRange {
         #[serde(default = "default_time_range_show_diff")]
         show_diff: bool,
-
-        #[serde(default = "default_as_12hr")]
-        as_12hr: bool
     },
 }
 

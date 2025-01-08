@@ -633,7 +633,7 @@ impl CustomField {
                    custom_fields.updated \
             from custom_fields \
             where custom_fields.journals_id = $1 \
-            order by custom_fields.\"order\", \
+            order by custom_fields.\"order\" desc, \
                      custom_fields.name",
             params
         )
