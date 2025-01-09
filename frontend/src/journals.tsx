@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from "react";
+import { useState, useEffect, Fragment, PropsWithChildren } from "react";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 import { Routes, Route, Link, useParams, useNavigate } from "react-router-dom";
 import { Plus, Save, Trash, RefreshCcw, Search, Check, Pencil, ArrowLeft } from "lucide-react";
@@ -6,6 +6,13 @@ import { Plus, Save, Trash, RefreshCcw, Search, Check, Pencil, ArrowLeft } from 
 import { send_json } from "@/net";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+    DropdownMenu,
+    DropdownMenuTrigger,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+} from "@/components/ui/dropdown-menu";
 import {
     FormControl,
     FormDescription,
@@ -46,8 +53,14 @@ import {
     custom_field,
 } from "@/journals/api";
 import {
+    IntegerConfig,
+    FloatConfig,
+    TimeRangeConfig,
+} from "@/journals/custom_fields";
+import {
     JournalForm,
     blank_journal_form,
+    blank_journal_custom_field_form,
 } from "@/journals/forms";
 import { Entry, Entries } from "@/journals/entries";
 
@@ -312,20 +325,30 @@ function CustomFieldList({}: CustomFieldListProps) {
     return <div className="space-y-4">
         <div className="flex flex-row flex-nowrap gap-x-4 items-center">
             Custom Fields
-            <Button type="button" variant="secondary" onClick={() => {
-                custom_fields.append({
-                    _id: null,
-                    uid: null,
-                    name: "",
-                    order: 0,
-                    config: {
-                        type: custom_field.TypeName.Integer,
-                        minimum: null,
-                        maximum: null,
-                    },
-                    description: "",
-                });
-            }}><Plus/>Add Field</Button>
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="secondary">
+                        <Plus/>Add Field
+                    </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                    <DropdownMenuItem onSelect={ev => {
+                        custom_fields.append(blank_journal_custom_field_form(custom_field.TypeName.Integer));
+                    }}>Integer</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={ev => {
+                        custom_fields.append(blank_journal_custom_field_form(custom_field.TypeName.IntegerRange));
+                    }}>Integer Range</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={ev => {
+                        custom_fields.append(blank_journal_custom_field_form(custom_field.TypeName.Float));
+                    }}>Float</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={ev => {
+                        custom_fields.append(blank_journal_custom_field_form(custom_field.TypeName.FloatRange));
+                    }}>Float Range</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={ev => {
+                        custom_fields.append(blank_journal_custom_field_form(custom_field.TypeName.TimeRange));
+                    }}>Time Range</DropdownMenuItem>
+                </DropdownMenuContent>
+            </DropdownMenu>
         </div>
         {custom_fields.fields.map((field, index) => {
             let type_ui = null;
@@ -334,40 +357,40 @@ function CustomFieldList({}: CustomFieldListProps) {
             switch (field.config.type) {
             case custom_field.TypeName.Integer:
                 type_ui = <IntegerConfig id={field.id} config={field.config} index={index}/>;
-                type_desc = <FormDescription>
+                type_desc = <FieldDesc title="Integer">
                     Single whole number input that can have an optional minimum and maximum value.
-                </FormDescription>;
+                </FieldDesc>;
                 break;
             case custom_field.TypeName.IntegerRange:
                 type_ui = <IntegerConfig id={field.id} config={field.config} index={index}/>;
-                type_desc = <FormDescription>
+                type_desc = <FieldDesc title="Integer Range">
                     Whole number input that can specify a range between a low and high value with an optional minimum and maximum value.
-                </FormDescription>;
+                </FieldDesc>;
                 break;
             case custom_field.TypeName.Float:
                 type_ui = <FloatConfig id={field.id} config={field.config} index={index}/>;
-                type_desc = <FormDescription>
+                type_desc = <FieldDesc title="Float">
                     Single decimal number input that can have an optional minimum and maximum value.
                     Can also specify the precision of the value and the step at which to increase that value by.
-                </FormDescription>;
+                </FieldDesc>;
                 break;
             case custom_field.TypeName.FloatRange:
                 type_ui = <FloatConfig id={field.id} config={field.config} index={index}/>;
-                type_desc = <FormDescription>
+                type_desc = <FieldDesc title="Float Range">
                     Decimal number input that can specify a range between a low and high value with an optional minimum and maximum value.
                     Can also specify the precision of the value and the step at which to increase that value by.
-                </FormDescription>;
+                </FieldDesc>;
                 break;
             case custom_field.TypeName.Time:
-                type_desc = <FormDescription>
+                type_desc = <FieldDesc title="Time">
                     under consideration
-                </FormDescription>;
+                </FieldDesc>;
                 break;
             case custom_field.TypeName.TimeRange:
                 type_ui = <TimeRangeConfig id={field.id} config={field.config} index={index}/>;
-                type_desc = <FormDescription>
+                type_desc = <FieldDesc title="Time Range">
                     Time input that can specify a range between a low and high value.
-                </FormDescription>;
+                </FieldDesc>;
                 break;
             }
 
@@ -386,6 +409,7 @@ function CustomFieldList({}: CustomFieldListProps) {
                             custom_fields.remove(index);
                         }}><Trash/></Button>
                     </div>
+                    {type_desc}
                     <FormField control={form.control} name={`custom_fields.${index}.order`} render={({field: order_field}) => {
                         return <FormItem>
                             <FormLabel>Order</FormLabel>
@@ -420,35 +444,6 @@ function CustomFieldList({}: CustomFieldListProps) {
                             </FormControl>
                         </FormItem>
                     }}/>
-                    <FormItem>
-                        <FormLabel>Type</FormLabel>
-                        <Select
-                            defaultValue={field.config.type}
-                            onValueChange={value => {
-                                let curr = form.getValues(`custom_fields.${index}`);
-
-                                custom_fields.update(index, {
-                                    ...curr,
-                                    config: custom_field.make_type(value),
-                                });
-                            }}
-                        >
-                            <FormControl>
-                                <SelectTrigger className="w-1/4">
-                                    <SelectValue placeholder="Type"/>
-                                </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                                <SelectItem value="Integer">Integer</SelectItem>
-                                <SelectItem value="IntegerRange">Integer Range</SelectItem>
-                                <SelectItem value="Float">Float</SelectItem>
-                                <SelectItem value="FloatRange">Float Range</SelectItem>
-                                <SelectItem value="Time">Time</SelectItem>
-                                <SelectItem value="TimeRange">Time Range</SelectItem>
-                            </SelectContent>
-                        </Select>
-                        {type_desc}
-                    </FormItem>
                     {type_ui}
                 </div>
             </Fragment>;
@@ -456,223 +451,17 @@ function CustomFieldList({}: CustomFieldListProps) {
     </div>;
 }
 
-interface IntegerConfigProps {
-    id: string,
-    config: custom_field.IntegerType | custom_field.IntegerRangeType,
-    index: number,
+interface FieldDescProps {
+    title: string,
 }
 
-function IntegerConfig({config, index}:IntegerConfigProps) {
-    const form = useFormContext<JournalForm>();
+type FieldDescChildProps = PropsWithChildren<FieldDescProps>;
 
-    return <div className="flex flex-nowrap gap-x-4">
-        <FormField control={form.control} name={`custom_fields.${index}.config.minimum`} render={({field: min_field}) => {
-            return <FormItem className="w-1/2">
-                <div className="flex flex-row flex-nowrap items-center gap-x-4">
-                    <FormControl>
-                        <Checkbox checked={min_field.value != null} onCheckedChange={(v) => {
-                            min_field.onChange(v ? 0 : null)
-                        }}/>
-                    </FormControl>
-                    <FormLabel>Minimum</FormLabel>
-                </div>
-                <FormControl>
-                    <Input
-                        ref={min_field.ref}
-                        disabled={min_field.disabled || min_field.value == null}
-                        name={min_field.name}
-                        value={min_field.value ?? 0}
-                        className="w-1/2"
-                        type="number"
-                        step="1"
-                        onBlur={min_field.onBlur}
-                        onChange={ev => {
-                            min_field.onChange(parseInt(ev.target.value, 10));
-                        }}
-                    />
-                </FormControl>
-                <FormDescription>
-                    The minimum value that an integer value can be (inclusive)
-                </FormDescription>
-            </FormItem>;
-        }}/>
-        <FormField control={form.control} name={`custom_fields.${index}.config.maximum`} render={({field: max_field}) => {
-            return <FormItem className="w-1/2">
-                <div className="flex flex-row flex-nowrap items-center gap-x-4">
-                    <FormControl>
-                        <Checkbox checked={max_field.value != null} onCheckedChange={(v) => {
-                            max_field.onChange(v ? 10 : null)
-                        }}/>
-                    </FormControl>
-                    <FormLabel>Maximum</FormLabel>
-                </div>
-                <FormControl>
-                    <Input
-                        ref={max_field.ref}
-                        disabled={max_field.disabled || max_field.value == null}
-                        name={max_field.name}
-                        value={max_field.value ?? 0}
-                        className="w-1/2"
-                        type="number"
-                        step="1"
-                        onBlur={max_field.onBlur}
-                        onChange={ev => {
-                            max_field.onChange(parseInt(ev.target.value, 10));
-                        }}
-                    />
-                </FormControl>
-                <FormDescription>
-                    The maximum value that an integer value can be (inclusive)
-                </FormDescription>
-            </FormItem>
-        }}/>
+function FieldDesc({title, children}: FieldDescChildProps) {
+    return <div>
+        <span className="text-sm font-medium inline">{title} </span>
+        <p className="text-sm text-muted-foreground inline">
+            {children}
+        </p>
     </div>;
-}
-
-interface FloatConfigProps {
-    id: string,
-    config: custom_field.FloatType | custom_field.FloatRangeType,
-    index: number,
-}
-
-function FloatConfig({config, index}: FloatConfigProps) {
-    const form = useFormContext<JournalForm>();
-
-    return <div className="space-y-4">
-        <div className="flex flex-nowrap gap-x-4">
-            <FormField control={form.control} name={`custom_fields.${index}.config.minimum`} render={({field: min_field}) => {
-                return <FormItem className="w-1/2">
-                    <div className="flex flex-row flex-nowrap items-center gap-x-4">
-                        <FormControl>
-                            <Checkbox checked={min_field.value != null} onCheckedChange={(v) => {
-                                min_field.onChange(v ? 0 : null)
-                            }}/>
-                        </FormControl>
-                        <FormLabel>Minimum</FormLabel>
-                    </div>
-                    <FormControl>
-                        <Input
-                            ref={min_field.ref}
-                            disabled={min_field.disabled || min_field.value == null}
-                            name={min_field.name}
-                            value={min_field.value ?? 0}
-                            className="w-1/2"
-                            type="number"
-                            step="any"
-                            onBlur={min_field.onBlur}
-                            onChange={ev => {
-                                min_field.onChange(parseFloat(ev.target.value));
-                            }}
-                        />
-                    </FormControl>
-                    <FormDescription>
-                        The minimum value that a float value can be (inclusive)
-                    </FormDescription>
-                </FormItem>;
-            }}/>
-            <FormField control={form.control} name={`custom_fields.${index}.config.maximum`} render={({field: max_field}) => {
-                return <FormItem className="w-1/2">
-                    <div className="flex flex-row flex-nowrap items-center gap-x-4">
-                        <FormControl>
-                            <Checkbox checked={max_field.value != null} onCheckedChange={(v) => {
-                                max_field.onChange(v ? 10 : null)
-                            }}/>
-                        </FormControl>
-                        <FormLabel>Maximum</FormLabel>
-                    </div>
-                    <FormControl>
-                        <Input
-                            ref={max_field.ref}
-                            disabled={max_field.disabled || max_field.value == null}
-                            name={max_field.name}
-                            value={max_field.value ?? 0}
-                            className="w-1/2"
-                            type="number"
-                            step="any"
-                            onBlur={max_field.onBlur}
-                            onChange={ev => {
-                                max_field.onChange(parseFloat(ev.target.value));
-                            }}
-                        />
-                    </FormControl>
-                    <FormDescription>
-                        The maximum value that a float value can be (inclusive)
-                    </FormDescription>
-                </FormItem>
-            }}/>
-        </div>
-        <div className="flex flex-row flex-nowrap gap-x-4">
-            <FormField control={form.control} name={`custom_fields.${index}.config.step`} render={({field: step_field}) => {
-                return <FormItem className="w-1/2">
-                    <FormLabel>Step</FormLabel>
-                    <FormControl>
-                        <Input
-                            ref={step_field.ref}
-                            disabled={step_field.disabled}
-                            name={step_field.name}
-                            value={step_field.value}
-                            className="w-1/2"
-                            type="number"
-                            step="any"
-                            onBlur={step_field.onBlur}
-                            onChange={ev => {
-                                step_field.onChange(parseFloat(ev.target.value));
-                            }}
-                        />
-                    </FormControl>
-                    <FormDescription>
-                        The amount to increase / decrease a number by
-                    </FormDescription>
-                </FormItem>
-            }}/>
-            <FormField control={form.control} name={`custom_fields.${index}.config.precision`} render={({field: prec_field}) => {
-                return <FormItem className="w-1/2">
-                    <FormLabel>Precision</FormLabel>
-                    <FormControl>
-                        <Input
-                            ref={prec_field.ref}
-                            disabled={prec_field.disabled}
-                            name={prec_field.name}
-                            value={prec_field.value}
-                            className="w-1/2"
-                            type="number"
-                            step="1"
-                            min="1"
-                            onBlur={prec_field.onBlur}
-                            onChange={ev => {
-                                prec_field.onChange(parseInt(ev.target.value, 10));
-                            }}
-                        />
-                    </FormControl>
-                    <FormDescription>
-                        The number of decimal places to display when entering a value
-                    </FormDescription>
-                </FormItem>
-            }}/>
-        </div>
-    </div>;
-}
-
-interface TimeRangeConfigProps {
-    id: string,
-    config: custom_field.TimeRangeType,
-    index: number,
-}
-
-function TimeRangeConfig({config, index}: TimeRangeConfigProps) {
-    const form = useFormContext<JournalForm>();
-
-    return <FormField control={form.control} name={`custom_fields.${index}.config.show_diff`} render={({field: sd_field}) => {
-        return <FormItem className="w-3/4 flex flex-row items-start justify-between">
-            <div className="space-y-0.5">
-                <FormLabel>Show Difference</FormLabel>
-                <FormDescription>
-                    When enabled instead of showing the start and end times it will display a difference between the two times
-                </FormDescription>
-            </div>
-            <FormControl>
-                <Switch {...sd_field} checked={sd_field.value} onCheckedChange={sd_field.onChange}/>
-            </FormControl>
-        </FormItem>;
-    }}/>;
 }

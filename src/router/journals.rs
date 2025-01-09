@@ -661,7 +661,9 @@ async fn update_custom_fields(
         });
     }
 
-    rtn.extend(insert_custom_fields(conn, insert_records).await?);
+    if !insert_records.is_empty() {
+        rtn.extend(insert_custom_fields(conn, insert_records).await?);
+    }
 
     {
         let mut await_list = futures::stream::FuturesUnordered::new();

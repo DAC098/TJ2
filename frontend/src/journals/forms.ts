@@ -97,3 +97,14 @@ export function blank_journal_form(): JournalForm {
         custom_fields: [],
     };
 }
+
+export function blank_journal_custom_field_form(type: custom_field.TypeName): JournalCustomFieldForm {
+    return {
+        _id: null,
+        uid: null,
+        name: "",
+        order: 0,
+        config: custom_field.make_type(type),
+        description: "",
+    };
+}
