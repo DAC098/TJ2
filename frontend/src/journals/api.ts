@@ -1,3 +1,4 @@
+import { sub, add } from "date-fns";
 import { res_as_json, send_json } from "@/net";
 
 export namespace custom_field {
@@ -10,91 +11,73 @@ export namespace custom_field {
         TimeRange = "TimeRange",
     }
 
+    export interface SimpleValue<T> {
+        value: T
+    }
+
+    export interface RangeValue<T> {
+        low: T,
+        high: T,
+    }
+
     export interface IntegerType {
-        type: TypeName.Integer,
         minimum: number | null,
         maximum: number | null,
     }
 
-    export interface IntegerValue {
-        type: TypeName.Integer,
-        value: number
-    }
+    export type IntegerValue = SimpleValue<number>;
 
     export interface IntegerRangeType {
-        type: TypeName.IntegerRange,
         minimum: number | null,
         maximum: number | null,
     }
 
-    export interface IntegerRangeValue {
-        type: TypeName.IntegerRange,
-        low: number,
-        high: number,
-    }
+    export type IntegerRangeValue = RangeValue<number>;
 
     export interface FloatType {
-        type: TypeName.Float,
         minimum: number | null,
         maximum: number | null,
         step: number,
         precision: number,
     }
 
-    export interface FloatValue {
-        type: TypeName.Float,
-        value: number,
-    }
+    export type FloatValue = SimpleValue<number>;
 
     export interface FloatRangeType {
-        type: TypeName.FloatRange,
         minimum: number | null,
         maximum: number | null,
         step: number,
         precision: number,
     }
 
-    export interface FloatRangeValue {
-        type: TypeName.FloatRange,
-        low: number,
-        high: number,
-    }
+    export type FloatRangeValue = RangeValue<number>;
 
     export interface TimeType {
-        type: TypeName.Time,
     }
 
-    export interface TimeValue {
-        type: TypeName.Time,
-        value: string,
-    }
+    export type TimeValue = SimpleValue<string>;
 
     export interface TimeRangeType {
-        type: TypeName.TimeRange,
         show_diff: boolean,
     }
 
-    export interface TimeRangeValue {
-        type: TypeName.TimeRange,
-        low: string,
-        high: string,
-    }
+    export type TimeRangeValue = RangeValue<string | Date>;
 
     export type Type =
-        IntegerType |
-        IntegerRangeType |
-        FloatType |
-        FloatRangeType |
-        TimeType |
-        TimeRangeType;
+        ({type: TypeName.Integer } & IntegerType) |
+        ({type: TypeName.IntegerRange } & IntegerRangeType) |
+        ({type: TypeName.Float } & FloatType) |
+        ({type: TypeName.FloatRange } & FloatRangeType) |
+        ({type: TypeName.Time } & TimeType) |
+        ({type: TypeName.TimeRange } & TimeRangeType);
 
     export type Value =
-        IntegerValue |
-        IntegerRangeValue |
-        FloatValue |
-        FloatRangeValue |
-        TimeValue |
-        TimeRangeValue;
+        ({type: TypeName.Integer } & IntegerValue) |
+        ({type: TypeName.IntegerRange } & IntegerRangeValue) |
+        ({type: TypeName.Float } & FloatValue) |
+        ({type: TypeName.FloatRange } & FloatRangeValue) |
+        ({type: TypeName.Time } & TimeValue) |
+        ({type: TypeName.TimeRange } & TimeRangeValue);
 
     export function make_type(given: TypeName): Type {
         switch (given) {
@@ -138,6 +121,79 @@ export namespace custom_field {
         default:
             throw new Error("unknown type name given");
         }
+    }
+
+    export function make_integer(given: IntegerType): IntegerValue {
+        return {
+            value: given.minimum ?? 0
+        };
+    }
+
+    export function make_integer_range(given: IntegerRangeType): IntegerRangeValue {
+        if (given.minimum != null && given.maximum != null) {
+            return {
+                low: given.minimum,
+                high: given.maximum,
+            };
+        } else if (given.minimum != null) {
+            return {
+                low: given.minimum,
+                high: given.minimum + 10
+            };
+        } else if (given.maximum != null) {
+            return {
+                low: given.maximum - 10,
+                high: given.maximum,
+            };
+        } else {
+            return {
+                low: 0,
+                high: 10,
+            };
+        }
+    }
+
+    export function make_float(given: FloatType): FloatValue {
+        return {
+            value: given.minimum ?? 0.0,
+        };
+    }
+
+    export function make_float_range(given: FloatRangeType): FloatRangeValue {
+        if (given.minimum != null && given.maximum != null) {
+            return {
+                low: given.minimum,
+                high: given.maximum,
+            };
+        } else if (given.minimum != null) {
+            return {
+                low: given.minimum,
+                high: given.minimum + 10.0
+            };
+        } else if (given.maximum != null) {
+            return {
+                low: given.maximum - 10.0,
+                high: given.maximum,
+            }
+        } else {
+            return {
+                low: 0.0,
+                high: 10.0,
+            };
+        }
+    }
+
+    export function make_time(given: TimeType): TimeType {
+        return {
+            value: (new Date()).toJSON(),
+        };
+    }
+
+    export function make_time_range(given: TimeRangeType): TimeRangeValue {
+        return {
+            low: sub(new Date(), { hours: 1}).toJSON(),
+            high: add(new Date(), { hours: 1}).toJSON(),
+        };
     }
 }
 
@@ -232,10 +288,30 @@ export interface ClientData {
     key: string
 }
 
-export interface EntryCustomFieldForm {
-    custom_fields_id: number,
-    value: custom_field.Value,
+interface CFTypeForm<C, V> {
+    _id: number,
+    enabled: boolean,
+    order: number,
+    name: string,
+    description: string | null,
+    config: C,
+    value: V | null
 }
+
+export type CFIntegerForm = CFTypeForm<custom_field.IntegerType, custom_field.IntegerValue>;
+export type CFIntegerRangeForm = CFTypeForm<custom_field.IntegerRangeType, custom_field.IntegerRangeValue>;
+export type CFFloatForm = CFTypeForm<custom_field.FloatType, custom_field.FloatValue>;
+export type CFFloatRangeForm = CFTypeForm<custom_field.FloatRangeType, custom_field.FloatRangeValue>;
+export type CFTimeForm = CFTypeForm<custom_field.TimeType, custom_field.TimeValue>;
+export type CFTimeRangeForm = CFTypeForm<custom_field.TimeRangeType, custom_field.TimeRangeValue>;
+
+export type EntryCustomFieldForm =
+    ({type: custom_field.TypeName.Integer } & CFIntegerForm) |
+    ({type: custom_field.TypeName.IntegerRange } & CFIntegerRangeForm) |
+    ({type: custom_field.TypeName.Float } & CFFloatForm) |
+    ({type: custom_field.TypeName.FloatRange } & CFFloatRangeForm) |
+    ({type: custom_field.TypeName.Time } & CFTimeForm) |
+    ({type: custom_field.TypeName.TimeRange } & CFTimeRangeForm);
 
 export interface EntryTagForm {
     key: string,
@@ -262,6 +338,7 @@ export interface ServerFile {
     mime_param: string | null,
     created: string,
     updated: string | null
+    attached?: ClientData,
 }
 
 export interface LocalFile {
@@ -296,6 +373,14 @@ function pad_num(num: number): string {
     } else {
         return num.toString(10);
     }
+}
+
+export function now_date(): string {
+    let now = new Date();
+    let month = pad_num(now.getMonth() + 1);
+    let day = pad_num(now.getDate());
+
+    return `${now.getFullYear()}-${month}-${day}`;
 }
 
 export function timestamp_name() {
@@ -338,6 +423,16 @@ export function parse_date(given: string): ParsedDate {
         month: parseInt(split[1], 10),
         date: parseInt(split[2], 10),
     };
+}
+
+export function naive_date_to_date(given: string): Date {
+    let {year, month, date} = parse_date(given);
+    let now = new Date();
+    now.setFullYear(year);
+    now.setMonth(month - 1);
+    now.setDate(date);
+
+    return now;
 }
 
 export function entry_to_form(entry: Entry): EntryForm {
@@ -443,12 +538,16 @@ export async function create_entry(
     journals_id: string,
     entry: EntryForm,
 ) {
+    console.log(entry);
+
     let sending = {
-        date: get_date(entry.date),
+        date: typeof entry.date === "string" ?
+            entry.date : get_date(entry.date),
         title: entry.title,
         contents: entry.contents,
         tags: entry.tags,
         files: [],
+        custom_fields: [],
     };
 
     for (let file of entry.files) {
@@ -461,6 +560,18 @@ export async function create_entry(
             sending.files.push({
                 key: file.key,
                 name: file.name,
+            });
+        }
+    }
+
+    for (let field of entry.custom_fields) {
+        if (field.enabled) {
+            sending.custom_fields.push({
+                custom_fields_id: field._id,
+                value: {
+                    type: field.type,
+                    ...field.value
+                }
             });
         }
     }
@@ -475,7 +586,7 @@ export async function create_entry(
         throw new Error("failed to create new entry");
     }
 
-    return await res_as_json<Entry>(res);
+    return await res_as_json<EntryForm>(res);
 }
 
 export async function update_entry(
@@ -483,12 +594,16 @@ export async function update_entry(
     entries_id: string,
     entry: EntryForm,
 ) {
+    console.log(entry);
+
     let sending = {
-        date: get_date(entry.date),
+        date: typeof entry.date === "string" ?
+            entry.date : get_date(entry.date),
         title: entry.title,
         contents: entry.contents,
         tags: entry.tags,
         files: [],
+        custom_fields: [],
     };
 
     for (let file of entry.files) {
@@ -505,6 +620,20 @@ export async function update_entry(
         }
     }
 
+    for (let field of entry.custom_fields) {
+        if (field.enabled) {
+            sending.custom_fields.push({
+                custom_fields_id: field._id,
+                value: {
+                    type: field.type,
+                    ...field.value
+                }
+            })
+        }
+    }
+
+    console.log(sending);
+
     let res = await send_json(
         "PATCH",
         `/journals/${journals_id}/entries/${entries_id}`,
@@ -515,7 +644,7 @@ export async function update_entry(
         throw new Error("failed to update entry");
     }
 
-    return await res_as_json<Entry>(res);
+    return await res_as_json<EntryForm>(res);
 }
 
 export async function delete_entry(
@@ -532,15 +661,15 @@ export async function delete_entry(
 }
 
 export async function upload_data(
-    journals_id: number,
-    entries_id: number,
-    file_entry: EntryFile,
+    journals_id: string | number,
+    entries_id: string | number,
+    file_entry_id: string | number,
     ref: LocalFile | InMemoryFile | ServerFile,
 ): Promise<boolean> {
     try {
-        let path = `/journals/${journals_id}/entries/${entries_id}/${file_entry.id}`;
+        let path = `/journals/${journals_id}/entries/${entries_id}/${file_entry_id}`;
 
-        console.log(ref);
+        console.log(path, ref);
 
         switch (ref.type) {
         case "in-memory":

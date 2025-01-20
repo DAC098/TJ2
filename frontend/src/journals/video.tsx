@@ -19,7 +19,7 @@ export interface RecordVideoProps {
     disabled?: boolean
 }
 
-export function RecordVideo({on_created, disabled}: RecordVideoProps) {
+export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
     const preview_ele_ref = useRef<HTMLMediaElement>(null);
     const media_ref = useRef<{
         stream: MediaStream,

@@ -19,7 +19,7 @@ export interface RecordAudioProps {
     disabled?: boolean
 }
 
-export function RecordAudio({on_created, disabled}: RecordAudioProps) {
+export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
     let media_ref = useRef<{
         stream: MediaStream,
         recorder: MediaRecorder,

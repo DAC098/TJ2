@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, DateTime, Utc};
-use futures::{Stream, StreamExt, TryStream, TryStreamExt};
+use futures::{Stream, StreamExt};
 use serde::Serialize;
 
 use crate::db::{self, GenericClient, PgError};
@@ -228,6 +229,44 @@ impl Journal {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum EntryCreateError {
+    #[error("the given date entry already exists for this journal")]
+    DateExists,
+
+    #[error("the specified journal was not found")]
+    JournalNotFound,
+
+    #[error("the specified user was not found")]
+    UserNotFound,
+
+    #[error("the specified uid already exists")]
+    UidExists,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EntryUpdateError {
+    #[error("the given date entry already exists for this journal")]
+    DateExists,
+
+    #[error("the given entry was not found")]
+    NotFound,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
+}
+
+pub struct EntryCreateOptions {
+    journals_id: JournalId,
+    users_id: UserId,
+    date: NaiveDate,
+    pub title: Option<String>,
+    pub contents: Option<String>,
+}
+
 /// represents an entry in a journal
 #[derive(Debug)]
 pub struct Entry {
@@ -260,6 +299,73 @@ pub struct Entry {
 }
 
 impl Entry {
+    pub fn create_options(
+        journals_id: JournalId,
+        users_id: UserId,
+        date: NaiveDate
+    ) -> EntryCreateOptions {
+        EntryCreateOptions {
+            journals_id,
+            users_id,
+            date,
+            title: None,
+            contents: None,
+        }
+    }
+
+    pub async fn create(
+        conn: &impl GenericClient,
+        options: EntryCreateOptions
+    ) -> Result<Self, EntryCreateError> {
+        let uid = EntryUid::gen();
+        let created = Utc::now();
+        let EntryCreateOptions {
+            journals_id,
+            users_id,
+            date,
+            title,
+            contents
+        } = options;
+
+        let result = conn.query_one(
+            "\
+            insert into entries (uid, journals_id, users_id, entry_date, title, contents, created) \
+            values ($1, $2, $3, $4, $5, $6, $7) \
+            returning id",
+            &[&uid, &journals_id, &users_id, &date, &title, &contents, &created]
+        ).await;
+
+        match result {
+            Ok(row) => Ok(Self {
+                id: row.get(0),
+                uid,
+                journals_id,
+                users_id,
+                date,
+                title,
+                contents,
+                created,
+                updated: None,
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "entries_journals_id_entry_date_key" => Err(EntryCreateError::DateExists),
+                        "entries_uid_key" => Err(EntryCreateError::UidExists),
+                        _ => Err(EntryCreateError::Db(err))
+                    }
+                    db::ErrorKind::ForeignKey(constraint) => match constraint {
+                        "entries_journals_id_fkey" => Err(EntryCreateError::JournalNotFound),
+                        "entries_users_id_fkey" => Err(EntryCreateError::UserNotFound),
+                        _ => Err(EntryCreateError::Db(err))
+                    }
+                }
+            } else {
+                Err(EntryCreateError::Db(err))
+            }
+        }
+    }
+
     /// attempts to retrieve the specified entry for the [`JournalId`],
     /// [`UserId`], and [`EntryId`]
     pub async fn retrieve_id(
@@ -298,6 +404,38 @@ impl Entry {
                 updated: found.get(8),
             }))
     }
+
+    pub async fn update(&mut self, conn: &impl GenericClient) -> Result<(), EntryUpdateError> {
+        let result = conn.execute(
+            "\
+            update entries \
+            set entry_date = $2, \
+                title = $3, \
+                contents = $4, \
+                updated = $5 \
+            where id = $1",
+            &[&self.id, &self.date, &self.title, &self.contents, &self.updated]
+        ).await;
+
+        match result {
+            Ok(count) => match count {
+                1 => Ok(()),
+                0 => Err(EntryUpdateError::NotFound),
+                _ => unreachable!()
+            }
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "entries_journals_id_entry_date_key" => Err(EntryUpdateError::DateExists),
+                        _ => Err(EntryUpdateError::Db(err))
+                    }
+                    _ => Err(EntryUpdateError::Db(err))
+                }
+            } else {
+                Err(EntryUpdateError::Db(err))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -324,50 +462,6 @@ pub struct EntryTag {
     pub value: Option<String>,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
-}
-
-impl EntryTag {
-    fn map_row(result: Result<tokio_postgres::Row, PgError>) -> Result<Self, PgError> {
-        result.map(|record| Self {
-            key: record.get(0),
-            value: record.get(1),
-            created: record.get(2),
-            updated: record.get(3),
-        })
-    }
-
-    pub async fn retrieve_entry_stream(
-        conn: &impl GenericClient,
-        entry_id: EntryId
-    ) -> Result<impl TryStream<Item = Result<Self, PgError>>, PgError> {
-        let params: db::ParamsArray<'_, 1> = [&entry_id];
-
-        conn.query_raw(
-            "\
-            select entry_tags.key, \
-                   entry_tags.value, \
-                   entry_tags.created, \
-                   entry_tags.updated \
-            from entry_tags \
-            where entry_tags.entries_id = $1",
-            params
-        )
-            .await
-            .map(|result| result.map(Self::map_row))
-    }
-
-    pub async fn retrieve_entry(conn: &impl GenericClient, entries_id: EntryId) -> Result<Vec<Self>, PgError> {
-        let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
-        let mut rtn = Vec::new();
-
-        futures::pin_mut!(stream);
-
-        while let Some(item) = stream.try_next().await? {
-            rtn.push(item)
-        }
-
-        Ok(rtn)
-    }
 }
 
 #[derive(Debug, Serialize)]
@@ -496,31 +590,12 @@ impl FileEntry {
     }
 }
 
-pub struct CustomFieldOptions {
+pub struct CreateCustomFieldOptions {
     journals_id: JournalId,
     name: String,
     pub order: i32,
     pub config: custom_field::Type,
     pub description: Option<String>,
-}
-
-impl CustomFieldOptions {
-    pub fn new<N>(
-        journals_id: JournalId,
-        name: N,
-        config: custom_field::Type
-    ) -> Self
-    where
-        N: Into<String>
-    {
-        CustomFieldOptions {
-            journals_id,
-            name: name.into(),
-            order: 0,
-            config,
-            description: None,
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -552,13 +627,30 @@ pub struct CustomField {
 }
 
 impl CustomField {
-    pub async fn create_field(
+    pub fn create_options<N>(
+        journals_id: JournalId,
+        name: N,
+        config: custom_field::Type
+    ) -> CreateCustomFieldOptions
+    where
+        N: Into<String>
+    {
+        CreateCustomFieldOptions {
+            journals_id,
+            name: name.into(),
+            order: 0,
+            config,
+            description: None,
+        }
+    }
+
+    pub async fn create(
         conn: &impl GenericClient,
-        options: CustomFieldOptions
+        options: CreateCustomFieldOptions
     ) -> Result<Self, CreateCustomFieldError> {
         let uid = CustomFieldUid::gen();
         let created = Utc::now();
-        let CustomFieldOptions {
+        let CreateCustomFieldOptions {
             journals_id,
             name,
             order,
@@ -649,6 +741,25 @@ impl CustomField {
                 created: row.get(7),
                 updated: row.get(8),
             })))
+    }
+
+    pub async fn retrieve_journal_map(
+        conn: &impl GenericClient,
+        journals_id: &JournalId,
+    ) -> Result<HashMap<CustomFieldId, Self>, PgError> {
+        let stream = Self::retrieve_journal_stream(conn, journals_id).await?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = HashMap::new();
+
+        while let Some(try_record) = stream.next().await {
+            let record = try_record?;
+
+            rtn.insert(record.id, record);
+        }
+
+        Ok(rtn)
     }
 }
 

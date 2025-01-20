@@ -14,7 +14,7 @@ function App() {
         <SidebarProvider style={{"--sidebar-width": "350px"}}>
             <AppSidebar/>
             <main className="relative flex-auto overflow-auto">
-                <div className="pt-2 pr-2 pl-2 h-full">
+                <div className="px-2 px-2 h-full">
                     <Routes>
                         <Route index element={<div>root page</div>}/>
                         <Route path="/journals/*" element={<JournalRoutes />}/>
