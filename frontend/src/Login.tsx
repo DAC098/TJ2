@@ -1,3 +1,4 @@
+import { EyeOff, Eye } from "lucide-react";
 import { useState } from "react";
 import { useForm, SubmitHandler } from "react-hook-form";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -57,6 +58,7 @@ const Login = () => {
     });
 
     const [sending, setSending] = useState(false);
+    const [show_password, set_show_password] = useState(false);
 
     const on_submit: SubmitHandler<LoginForm> = (data, event) => {
         setSending(true);
@@ -72,7 +74,7 @@ const Login = () => {
                 if (prev != null) {
                     navigate(prev);
                 } else {
-                    navigate("/entries");
+                    navigate("/journals");
                 }
             } else {
                 console.log("login failed:", result.value);
@@ -101,19 +103,33 @@ const Login = () => {
                             </FormItem>
                         }}
                     />
-                    <FormField
-                        control={login_form.control}
-                        name="password"
-                        render={({field}) => {
-                            return <FormItem>
-                                <FormLabel>Password</FormLabel>
-                                <FormControl>
-                                    <Input type="password" {...field}/>
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        }}
-                    />
+                    <FormField control={login_form.control} name="password" render={({field}) => {
+                        return <FormItem>
+                            <FormLabel>Password</FormLabel>
+                            <FormControl>
+                                <div className="w-full relative">
+                                    <Input
+                                        type={show_password ? "text" : "password"}
+                                        autocomplete="current-password"
+                                        className="pr-10"
+                                        {...field}
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="absolute right-0 top-0"
+                                        onClick={() => {
+                                            set_show_password(v => (!v));
+                                        }}
+                                    >
+                                        {show_password ? <EyeOff/> : <Eye/>}
+                                    </Button>
+                                </div>
+                            </FormControl>
+                            <FormMessage />
+                        </FormItem>
+                    }}/>
                     <Button type="submit">Login</Button>
                 </form>
             }/>

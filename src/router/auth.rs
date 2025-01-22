@@ -137,9 +137,7 @@ pub async fn request_login(
 
     let transaction = conn.transaction()
         .await
-        .context("failedto create transaction")?;
-
-    tracing::debug!("login recieved: {login:#?}");
+        .context("failed to create transaction")?;
 
     let maybe_user = user::User::retrieve_username(&transaction, &login.username)
         .await
