@@ -4,6 +4,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { Plus, CalendarIcon, Trash, Save, ArrowLeft, Mic, Video, Download, Search, RefreshCw } from "lucide-react";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -142,12 +143,14 @@ export function Entries() {
                     let list = [];
 
                     for (let tag in row.original.tags) {
-                        list.push(<span key={tag} className="">
+                        let value = row.original.tags[tag];
+
+                        list.push(<Badge key={tag} variant="outline" title={value}>
                             {tag}
-                        </span>);
+                        </Badge>);
                     }
 
-                    return <>{list}</>;
+                    return <div className="max-w-96 flex flex-row flex-wrap gap-1">{list}</div>;
                 }
             },
             {
