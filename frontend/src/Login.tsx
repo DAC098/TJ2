@@ -48,8 +48,6 @@ const Login = () => {
     const navigate = useNavigate();
     const location = useLocation();
 
-    console.log(location);
-
     const login_form = useForm<LoginForm>({
         defaultValues: {
             username: "",
@@ -90,19 +88,15 @@ const Login = () => {
         <div className="mx-auto my-auto">
             <Form {...login_form} children={
                 <form onSubmit={login_form.handleSubmit(on_submit)}>
-                    <FormField
-                        control={login_form.control}
-                        name="username"
-                        render={({field}) => {
-                            return <FormItem>
-                                <FormLabel>Username</FormLabel>
-                                <FormControl>
-                                    <Input {...field}/>
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        }}
-                    />
+                    <FormField control={login_form.control} name="username" render={({field}) => {
+                        return <FormItem>
+                            <FormLabel>Username</FormLabel>
+                            <FormControl>
+                                <Input type="text" {...field}/>
+                            </FormControl>
+                            <FormMessage />
+                        </FormItem>;
+                    }}/>
                     <FormField control={login_form.control} name="password" render={({field}) => {
                         return <FormItem>
                             <FormLabel>Password</FormLabel>
@@ -110,7 +104,7 @@ const Login = () => {
                                 <div className="w-full relative">
                                     <Input
                                         type={show_password ? "text" : "password"}
-                                        autocomplete="current-password"
+                                        autoComplete="current-password"
                                         className="pr-10"
                                         {...field}
                                     />
@@ -128,7 +122,7 @@ const Login = () => {
                                 </div>
                             </FormControl>
                             <FormMessage />
-                        </FormItem>
+                        </FormItem>;
                     }}/>
                     <Button type="submit">Login</Button>
                 </form>

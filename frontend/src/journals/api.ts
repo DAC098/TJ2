@@ -231,14 +231,23 @@ export interface JournalFull {
 
 export interface EntryPartial {
     id: number,
+    uid: string,
+    journals_id: number,
+    users_id: number,
+    title: string
     date: string,
     created: string,
     updated: string | null,
-    tags: EntryTagsPartial
+    tags: EntryTagsPartial,
+    custom_fields: EntryCFPartial
 }
 
 export interface EntryTagsPartial {
     [key: string]: string | null
+}
+
+export interface EntryCFPartial {
+    [id: string]: custom_field.Value
 }
 
 export interface EntryCustomField {

@@ -22,7 +22,62 @@ import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { EntryForm, JournalCustomField, custom_field } from "@/journals/api";
 import { JournalForm } from "@/journals/forms";
+import { diff_dates } from "@/time";
 import { cn } from "@/utils";
+
+export interface CustomFieldEntryCellProps {
+    value: custom_field.Value,
+    config: custom_field.Type,
+}
+
+export function CustomFieldEntryCell({value: v, config}: CustomFieldEntryCellProps) {
+    if (config.type !== v.type) {
+        return null;
+    }
+
+    switch (config.type) {
+        case custom_field.TypeName.Integer: {
+            let value = v as custom_field.IntegerValue;
+
+            return <span>{value.value}</span>;
+        }
+        case custom_field.TypeName.IntegerRange: {
+            let value = v as custom_field.IntegerRangeValue;
+
+            return <span>
+                {`${value.low} - ${value.high}`}
+            </span>;
+        }
+        case custom_field.TypeName.Float: {
+            let value = v as custom_field.FloatValue;
+
+            return <span>{value.value}</span>;
+        }
+        case custom_field.TypeName.FloatRange: {
+            let value = v as custom_field.FloatRangeValue;
+
+            return <span>
+                {`${value.low} - ${value.high}`}
+            </span>;
+        }
+        case custom_field.TypeName.TimeRange: {
+            let value = v as custom_field.TimeRangeValue;
+
+            let start = new Date(value.low)
+            let end = new Date(value.high);
+
+            if (config.show_diff) {
+                return <span className="text-nowrap">{diff_dates(end, start, true, true)}</span>;
+            } else {
+                return <span className="text-nowrap">
+                    {`${start} - ${end}`}
+                </span>;
+            }
+        }
+        default:
+            return null;
+    }
+}
 
 export interface CustomFieldEntriesProps {
 }

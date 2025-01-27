@@ -100,7 +100,8 @@ fn make_span_with(request: &Request<Body>) -> Span {
         id = req_id.id(),
         ver = ?request.version(),
         mth = %request.method(),
-        uri = %request.uri(),
+        pth = %request.uri().path(),
+        qry = %request.uri().query().unwrap_or(""),
         sts = tracing::field::Empty
     )
 }
