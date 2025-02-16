@@ -6,11 +6,10 @@ use postgres_types::{ToSql, FromSql};
 use serde::{Serialize, Deserialize};
 
 pub const UID_SIZE: usize = 16;
-pub const UID_ALPHABET: [char; 63] = [
+pub const UID_ALPHABET: [char; 62] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-    '_'
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -126,7 +125,7 @@ macro_rules! uid_type {
                 let mut count: usize = 0;
 
                 for ch in given.chars() {
-                    if !(ch == '_' || ch.is_ascii_alphanumeric()) {
+                    if !ch.is_ascii_alphanumeric() {
                         return false;
                     }
 
