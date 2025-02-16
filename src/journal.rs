@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use bytes::BytesMut;
 use chrono::{NaiveDate, DateTime, Utc};
 use futures::{Stream, StreamExt};
+use postgres_types as pg_types;
 use serde::Serialize;
+use serde_repr::Serialize_repr;
 
 use crate::db::{self, GenericClient, PgError};
 use crate::db::ids::{
@@ -18,6 +21,7 @@ use crate::db::ids::{
     CustomFieldId,
     CustomFieldUid,
 };
+use crate::error::BoxDynError;
 
 pub mod custom_field;
 
@@ -464,11 +468,62 @@ pub struct EntryTag {
     pub updated: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize_repr)]
+#[repr(i16)]
+pub enum FileStatus {
+    Requested,
+    Received,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the given value is an invalid FileStatus")]
+pub struct InvalidFileStatus;
+
+impl TryFrom<i16> for FileStatus {
+    type Error = InvalidFileStatus;
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Requested),
+            1 => Ok(Self::Received),
+            _ => Err(InvalidFileStatus),
+        }
+    }
+}
+
+impl pg_types::ToSql for FileStatus {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        (*self as i16).to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <i16 as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
+impl<'a> pg_types::FromSql<'a> for FileStatus {
+    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
+        let value = <i16 as pg_types::FromSql>::from_sql(ty, raw)?;
+
+        match value.try_into() {
+            Ok(rep) => Ok(rep),
+            Err(_err) => Err("invalid sql value for FileStatus. expected smallint with valid status".into())
+        }
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <i16 as pg_types::FromSql>::accepts(ty)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct FileEntry {
     pub id: FileEntryId,
     pub uid: FileEntryUid,
     pub entries_id: EntryId,
+    pub status: FileStatus,
     pub name: Option<String>,
     pub mime_type: String,
     pub mime_subtype: String,
@@ -490,6 +545,7 @@ impl FileEntry {
             select file_entries.id, \
                    file_entries.uid, \
                    file_entries.entries_id, \
+                   file_entries.status, \
                    file_entries.name, \
                    file_entries.mime_type, \
                    file_entries.mime_subtype, \
@@ -506,13 +562,14 @@ impl FileEntry {
                 id: record.get(0),
                 uid: record.get(1),
                 entries_id: record.get(2),
-                name: record.get(3),
-                mime_type: record.get(4),
-                mime_subtype: record.get(5),
-                mime_param: record.get(6),
-                size: record.get(7),
-                created: record.get(8),
-                updated: record.get(9),
+                status: record.get(3),
+                name: record.get(4),
+                mime_type: record.get(5),
+                mime_subtype: record.get(6),
+                mime_param: record.get(7),
+                size: record.get(8),
+                created: record.get(9),
+                updated: record.get(10),
             })))
     }
 
@@ -526,6 +583,7 @@ impl FileEntry {
             select file_entries.id, \
                    file_entries.uid, \
                    file_entries.entries_id, \
+                   file_entries.status, \
                    file_entries.name, \
                    file_entries.mime_type, \
                    file_entries.mime_subtype, \
@@ -543,13 +601,14 @@ impl FileEntry {
                 id: record.get(0),
                 uid: record.get(1),
                 entries_id: record.get(2),
-                name: record.get(3),
-                mime_type: record.get(4),
-                mime_subtype: record.get(5),
-                mime_param: record.get(6),
-                size: record.get(7),
-                created: record.get(8),
-                updated: record.get(9),
+                status: record.get(3),
+                name: record.get(4),
+                mime_type: record.get(5),
+                mime_subtype: record.get(6),
+                mime_param: record.get(7),
+                size: record.get(8),
+                created: record.get(9),
+                updated: record.get(10),
             }))
     }
 
@@ -573,7 +632,8 @@ impl FileEntry {
                 mime_subtype = $4, \
                 mime_param = $5, \
                 size = $6, \
-                updated = $7 \
+                updated = $7, \
+                status = $8 \
             where file_entries.id = $1",
             &[
                 &self.id,
@@ -582,7 +642,8 @@ impl FileEntry {
                 &self.mime_subtype,
                 &self.mime_param,
                 &self.size,
-                &self.updated
+                &self.updated,
+                &self.status,
             ]
         ).await?;
 
