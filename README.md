@@ -1,6 +1,6 @@
 # Thoughts Journal 2 (TJ2)
 
-# Description
+## Description
 
 A journaling server that allows for storing various kinds of data on a daily
 basis. The starting idea of the server was tracking data for mental health
@@ -9,20 +9,18 @@ still present but is not the only use case and can be used for other things that
 require tracking data on a daily basis. This is a reimplementation of a previous
 attempt that can be found [here](https://github.com/DAC098/thoughts_server).
 
-Current Features:
- - Multiple journals
- - Storing text / audio / video for journal entries
- - File uploads
- - Tags with optional values
+Features:
+ - [x] Multiple journals
+ - [x] Storing text / audio / video for journal entries
+ - [x] File uploads
+ - [x] Tags with optional values
+ - [ ] MFA (U2F, TOTP, Passkey, etc)
+ - [ ] Synchronizing journals between servers
+ - [ ] Email support (notifications, invites, logins, etc)
+ - [ ] Notifications
+ - [ ] Single Sign On (SSO)
 
-Future Ideas:
- - MFA (U2F, TOTP, Passkey, etc)
- - Synchronizing journals between servers
- - Email support (notifications, invites, logins, etc)
- - Notifications
- - Single Sign On (SSO)
-
-# Work In Progress
+## Work In Progress
 
 This is not ready for production use and there is still a lot of work needed to
 be done.
