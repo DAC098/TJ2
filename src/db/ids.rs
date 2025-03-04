@@ -317,6 +317,8 @@ id_type!(PermissionId);
 id_type!(CustomFieldId);
 uid_type!(CustomFieldUid);
 
+id_type!(RemoteServerId);
+
 /// creates a list of unique ids from a given list
 ///
 /// if a current dictionary of known ids is provided then it will create a list

@@ -131,6 +131,22 @@ where
     tracing::error!("{prefix}:\n{msg}");
 }
 
+/// attempts unwrap the result and will log the error if unsuccessful
+pub fn prefix_try_result<D, T, E>(prefix: &D, given: Result<T, E>) -> Option<T>
+where
+    D: Display + ?Sized,
+    E: std::error::Error,
+{
+    match given {
+        Ok(rtn) => Some(rtn),
+        Err(err) => {
+            log_prefix_error(prefix, &err);
+
+            None
+        }
+    }
+}
+
 /// wrapper method to just log an error
 pub fn log_error<E>(err: &E)
 where

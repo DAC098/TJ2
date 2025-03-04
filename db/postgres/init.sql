@@ -23,6 +23,13 @@ create table group_users (
     primary key (users_id, groups_id)
 );
 
+create table remote_servers (
+    id bigint primary key generated always as identity,
+    addr varchar unique not null,
+    port int not null,
+    secure boolean not null
+);
+
 create table authn_totp (
     users_id bigint primary key not null references users (id),
     algo int not null,
@@ -76,6 +83,7 @@ create table journals (
     id bigint primary key generated always as identity,
     uid varchar not null unique,
     users_id bigint not null references users (id),
+    kind smallint not null default 0,
     name varchar not null,
     description varchar,
     created timestamp with time zone not null,
@@ -138,4 +146,19 @@ create table custom_field_entries (
     created timestamp with time zone not null,
     updated timestamp with time zone,
     primary key (custom_fields_id, entries_id)
+);
+
+create table synced_journals (
+    journals_id bigint not null references journals (id),
+    server_id bigint not null references remote_servers (id),
+    updated timestamp with time zone,
+    primary key (journals_id, server_id)
+);
+
+create table synced_entries (
+    entires_id bigint not null references entries (id),
+    server_id bigint not null references remote_servers (id),
+    status smallint not null,
+    updated timestamp with time zone,
+    primary key (entries_id, server_id)
 );

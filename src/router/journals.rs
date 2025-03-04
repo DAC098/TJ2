@@ -9,7 +9,6 @@ use chrono::{Utc, DateTime};
 use futures::StreamExt;
 use serde::{Serialize, Deserialize};
 
-use crate::state;
 use crate::db;
 use crate::db::ids::{
     JournalId,
@@ -17,6 +16,7 @@ use crate::db::ids::{
     UserId,
     CustomFieldId,
     CustomFieldUid,
+    RemoteServerId,
 };
 use crate::error::{self, Context};
 use crate::journal::{
@@ -28,7 +28,11 @@ use crate::journal::{
 };
 use crate::router::body;
 use crate::router::macros;
+use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Scope, Ability};
+use crate::state;
+use crate::sync;
+use crate::jobs;
 
 mod entries;
 
@@ -47,6 +51,7 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
             .delete(entries::delete_entry))
         .route("/:journals_id/entries/:entries_id/:file_entry_id", get(entries::files::retrieve_file)
             .put(entries::files::upload_file))
+        .route("/:journals_id/sync", get(sync_with_remote))
 }
 
 #[derive(Debug, Serialize)]
@@ -792,4 +797,83 @@ async fn insert_custom_fields(
     }
 
     Ok(rtn)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncOptions {
+    remote_server_id: RemoteServerId,
+}
+
+#[derive(Debug, Serialize)]
+pub enum SyncResult {
+    Queued,
+    JournalNotFound,
+    RemoteServerNotFound,
+
+    PermissionDenied,
+}
+
+impl IntoResponse for SyncResult {
+    fn into_response(self) -> Response {
+        match &self {
+            Self::Queued => (
+                StatusCode::ACCEPTED,
+                body::Json(self)
+            ).into_response(),
+            Self::JournalNotFound |
+            Self::RemoteServerNotFound => (
+                StatusCode::NOT_FOUND,
+                body::Json(self)
+            ).into_response(),
+            Self::PermissionDenied => (
+                StatusCode::UNAUTHORIZED,
+                body::Json(self)
+            ).into_response()
+        }
+    }
+}
+
+async fn sync_with_remote(
+    state: state::SharedState,
+    initiator: Initiator,
+    Path(JournalPath { journals_id }): Path<JournalPath>,
+    body::Json(json): body::Json<SyncOptions>,
+) -> Result<SyncResult, error::Error> {
+    let mut conn = state.db_conn().await?;
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
+
+    let perm_check = authz::has_permission(
+        &transaction,
+        initiator.user.id,
+        Scope::Journals,
+        Ability::Update
+    )
+        .await
+        .context("failed to retrieve permission for user")?;
+
+    if !perm_check {
+        return Ok(SyncResult::PermissionDenied);
+    }
+
+    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+        .await
+        .context("failed to retrieve journal")?;
+
+    let Some(journal) = result else {
+        return Ok(SyncResult::JournalNotFound);
+    };
+
+    let result = sync::RemoteServer::retrieve(&transaction, &json.remote_server_id)
+        .await
+        .context("failed retrieve remote server")?;
+
+    let Some(remote_server) = result else {
+        return Ok(SyncResult::RemoteServerNotFound);
+    };
+
+    tokio::spawn(jobs::sync::sync_journal(state, remote_server, journal));
+
+    Ok(SyncResult::Queued)
 }

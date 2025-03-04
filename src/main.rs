@@ -16,6 +16,8 @@ mod db;
 mod templates;
 mod sec;
 mod state;
+mod sync;
+mod jobs;
 
 mod cookie;
 mod header;
