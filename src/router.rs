@@ -25,6 +25,7 @@ pub mod body;
 
 mod auth;
 mod journals;
+mod sync;
 mod admin;
 
 async fn ping() -> (StatusCode, &'static str) {
@@ -73,6 +74,7 @@ pub fn build(state: &state::SharedState) -> Router {
             .post(auth::request_login))
         .route("/logout", post(auth::request_logout))
         .nest("/journals", journals::build(state))
+        .nest("/sync", sync::build(state))
         .nest("/admin", admin::build(state))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()

@@ -4,7 +4,7 @@ use axum::Router;
 use axum::extract::Path;
 use axum::http::{StatusCode, Uri, HeaderMap};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use chrono::{Utc, DateTime};
 use futures::StreamExt;
 use serde::{Serialize, Deserialize};
@@ -51,7 +51,7 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
             .delete(entries::delete_entry))
         .route("/:journals_id/entries/:entries_id/:file_entry_id", get(entries::files::retrieve_file)
             .put(entries::files::upload_file))
-        .route("/:journals_id/sync", get(sync_with_remote))
+        .route("/:journals_id/sync", post(sync_with_remote))
 }
 
 #[derive(Debug, Serialize)]
@@ -805,6 +805,7 @@ pub struct SyncOptions {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "type")]
 pub enum SyncResult {
     Queued,
     JournalNotFound,
@@ -873,7 +874,7 @@ async fn sync_with_remote(
         return Ok(SyncResult::RemoteServerNotFound);
     };
 
-    tokio::spawn(jobs::sync::sync_journal(state, remote_server, journal));
+    tokio::spawn(jobs::sync::kickoff_sync_journal(state, remote_server, journal));
 
     Ok(SyncResult::Queued)
 }
