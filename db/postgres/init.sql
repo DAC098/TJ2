@@ -166,7 +166,7 @@ create table synced_journals (
 );
 
 create table synced_entries (
-    entires_id bigint not null references entries (id),
+    entries_id bigint not null references entries (id),
     server_id bigint not null references remote_servers (id),
     status smallint not null,
     updated timestamp with time zone,
