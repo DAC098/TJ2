@@ -20,22 +20,82 @@ pub struct User {
     pub updated: Option<DateTime<Utc>>,
 }
 
+pub enum RetrieveUserQuery<'a> {
+    Username(&'a str),
+    Id(&'a UserId),
+    Uid(&'a UserUid),
+}
+
+impl<'a> From<&'a String> for RetrieveUserQuery<'a> {
+    fn from(given: &'a String) -> Self {
+        Self::Username(given.as_str())
+    }
+}
+
+impl<'a> From<&'a str> for RetrieveUserQuery<'a> {
+    fn from(given: &'a str) -> Self {
+        Self::Username(given)
+    }
+}
+
+impl<'a> From<&'a UserId> for RetrieveUserQuery<'a> {
+    fn from(given: &'a UserId) -> Self {
+        Self::Id(given)
+    }
+}
+
+impl<'a> From<&'a UserUid> for RetrieveUserQuery<'a> {
+    fn from(given: &'a UserUid) -> Self {
+        Self::Uid(given)
+    }
+}
+
 impl User {
-    pub async fn retrieve_username(conn: &impl db::GenericClient, username: &str) -> Result<Option<Self>, db::PgError> {
-        conn.query_opt(
-            "\
-            select id, \
-                   uid, \
-                   username, \
-                   password, \
-                   version, \
-                   created, \
-                   updated \
-            from users \
-            where username = $1",
-            &[&username]
-        )
-            .await
+    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<RetrieveUserQuery<'a>>
+    {
+        match given.into() {
+            RetrieveUserQuery::Username(username) => conn.query_opt(
+                "\
+                select id, \
+                       uid, \
+                       username, \
+                       password, \
+                       version, \
+                       created, \
+                       updated \
+                from users \
+                where username = $1",
+                &[&username]
+            ).await,
+            RetrieveUserQuery::Id(id) => conn.query_opt(
+                "\
+                select id, \
+                       uid, \
+                       username, \
+                       password, \
+                       version, \
+                       created, \
+                       updated \
+                from users \
+                where id = $1",
+                &[id]
+            ).await,
+            RetrieveUserQuery::Uid(uid) => conn.query_opt(
+                "\
+                select id, \
+                       uid, \
+                       username, \
+                       password, \
+                       version, \
+                       created, \
+                       updated \
+                from users \
+                where uid = $1",
+                &[uid]
+            ).await
+        }
             .map(|maybe| maybe.map(|row| Self {
                 id: row.get(0),
                 uid: row.get(1),
@@ -47,30 +107,12 @@ impl User {
             }))
     }
 
+    pub async fn retrieve_username(conn: &impl db::GenericClient, username: &str) -> Result<Option<Self>, db::PgError> {
+        Self::retrieve(conn, RetrieveUserQuery::Username(username)).await
+    }
+
     pub async fn retrieve_id(conn: &impl db::GenericClient, id: UserId) -> Result<Option<Self>, db::PgError> {
-        conn.query_opt(
-            "\
-            select id, \
-                   uid, \
-                   username, \
-                   password, \
-                   version, \
-                   created, \
-                   updated
-            from users \
-            where id = $1",
-            &[&id]
-        )
-            .await
-            .map(|maybe| maybe.map(|row| Self {
-                id: row.get(0),
-                uid: row.get(1),
-                username: row.get(2),
-                password: row.get(3),
-                version: row.get(4),
-                created: row.get(5),
-                updated: row.get(6),
-            }))
+        Self::retrieve(conn, RetrieveUserQuery::Id(&id)).await
     }
 
     pub async fn create(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Option<Self>, db::PgError> {
@@ -887,4 +929,3 @@ pub async fn assign_user_group(
 
     Ok(())
 }
-

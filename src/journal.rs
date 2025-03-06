@@ -100,6 +100,23 @@ pub struct Journal {
     pub updated: Option<DateTime<Utc>>,
 }
 
+pub enum RetrieveQuery<'a> {
+    IdAndUser((&'a JournalId, &'a UserId)),
+    Uid(&'a JournalUid)
+}
+
+impl<'a> From<(&'a JournalId, &'a UserId)> for RetrieveQuery<'a> {
+    fn from(given: (&'a JournalId, &'a UserId)) -> Self {
+        Self::IdAndUser(given)
+    }
+}
+
+impl<'a> From<&'a JournalUid> for RetrieveQuery<'a> {
+    fn from(given: &'a JournalUid) -> Self {
+        Self::Uid(given)
+    }
+}
+
 impl Journal {
     /// creates the [`JournalCreateOptions`] with the given [`UserId`] and name
     pub fn create_options<N>(users_id: UserId, name: N) -> JournalCreateOptions
@@ -160,6 +177,51 @@ impl Journal {
                 Err(JournalCreateError::Db(err))
             }
         }
+    }
+
+    /// attempts to retrieve a journal with the given [`RetrieveQuery`]
+    pub async fn retrieve<'a, T>(conn: &impl GenericClient, given: T) -> Result<Option<Self>, PgError>
+    where
+        T: Into<RetrieveQuery<'a>>
+    {
+        match given.into() {
+            RetrieveQuery::IdAndUser((journals_id, users_id)) => conn.query_opt(
+                "\
+                select journals.id, \
+                       journals.uid, \
+                       journals.users_id, \
+                       journals.name, \
+                       journals.description, \
+                       journals.created, \
+                       journals.updated \
+                from journals \
+                where journals.id = $1 and \
+                      journals.users_id = $2",
+                &[journals_id, users_id]
+            ).await,
+            RetrieveQuery::Uid(journals_uid) => conn.query_opt(
+                "\
+                select journals.id, \
+                       journals.uid, \
+                       journals.users_id, \
+                       journals.name, \
+                       journals.description, \
+                       journals.created, \
+                       journals.updated \
+                from journals \
+                where journals.uid = $1",
+                &[journals_uid]
+            ).await,
+        }
+            .map(|maybe| maybe.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                users_id: row.get(2),
+                name: row.get(3),
+                description: row.get(4),
+                created: row.get(5),
+                updated: row.get(6),
+            }))
     }
 
     /// attempts to retrieve the journal with the specified [`JournalId`] with
