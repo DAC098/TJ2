@@ -187,11 +187,14 @@ impl EntrySync {
             where entries.journals_id = $1 and \
                   entries.id > $3 and ( \
                       synced_entries.status is null or ( \
-                          synced_entries.updated < ( \
-                              case when entries.updated is null \
-                                  then entries.created \
-                                  else entries.updated \
-                                  end \
+                          (
+                              synced_entries.updated < ( \
+                                  case when entries.updated is null \
+                                      then entries.created \
+                                      else entries.updated \
+                                      end \
+                              ) or \
+                              synced_entries.status = 1 \
                           ) and \
                           synced_entries.updated < $4 \
                       ) \

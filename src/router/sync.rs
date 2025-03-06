@@ -7,6 +7,8 @@ use chrono::{Utc, DateTime};
 use futures::StreamExt;
 use serde::{Serialize, Deserialize};
 
+use crate::db;
+use crate::db::ids::EntryId;
 use crate::error::{self, Context};
 use crate::router::body;
 use crate::journal;
@@ -63,9 +65,71 @@ async fn receive_entry(
         .await
         .context("failed to upsert entry")?;
 
+    let entries_id: EntryId = result.get(0);
+
+    upsert_tags(&transaction, &entries_id, &json.tags).await?;
+
     transaction.commit()
         .await
         .context("failed to commit entry sync transaction")?;
 
     Ok(SyncEntryResult::Synced)
+}
+
+async fn upsert_tags(
+    conn: &impl db::GenericClient,
+    entries_id: &EntryId,
+    tags: &Vec<sync::journal::EntryTagSync>
+) -> Result<(), error::Error> {
+    if !tags.is_empty() {
+        let mut params: db::ParamsVec<'_> = vec![entries_id];
+        let mut query = String::from(
+            "with tmp_insert as ( \
+                insert into entry_tags (entries_id, key, value, created, updated) \
+                values "
+        );
+
+        for (index, tag) in tags.iter().enumerate() {
+            if index != 0 {
+                query.push_str(", ");
+            }
+
+            let statement = format!(
+                "($1, ${}, ${}, ${}, ${})",
+                db::push_param(&mut params, &tag.key),
+                db::push_param(&mut params, &tag.value),
+                db::push_param(&mut params, &tag.created),
+                db::push_param(&mut params, &tag.updated),
+            );
+
+            query.push_str(&statement);
+        }
+
+        query.push_str(" on conflict (entries_id, key) do update \
+                set key = excluded.key, \
+                    value = excluded.value, \
+                    updated = excluded.updated \
+                returning entries_id, key \
+            ) \
+            delete from entry_tags \
+            using tmp_insert \
+            where entry_tags.entries_id = tmp_insert.entries_id and \
+                  entry_tags.key != tmp_insert.key"
+        );
+
+        conn.execute(&query, params.as_slice())
+            .await
+            .context("failed to upsert tags")?;
+    } else {
+        conn.execute(
+            "\
+            delete from entry_tags \
+            where entries_id = $1",
+            &[entries_id]
+        )
+            .await
+            .context("failed to delete tags")?;
+    }
+
+    Ok(())
 }
