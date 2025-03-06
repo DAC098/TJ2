@@ -40,6 +40,7 @@ async fn sync_journal(
     let client = RemoteClient::build(remote)
         .context("failed to create remote client")?;
 
+    let max_batches = 2;
     let mut batches = 0;
     let mut total_successful = 0;
     let mut total_failed = 0;
@@ -55,7 +56,7 @@ async fn sync_journal(
         };
 
         let result = {
-            let batch_result = batch_sync(
+            let batch_result = batch_entry_sync(
                 &checkpoint,
                 &client,
                 &journal,
@@ -103,7 +104,7 @@ async fn sync_journal(
 
         batches += 1;
 
-        if batches == 2 {
+        if batches == max_batches {
             break;
         }
     }
@@ -130,7 +131,7 @@ struct BatchResults {
     failed: usize,
 }
 
-async fn batch_sync(
+async fn batch_entry_sync(
     conn: &impl GenericClient,
     client: &RemoteClient,
     journal: &Journal,

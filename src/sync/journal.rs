@@ -1,3 +1,5 @@
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use bytes::BytesMut;
 use chrono::{NaiveDate, DateTime, Utc};
 use futures::{Stream, StreamExt};
@@ -20,6 +22,55 @@ use crate::db::ids::{
 };
 use crate::error::{self, BoxDynError, Context};
 use crate::journal::custom_field;
+use crate::router::body;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum SyncEntryResult {
+    Synced,
+    JournalNotFound,
+    UserNotFound,
+}
+
+impl IntoResponse for SyncEntryResult {
+    fn into_response(self) -> Response {
+        match &self {
+            Self::Synced => (
+                StatusCode::CREATED,
+                body::Json(self)
+            ).into_response(),
+            Self::JournalNotFound |
+            Self::UserNotFound => (
+                StatusCode::NOT_FOUND,
+                body::Json(self)
+            ).into_response(),
+        }
+    }
+}
+
+/*
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum SyncJournalResult {
+    Synced,
+    UserNotFound,
+}
+
+impl IntoResponse for SyncJournalResult {
+    fn into_response(self) -> Response {
+        match &self {
+            Self::Synced => (
+                StatusCode::CREATED,
+                body::Json(self)
+            ).into_response(),
+            Self::UserNotFound => (
+                StatusCode::NOT_FOUND,
+                body::Json(self)
+            ).into_response(),
+        }
+    }
+}
+*/
 
 #[derive(Debug)]
 pub enum SyncStatus {
@@ -77,6 +128,18 @@ impl pg_types::ToSql for SyncStatus {
 
     pg_types::to_sql_checked!();
 }
+
+/*
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JournalSync {
+    pub uid: JournalUid,
+    pub users_uid: UserUid,
+    pub name: String,
+    pub description: Option<String>,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
+}
+*/
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EntrySync {
