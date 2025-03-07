@@ -1,11 +1,11 @@
-use std::collections::{HashSet, HashMap, BTreeMap};
+use std::collections::{HashSet, HashMap};
 use std::fmt::Write;
 
 use axum::extract::Path;
 use axum::http::{StatusCode, Uri, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use chrono::{NaiveDate, Utc, DateTime};
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt};
 use serde::{Serialize, Deserialize};
 
 use crate::state;
@@ -16,7 +16,6 @@ use crate::db::ids::{
     FileEntryId,
     FileEntryUid,
     JournalId,
-    UserId,
     CustomFieldId
 };
 use crate::error::{self, Context};
@@ -34,8 +33,11 @@ use crate::router::macros;
 use crate::sec::authz::{Scope, Ability};
 
 mod auth;
+mod search;
 
 pub mod files;
+
+pub use search::retrieve_entries;
 
 #[derive(Debug, Deserialize)]
 pub struct JournalPath {
@@ -52,316 +54,6 @@ pub struct MaybeEntryPath {
 pub struct EntryPath {
     journals_id: JournalId,
     entries_id: EntryId,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EntryPartial {
-    pub id: EntryId,
-    pub uid: EntryUid,
-    pub journals_id: JournalId,
-    pub users_id: UserId,
-    pub title: Option<String>,
-    pub date: NaiveDate,
-    pub created: DateTime<Utc>,
-    pub updated: Option<DateTime<Utc>>,
-    pub tags: BTreeMap<String, Option<String>>,
-    pub custom_fields: HashMap<CustomFieldId, custom_field::Value>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CustomFieldPartial {
-    id: CustomFieldId,
-    name: String,
-    description: Option<String>,
-    config: custom_field::Type,
-}
-
-#[derive(Debug)]
-struct EntryRow {
-    id: EntryId,
-    uid: EntryUid,
-    journals_id: JournalId,
-    users_id: UserId,
-    title: Option<String>,
-    date: NaiveDate,
-    created: DateTime<Utc>,
-    updated: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug)]
-struct TagRow {
-    entries_id: EntryId,
-    key: String,
-    value: Option<String>,
-}
-
-#[derive(Debug)]
-struct CFValueRow {
-    custom_fields_id: CustomFieldId,
-    entries_id: EntryId,
-    value: custom_field::Value,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum RetrieveResults {
-    JournalNotFound,
-    Successful {
-        entries: Vec<EntryPartial>,
-        custom_fields: Option<Vec<CustomFieldPartial>>,
-    }
-}
-
-pub async fn retrieve_entries(
-    state: state::SharedState,
-    uri: Uri,
-    headers: HeaderMap,
-    Path(JournalPath { journals_id }): Path<JournalPath>,
-) -> Result<Response, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
-        .await
-        .context("failed to create database transaction")?;
-
-    let initiator = macros::require_initiator!(
-        &transaction,
-        &headers,
-        Some(uri.clone())
-    );
-
-    macros::res_if_html!(state.templates(), &headers);
-
-    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-        .await
-        .context("failed to retrieve default journal")?;
-
-    let Some(journal) = result else {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            body::Json(RetrieveResults::JournalNotFound)
-        ).into_response());
-    };
-
-    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Read);
-
-    let custom_fields = {
-        let mut fields = Vec::new();
-        let cf_stream = CustomField::retrieve_journal_stream(&transaction, &journal.id)
-            .await
-            .context("failed to retrieve journal custom fields")?;
-
-        futures::pin_mut!(cf_stream);
-
-        while let Some(try_record) = cf_stream.next().await {
-            let CustomField {
-                id,
-                name,
-                description,
-                config,
-                ..
-            } = try_record.context("failed to retrieve journal custom field record")?;
-
-            fields.push(CustomFieldPartial {
-                id,
-                name,
-                description,
-                config
-            });
-        }
-
-        Some(fields)
-    };
-
-    let params: db::ParamsArray<'_, 1> = [&journal.id];
-
-    let entries_fut = transaction.query_raw(
-        "\
-        select entries.id, \
-               entries.uid, \
-               entries.journals_id, \
-               entries.users_id, \
-               entries.title, \
-               entries.entry_date, \
-               entries.created, \
-               entries.updated \
-        from entries \
-        where entries.journals_id = $1 \
-        order by entries.entry_date desc",
-        params
-    ).inspect(|_| tracing::debug!("entries finished"));
-    let tags_fut = transaction.query_raw(
-        "\
-        select entry_tags.entries_id, \
-               entry_tags.key, \
-               entry_tags.value \
-        from entry_tags \
-            left join entries on \
-                entry_tags.entries_id = entries.id \
-        where entries.journals_id = $1 \
-        order by entries.entry_date desc",
-        params
-    ).inspect(|_| tracing::debug!("tags finished"));
-    let cf_values_fut = transaction.query_raw(
-        "\
-        select custom_field_entries.custom_fields_id, \
-               custom_field_entries.entries_id, \
-               custom_field_entries.value \
-        from custom_field_entries \
-            left join entries on \
-                custom_field_entries.entries_id = entries.id \
-        where entries.journals_id = $1 \
-        order by entries.entry_date desc",
-        params
-    ).inspect(|_| tracing::debug!("cf values finished"));
-
-    let entries_result = entries_fut.await;
-    let tags_result = tags_fut.await;
-    let cf_values_result = cf_values_fut.await;
-
-    /*
-     * after a certain amount of requests, it was possible for one of the
-     * futures to hang and not resolve before the request timeout happened
-    let (entries_result, tags_result, cf_values_result) = tokio::join!(
-        entries_fut,
-        tags_fut,
-        cf_values_fut,
-    );
-     */
-
-    let entries_stream = entries_result.context("failed to retrieve entries stream")?
-        .map(|result| match result {
-            Ok(row) => Ok(EntryRow {
-                id: row.get(0),
-                uid: row.get(1),
-                journals_id: row.get(2),
-                users_id: row.get(3),
-                title: row.get(4),
-                date: row.get(5),
-                created: row.get(6),
-                updated: row.get(7),
-            }),
-            Err(err) => Err(error::Error::context_source(
-                "failed to retrieve entry record",
-                err
-            ))
-        });
-    let tags_stream = tags_result.context("failed to retrieve tags stream")?
-        .map(|result| match result {
-            Ok(row) => Ok(TagRow {
-                entries_id: row.get(0),
-                key: row.get(1),
-                value: row.get(2),
-            }),
-            Err(err) => Err(error::Error::context_source(
-                "failed to retrieve tag record",
-                err
-            ))
-        });
-    let cf_values_stream = cf_values_result.context("failed to retrieve cf values stream")?
-        .map(|result| match result {
-            Ok(row) => Ok(CFValueRow {
-                custom_fields_id: row.get(0),
-                entries_id: row.get(1),
-                value: row.get(2),
-            }),
-            Err(err) => Err(error::Error::context_source(
-                "failed to retrieve cf value record",
-                err
-            ))
-        });
-
-    futures::pin_mut!(entries_stream);
-    futures::pin_mut!(tags_stream);
-    futures::pin_mut!(cf_values_stream);
-
-    let mut peeked_tag = tags_stream.try_next().await?;
-    let mut peeked_cf_value = cf_values_stream.try_next().await?;
-    let mut rtn = Vec::new();
-
-    while let Some(entry) = entries_stream.try_next().await? {
-        let mut tags = BTreeMap::new();
-        let mut cf = HashMap::new();
-
-        if let Some(record) = peeked_tag.take_if(|v| v.entries_id == entry.id) {
-            tags.insert(record.key, record.value);
-
-            while let Some(record) = tags_stream.try_next().await? {
-                if record.entries_id == entry.id {
-                    tags.insert(record.key, record.value);
-                } else {
-                    peeked_tag = Some(record);
-
-                    break;
-                }
-            }
-        }
-
-        if let Some(record) = peeked_cf_value.take_if(|v| v.entries_id == entry.id) {
-            cf.insert(record.custom_fields_id, record.value);
-
-            while let Some(record) = cf_values_stream.try_next().await? {
-                if record.entries_id == entry.id {
-                    cf.insert(record.custom_fields_id, record.value);
-                } else {
-                    peeked_cf_value = Some(record);
-
-                    break;
-                }
-            }
-        }
-
-        rtn.push(EntryPartial {
-            id: entry.id,
-            uid: entry.uid,
-            journals_id: entry.journals_id,
-            users_id: entry.users_id,
-            title: entry.title,
-            date: entry.date,
-            created: entry.created,
-            updated: entry.updated,
-            tags,
-            custom_fields: cf,
-        });
-    }
-
-    if let Some(record) = peeked_tag {
-        tracing::warn!("peeked tag still contains data");
-        tracing::debug!("peeked tag record: {record:#?}");
-    }
-
-    if let Some(record) = peeked_cf_value {
-        tracing::warn!("peeked cf value still contains data");
-        tracing::debug!("peeked cf value record: {record:#?}");
-    }
-
-    if let Some(affected) = entries_stream.get_ref().rows_affected() {
-        tracing::debug!("total entries retrieved {affected}");
-    }
-
-    if let Some(affected) = tags_stream.get_ref().rows_affected() {
-        tracing::debug!("total tags retrieved {affected}");
-    } else {
-        tracing::warn!("tags stream was not fully consummed");
-
-        while let Some(record) = tags_stream.try_next().await? {
-            tracing::debug!("tag record: {record:#?}");
-        }
-    }
-
-    if let Some(affected) = cf_values_stream.get_ref().rows_affected() {
-        tracing::debug!("total cf values retrieved {affected}");
-    } else {
-        tracing::warn!("cf values stream was not fully consumed");
-
-        while let Some(record) = cf_values_stream.try_next().await? {
-            tracing::debug!("cf value record: {record:#?}");
-        }
-    }
-
-    Ok(body::Json(RetrieveResults::Successful {
-        entries: rtn,
-        custom_fields,
-    }).into_response())
 }
 
 #[derive(Debug, Serialize)]
