@@ -823,6 +823,25 @@ impl CustomField {
 
         Ok(rtn)
     }
+
+    pub async fn retrieve_journal_uid_map(
+        conn: &impl GenericClient,
+        journals_id: &JournalId,
+    ) -> Result<HashMap<CustomFieldUid, Self>, PgError> {
+        let stream = Self::retrieve_journal_stream(conn, journals_id).await?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = HashMap::new();
+
+        while let Some(try_record) = stream.next().await {
+            let record = try_record?;
+
+            rtn.insert(record.uid.clone(), record);
+        }
+
+        Ok(rtn)
+    }
 }
 
 #[derive(Debug)]
