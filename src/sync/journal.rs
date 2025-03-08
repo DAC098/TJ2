@@ -30,6 +30,12 @@ pub enum SyncEntryResult {
     Synced,
     JournalNotFound,
     UserNotFound,
+    CFNotFound {
+        uids: Vec<CustomFieldUid>
+    },
+    CFInvalid {
+        uids: Vec<CustomFieldUid>
+    }
 }
 
 impl IntoResponse for SyncEntryResult {
@@ -44,6 +50,11 @@ impl IntoResponse for SyncEntryResult {
                 StatusCode::NOT_FOUND,
                 body::Json(self)
             ).into_response(),
+            Self::CFNotFound { .. } |
+            Self::CFInvalid { .. } => (
+                StatusCode::BAD_REQUEST,
+                body::Json(self)
+            ).into_response()
         }
     }
 }
