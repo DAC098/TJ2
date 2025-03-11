@@ -19,7 +19,7 @@ use crate::db::ids::{
     CustomFieldId
 };
 use crate::error::{self, Context};
-use crate::fs::{CreatedFiles, RemovedFiles};
+use crate::fs::RemovedFiles;
 use crate::journal::{
     custom_field,
     Journal,
@@ -27,6 +27,9 @@ use crate::journal::{
     JournalDir,
     CustomField,
     EntryCreateError,
+    FileStatus,
+    FileEntry,
+    ReceivedFile,
 };
 use crate::router::body;
 use crate::router::macros;
@@ -186,7 +189,12 @@ impl EntryTagForm {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum EntryFileForm {
-    Server {
+    Requested {
+        _id: FileEntryId,
+        uid: FileEntryUid,
+        name: Option<String>,
+    },
+    Received {
         _id: FileEntryId,
         uid: FileEntryUid,
         name: Option<String>,
@@ -202,31 +210,9 @@ impl EntryFileForm {
         conn: &impl db::GenericClient,
         entries_id: &EntryId,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
-        let params: db::ParamsArray<'_, 1> = [entries_id];
-
-        let stream = conn.query_raw(
-            "\
-            select file_entries.id, \
-                   file_entries.uid, \
-                   file_entries.name, \
-                   file_entries.mime_type, \
-                   file_entries.mime_subtype, \
-                   file_entries.mime_param, \
-                   file_entries.size \
-            from file_entries \
-            where file_entries.entries_id = $1",
-            params
-        ).await?;
-
-        Ok(stream.map(|result| result.map(|record| Self::Server {
-            _id: record.get(0),
-            uid: record.get(1),
-            name: record.get(2),
-            mime_type: record.get(3),
-            mime_subtype: record.get(4),
-            mime_param: record.get(5),
-            size: record.get(6),
-        })))
+        Ok(FileEntry::retrieve_entry_stream(conn, entries_id)
+            .await?
+            .map(|result| result.map(Into::into)))
     }
 
     pub async fn retrieve_entry(
@@ -246,6 +232,76 @@ impl EntryFileForm {
         }
 
         Ok(rtn)
+    }
+
+    pub async fn retrieve_entry_map(
+        conn: &impl db::GenericClient,
+        entries_id: &EntryId,
+    ) -> Result<HashMap<FileEntryId, Self>, error::Error> {
+        let stream = Self::retrieve_entry_stream(conn, entries_id)
+            .await
+            .context("failed to retrieve entry files")?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = HashMap::new();
+
+        while let Some(try_record) = stream.next().await {
+            let record = try_record.context("failed to retrieve entry file record")?;
+
+            rtn.insert(*record.id(), record);
+        }
+
+        Ok(rtn)
+    }
+
+    fn id(&self) -> &FileEntryId {
+        match self {
+            Self::Requested { _id, .. } |
+            Self::Received { _id, .. } => _id
+        }
+    }
+
+    fn is_received(&self) -> bool {
+        match self {
+            Self::Received { .. } => true,
+            _ => false
+        }
+    }
+}
+
+impl From<FileEntry> for EntryFileForm {
+    fn from(given: FileEntry) -> Self {
+        match given {
+            FileEntry::Requested(req) => Self::Requested {
+                _id: req.id,
+                uid: req.uid,
+                name: req.name,
+            },
+            FileEntry::Received(rec) => Self::Received {
+                _id: rec.id,
+                uid: rec.uid,
+                name: rec.name,
+                mime_type: rec.mime_type,
+                mime_subtype: rec.mime_subtype,
+                mime_param: rec.mime_param,
+                size: rec.size,
+            }
+        }
+    }
+}
+
+impl From<ReceivedFile> for EntryFileForm {
+    fn from(given: ReceivedFile) -> Self {
+        Self::Received {
+            _id: given.id,
+            uid: given.uid,
+            name: given.name,
+            mime_type: given.mime_type,
+            mime_subtype: given.mime_subtype,
+            mime_param: given.mime_param,
+            size: given.size,
+        }
     }
 }
 
@@ -841,56 +897,21 @@ pub async fn create_entry(
         ).into_response());
     }
 
-    let (files, created_files) = if !json.files.is_empty() {
-        let mut rtn: Vec<ResultFileEntry> = Vec::new();
+    let dir = state.storage().journal_dir(&journal);
+    let mut removed_files = RemovedFiles::new();
 
-        for file in json.files {
-            let uid = FileEntryUid::gen();
-            let name = opt_non_empty_str(file.name);
-            let mime_type = String::from("");
-            let mime_subtype = String::from("");
+    let files = upsert_files(
+        &transaction,
+        &dir,
+        &entry.id,
+        &entry.created,
+        UpsertFilesKind::Creating(json.files),
+        &mut removed_files
+    ).await?;
 
-            let file_entry = EntryFileForm::Server {
-                _id: FileEntryId::zero(),
-                uid,
-                name,
-                mime_type,
-                mime_subtype,
-                mime_param: None,
-                size: 0,
-            };
-            let client_data = ClientData {
-                key: file.key
-            };
-
-            rtn.push(ResultFileEntry::from((file_entry, Some(client_data))));
-        }
-
-        let dir = state.storage().journal_dir(&journal);
-        let created_files = insert_files(
-            &transaction,
-            &entry.id,
-            &entry.created,
-            &dir,
-            &mut rtn
-        ).await?;
-
-        (rtn, created_files)
-    } else {
-        (Vec::new(), CreatedFiles::new())
-    };
-
-    let commit_result = transaction.commit()
-        .await;
-
-    if let Err(err) = commit_result {
-        created_files.log_rollback().await;
-
-        return Err(error::Error::context_source(
-            "failed to commit changes to journal entry",
-            err
-        ));
-    }
+    transaction.commit()
+        .await
+        .context("failed to commit changes to journal entry")?;
 
     let entry = ResultEntryFull {
         id: Some(entry.id),
@@ -1083,181 +1104,28 @@ pub async fn update_entry(
         ).into_response());
     }
 
-    let mut created_files = CreatedFiles::new();
+    let dir = state.storage().journal_dir(&journal);
     let mut removed_files = RemovedFiles::new();
 
-    let files = {
-        let journal_dir = state.storage()
-            .journal_dir(&journal);
-        let mut files = Vec::new();
-        let mut new_files = Vec::new();
-        let mut updated_files = Vec::new();
-        let mut current = HashMap::new();
-        let file_stream = EntryFileForm::retrieve_entry_stream(&transaction, &entry.id)
-            .await
-            .context("failed to retrieve file entries")?;
+    let upsert_result = upsert_files(
+        &transaction,
+        &dir,
+        &entry.id,
+        entry.updated.as_ref().unwrap(),
+        UpsertFilesKind::Updating(json.files),
+        &mut removed_files
+    ).await;
 
-        futures::pin_mut!(file_stream);
+    let files = match upsert_result {
+        Ok(files) => files,
+        Err(err) => {
+            removed_files.log_rollback().await;
 
-        while let Some(file_result) = file_stream.next().await {
-            let file = file_result.context("failed to retrieve file entry")?;
-            let id = match &file {
-                EntryFileForm::Server { _id, .. } => {*_id }
-            };
-
-            current.insert(id, file);
+            return Err(err);
         }
-
-        for file_entry in json.files {
-            match file_entry {
-                UpdatedFileEntryBody::New(new) => {
-                    let uid = FileEntryUid::gen();
-                    let name = opt_non_empty_str(new.name);
-                    let mime_type = String::new();
-                    let mime_subtype = String::new();
-
-                    let file_entry = EntryFileForm::Server {
-                        _id: FileEntryId::zero(),
-                        uid,
-                        name,
-                        mime_type,
-                        mime_subtype,
-                        mime_param: None,
-                        size: 0,
-                    };
-                    let client_data = ClientData {
-                        key: new.key
-                    };
-
-                    new_files.push(ResultFileEntry::from((file_entry, Some(client_data))));
-                }
-                UpdatedFileEntryBody::Existing(exists) => {
-                    let Some(mut found) = current.remove(&exists.id) else {
-                        return Err(error::Error::context("a specified file does not exist in the database"));
-                    };
-
-                    let check = opt_non_empty_str(exists.name);
-
-                    match &mut found {
-                        EntryFileForm::Server { name, .. } => {
-                            if *name == check {
-                                files.push(ResultFileEntry::from((found, None)));
-                            } else {
-                                *name = check;
-
-                                updated_files.push(ResultFileEntry::from((found, None)));
-                            }
-                        }
-                    }
-
-                }
-            }
-        }
-
-        if !new_files.is_empty() {
-            let dir = state.storage().journal_dir(&journal);
-
-            created_files = insert_files(
-                &transaction,
-                &entry.id,
-                (entry.updated.as_ref()).unwrap(),
-                &dir,
-                &mut new_files
-            ).await?;
-            files.extend(new_files);
-        }
-
-        if !updated_files.is_empty() {
-            let mut failed = false;
-
-            {
-                let mut futs = futures::stream::FuturesUnordered::new();
-
-                for file in &updated_files {
-                    match &file.inner {
-                        EntryFileForm::Server { _id, name, .. } => {
-                            let params: db::ParamsArray<'_, 2> = [_id, name];
-
-                            futs.push(transaction.execute_raw(
-                                "\
-                                update file_entries \
-                                set name = $2 \
-                                where id = $1",
-                                params
-                            ));
-                        }
-                    }
-                }
-
-                while let Some(result) = futs.next().await {
-                    match result {
-                        Ok(count) => if count != 1 {
-                            tracing::debug!("failed to update file entry?");
-                        }
-                        Err(err) => {
-                            failed = true;
-
-                            error::log_prefix_error(
-                                "failed to udpate file entry", &err
-                            );
-                        }
-                    }
-                }
-            }
-
-            if failed {
-                return Err(error::Error::context(
-                    "failed to update file entries"
-                ));
-            } else {
-                files.extend(updated_files);
-            }
-        }
-
-        if !current.is_empty() {
-            let mut to_delete = Vec::new();
-
-            for (id, _record) in &current {
-                to_delete.push(id);
-
-                if let Err(err) = removed_files.add(journal_dir.file_path(&id)).await {
-                    created_files.log_rollback().await;
-                    removed_files.log_rollback().await;
-
-                    return Err(error::Error::context_source(
-                        "failed to remove file",
-                        err
-                    ));
-                }
-            }
-
-            let result = transaction.execute(
-                "delete from file_entries where id = any($1)",
-                &[&to_delete]
-            ).await;
-
-            match result {
-                Ok(_affected) => {},
-                Err(err) => {
-                    created_files.log_rollback().await;
-                    removed_files.log_rollback().await;
-
-                    return Err(error::Error::context_source(
-                        "failed to remove file entries",
-                        err
-                    ));
-                }
-            }
-        }
-
-        files
     };
 
-    let commit_result = transaction.commit()
-        .await;
-
-    if let Err(err) = commit_result {
-        created_files.log_rollback().await;
+    if let Err(err) = transaction.commit().await {
         removed_files.log_rollback().await;
 
         return Err(error::Error::context_source(
@@ -1400,95 +1268,214 @@ pub async fn delete_entry(
     }
 }
 
-async fn insert_files(
+enum UpsertFilesKind {
+    Creating(Vec<NewFileEntryBody>),
+    Updating(Vec<UpdatedFileEntryBody>),
+}
+
+async fn upsert_files(
     conn: &impl db::GenericClient,
+    journal_dir: &JournalDir,
     entries_id: &EntryId,
     created: &DateTime<Utc>,
-    dir: &JournalDir,
-    files: &mut Vec<ResultFileEntry>,
-) -> Result<CreatedFiles, error::Error> {
-    let mut first = true;
-    let mut params: db::ParamsVec<'_> = vec![entries_id, created];
-    let mut query = String::from(
-        "insert into file_entries ( \
-            uid, \
-            entries_id, \
-            name, \
-            mime_type, \
-            mime_subtype, \
-            mime_param, \
-            created \
-        ) values "
-    );
+    given: UpsertFilesKind,
+    removed_files: &mut RemovedFiles,
+) -> Result<Vec<ResultFileEntry>, error::Error> {
+    let mut files = Vec::new();
+    let mut insert_indexs = Vec::new();
+    let mut update_indexs = Vec::new();
+    let existing;
 
-    for entry in files.iter() {
-        if first {
-            first = false;
-        } else {
-            query.push_str(", ");
+    match given {
+        UpsertFilesKind::Creating(given) => {
+            for NewFileEntryBody { key, name } in given {
+                insert_indexs.push(files.len());
+
+                files.push(ResultFileEntry::from((
+                    EntryFileForm::Requested {
+                        _id: FileEntryId::zero(),
+                        uid: FileEntryUid::gen(),
+                        name: opt_non_empty_str(name)
+                    },
+                    Some(ClientData { key })
+                )));
+            }
+
+            existing = None;
+        }
+        UpsertFilesKind::Updating(given) => {
+            let mut current = EntryFileForm::retrieve_entry_map(conn, &entries_id)
+                .await?;
+
+            for file_entry in given {
+                match file_entry {
+                    UpdatedFileEntryBody::New(new) => {
+                        insert_indexs.push(files.len());
+
+                        files.push(ResultFileEntry::from((
+                            EntryFileForm::Requested {
+                                _id: FileEntryId::zero(),
+                                uid: FileEntryUid::gen(),
+                                name: opt_non_empty_str(new.name),
+                            },
+                            Some(ClientData {
+                                key: new.key
+                            })
+                        )));
+                    }
+                    UpdatedFileEntryBody::Existing(exists) => {
+                        let Some(mut found) = current.remove(&exists.id) else {
+                            return Err(error::Error::context("a specified file does not exist in the database"));
+                        };
+
+                        let check = opt_non_empty_str(exists.name);
+
+                        match &mut found {
+                            EntryFileForm::Requested { name, .. } |
+                            EntryFileForm::Received { name, .. } => if *name != check {
+                                *name = check;
+
+                                update_indexs.push(files.len());
+                            }
+                        }
+
+                        files.push(ResultFileEntry::from((found, None)));
+                    }
+                }
+            }
+
+            existing = Some(current);
+        }
+    }
+
+    if !insert_indexs.is_empty() {
+        let status = FileStatus::Requested;
+        let mut ins_params: db::ParamsVec<'_> = vec![entries_id, created];
+        let mut ins_query = String::from(
+            "\
+            insert into file_entries ( \
+                uid, \
+                entries_id, \
+                status, \
+                name, \
+                created, \
+                mime_type, \
+                mime_subtype \
+            ) values "
+        );
+
+        for (index, ins_index) in insert_indexs.iter().enumerate() {
+            if index != 0 {
+                ins_query.push_str(", ");
+            }
+
+            match &files[*ins_index].inner {
+                EntryFileForm::Requested { uid, name, .. } => {
+                    write!(
+                        &mut ins_query,
+                        "(${}, $1, ${}, ${}, $2, '', '')",
+                        db::push_param(&mut ins_params, uid),
+                        db::push_param(&mut ins_params, &status),
+                        db::push_param(&mut ins_params, name),
+                    ).unwrap();
+                }
+                _ => unreachable!()
+            }
         }
 
-        match &entry.inner {
-            EntryFileForm::Server { uid, name, mime_type, mime_subtype, mime_param, .. } => {
-                write!(
-                    &mut query,
-                    "(${}, $1, ${}, ${}, ${}, ${}, $2)",
-                    db::push_param(&mut params, uid),
-                    db::push_param(&mut params, name),
-                    db::push_param(&mut params, mime_type),
-                    db::push_param(&mut params, mime_subtype),
-                    db::push_param(&mut params, mime_param),
-                ).unwrap();
+        ins_query.push_str(" returning id");
+
+        tracing::debug!("file insert query: \"{ins_query}\"");
+
+        let ins_results = conn.query_raw(&ins_query, ins_params)
+            .await
+            .context("failed to insert files")?
+            .map(|result| match result {
+                Ok(row) => Ok(row.get::<usize, FileEntryId>(0)),
+                Err(err) => Err(error::Error::context_source(
+                    "failed to retrieve file entry id from insert",
+                    err
+                ))
+            });
+
+        futures::pin_mut!(ins_results);
+
+        for index in insert_indexs {
+            let ins_result = ins_results.next()
+                .await
+                .context("less than expected number of ids returned")?;
+
+            match &mut files[index].inner {
+                EntryFileForm::Requested { _id, .. } => {
+                    *_id = ins_result?;
+                }
+                _ => unreachable!(),
             }
         }
     }
 
-    query.push_str(" returning id");
+    if !update_indexs.is_empty() {
+        let mut upd_params: db::ParamsVec<'_> = vec![entries_id, created];
+        let mut upd_query = String::from(
+            "\
+            update file_entries \
+            set name = tmp_update.name, \
+                updated = $2 \
+            from (values "
+        );
 
-    tracing::debug!("file insert query: \"{query}\"");
+        for (index, upd_index) in update_indexs.iter().enumerate() {
+            if index != 0 {
+                upd_query.push_str(", ");
+            }
 
-    let results = match conn.query_raw(query.as_str(), params).await {
-        Ok(r) => r.map(|stream| stream.map(|record|
-            record.get::<usize, FileEntryId>(0)
-        )),
-        Err(err) => return Err(error::Error::context_source(
-            "failed to insert files",
-            err
-        ))
-    };
-
-    futures::pin_mut!(results);
-
-    let mut created_files = CreatedFiles::new();
-
-    for file_entry in files {
-        let Some(ins_result) = results.next().await else {
-            return Err(error::Error::context(
-                "less than expected number of ids returned from database"
-            ));
-        };
-
-        match &mut file_entry.inner {
-            EntryFileForm::Server { _id, .. } => {
-                *_id = ins_result.context(
-                    "failed to retrieve file entry id from insert"
-                )?;
-
-                let file_path = dir.file_path(_id);
-
-                if let Err(err) = created_files.add(file_path).await {
-                    created_files.log_rollback().await;
-
-                    return Err(error::Error::context_source(
-                        "failed to create file for journal entry",
-                        err
-                    ));
+            match &files[*upd_index].inner {
+                EntryFileForm::Requested { _id, name, .. } |
+                EntryFileForm::Received { _id, name, .. } => {
+                    write!(
+                        &mut upd_query,
+                        "(${}, ${})",
+                        db::push_param(&mut upd_params, _id),
+                        db::push_param(&mut upd_params, name),
+                    ).unwrap();
                 }
             }
         }
+
+        upd_query.push_str("\
+            ) as tmp_update (id, name, updated) \
+            where file_entries.id = tmp_update.id"
+        );
+
+        tracing::debug!("file update query: \"{upd_query}\"");
+
+        conn.execute(&upd_query, upd_params.as_slice())
+            .await
+            .context("failed to update file entries")?;
     }
 
-    Ok(created_files)
+    if let Some(current) = existing.filter(|curr| !curr.is_empty()) {
+        let mut to_delete = Vec::new();
+
+        for (id, record) in &current {
+            to_delete.push(id);
+
+            if record.is_received() {
+                removed_files.add(journal_dir.file_path(&id))
+                    .await
+                    .context("failed to remove file")?;
+            }
+        }
+
+        conn.execute(
+            "delete from file_entries where id = any($1)",
+            &[&to_delete]
+        )
+            .await
+            .context("failed to remove file entries")?;
+    }
+
+    Ok(files)
 }
 
 async fn upsert_tags(

@@ -130,6 +130,7 @@ create table file_entries (
     id bigint primary key generated always as identity,
     uid varchar not null unique,
     entries_id bigint not null references entries (id),
+    status smallint not null default 0,
     name varchar,
     mime_type varchar not null,
     mime_subtype varchar not null,

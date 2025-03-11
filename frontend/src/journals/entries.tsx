@@ -1,7 +1,7 @@
 import { format, formatDistanceToNow } from "date-fns";
 import { useRef, useState, useEffect, useMemo, JSX } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import { Plus, CalendarIcon, Trash, Save, ArrowLeft, Mic, Video, Download, Search, RefreshCw } from "lucide-react";
+import { Plus, CalendarIcon, Trash, Save, ArrowLeft, Mic, Video, Download, Search, RefreshCw, Info } from "lucide-react";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler,  } from "react-hook-form";
 
 import { Badge } from "@/components/ui/badge";
@@ -30,15 +30,20 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
     EntryPartial,
-    Entry,
+    FailedFile,
+    InMemoryFile,
+    LocalFile,
+    RequestedFile,
+    ReceivedFile,
     EntryFileForm,
+    UIEntryFileForm,
     EntryForm,
+    UIEntryForm,
     EntryTagForm,
+    // functions
     now_date,
     get_date,
     blank_form,
-    entry_to_form,
-    retrieve_entry,
     create_entry,
     update_entry,
     delete_entry,
@@ -55,6 +60,7 @@ import { getUserMedia } from "@/media";
 import { useObjectUrl } from "@/hooks";
 import { cn } from "@/utils";
 import { uuidv4 } from "@/uuid";
+import { parse_mime } from "@/parse";
 
 interface CustomFieldPartial {
     id: number,
@@ -221,7 +227,7 @@ interface EntryHeaderProps {
 
 function EntryHeader({journals_id, entries_id, loading}: EntryHeaderProps) {
     const navigate = useNavigate();
-    const form = useFormContext<EntryForm>();
+    const form = useFormContext<UIEntryForm>();
 
     return <div className="top-0 sticky flex flex-row flex-nowrap gap-x-4 bg-background border-b py-2">
         <Link to={`/journals/${journals_id}/entries`}>
@@ -277,50 +283,72 @@ function EntryHeader({journals_id, entries_id, loading}: EntryHeaderProps) {
     </div>;
 };
 
-type EntryFileFormMap = {[key: string]: EntryFileForm};
-
-function create_file_map(files: EntryFileForm[]): EntryFileFormMap {
-    let rtn = {};
-
-    for (let file of files) {
-        if (file.type === "server") {
-            continue;
-        }
-
-        rtn[file.key] = file;
-    }
-
-    return rtn;
+interface UploadResult {
+    successful: ReceivedFile[],
+    failed: FailedFile[],
 }
 
 async function parallel_uploads(
     journals_id: string | number,
-    entry_form: EntryForm,
-    entry: EntryForm,
-): Promise<EntryFileForm[]> {
-    let mapped = create_file_map(entry_form.files);
-    let to_upload = [];
+    entries_id: string | number,
+    local: UIEntryFileForm[],
+    server: EntryFileForm[],
+): Promise<UploadResult> {
+    let to_skip = {};
+    let mapped: {[key: string]: InMemoryFile | LocalFile} = {};
+    let to_upload: [RequestedFile, InMemoryFile | LocalFile][] = [];
     let uploaders = [];
 
-    for (let file_entry of entry.files) {
-        if (file_entry.type !== "server") {
+    for (let file of local) {
+        switch (file.type) {
+            case "received":
+            case "requested":
+                continue;
+            case "local":
+            case "in-memory":
+                mapped[file.key] = file;
+                break;
+            case "failed":
+                to_skip[file._id] = 1;
+
+                to_upload.push([{
+                    type: "requested",
+                    _id: file._id,
+                    uid: file.uid,
+                    name: file.name,
+                }, file.original]);
+                break;
+        }
+    }
+
+    let result = {
+        successful: [],
+        failed: [],
+    };
+
+    for (let file_entry of server) {
+        if (file_entry.type === "received") {
+            result.successful.push(file_entry);
+
             continue;
         }
 
         if (file_entry.attached == null) {
+            if (!(file_entry._id in to_skip)) {
+                result.successful.push(file_entry);
+            }
+
             continue;
         }
 
         let ref = mapped[file_entry.attached.key];
 
         if (ref == null) {
-            continue;
+            throw new Error("failed to find file reference, THIS SHOULD NOT HAPPEN");
         }
 
         to_upload.push([file_entry, ref]);
     }
-
-    let failed = [];
 
     for (let index = 0; index < 2; index += 1) {
         uploaders.push((async () => {
@@ -330,34 +358,38 @@ async function parallel_uploads(
                 let uploading = to_upload.pop();
 
                 if (uploading == null) {
-                    console.log("uploader:", index, "finished. sent:", count);
-
                     break;
                 }
 
                 let [file_entry, ref] = uploading;
 
-                console.log("uploader:", index, "sending file:", file_entry._id);
-
                 try {
-                    let successful = await upload_data(
+                    let [successful, json] = await upload_data(
                         journals_id,
-                        entry.id,
+                        entries_id,
                         file_entry._id,
-                        ref
+                        ref.data
                     );
 
                     if (successful) {
-                        console.log("file uploaded");
+                        result.successful.push(json);
                     } else {
-                        console.log("file upload failed");
-
-                        failed.push(ref);
+                        result.failed.push({
+                            type: "failed",
+                            _id: file_entry._id,
+                            uid: file_entry.uid,
+                            name: file_entry.name,
+                            original: ref,
+                        });
                     }
                 } catch (err) {
-                    console.log("file failed", err);
-
-                    failed.push(ref);
+                    result.failed.push({
+                        type: "failed",
+                        _id: file_entry._id,
+                        uid: file_entry.uid,
+                        name: file_entry.name,
+                        original: ref
+                    });
                 }
 
                 count += 1;
@@ -367,93 +399,114 @@ async function parallel_uploads(
 
     await Promise.all(uploaders);
 
-    return failed;
+    return result;
+}
+
+async function retrieve_entry(
+    journals_id: string | number,
+    entries_id: string | number
+) {
+    try {
+        let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`);
+
+        switch (res.status) {
+            case 200: {
+                let json = await res.json();
+
+                if (entries_id === "new") {
+                    json.date = now_date();
+                }
+
+                return json;
+            }
+            default: {
+                let json = await res.json();
+
+                console.log("failed to retrieve entry for journal", json);
+
+                break;
+            }
+        }
+    } catch (err) {
+        console.log("failed to retrieve entry", err);
+    }
+
+    return blank_form();
 }
 
 export function Entry() {
     const { journals_id, entries_id } = useParams();
     const navigate = useNavigate();
 
-    const form = useForm<EntryForm>({
-        defaultValues: async () => {
-            try {
-                let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`);
-
-                switch (res.status) {
-                    case 200: {
-                        let json = await res.json();
-
-                        if (entries_id === "new") {
-                            json.date = now_date();
-                        }
-
-                        return json;
-                    }
-                    default: {
-                        let json = await res.json();
-
-                        console.log("failed to retrieve entry for journal", json);
-
-                        break;
-                    }
-                }
-            } catch (err) {
-                console.log("failed to retrieve entry", err);
-            }
-
-            return blank_form();
-        },
+    const form = useForm<UIEntryForm>({
+        defaultValues: async () => retrieve_entry(journals_id, entries_id),
         disabled: false,
     });
 
-    const create_and_upload = async (entry: EntryForm): Promise<[EntryForm, EntryFileForm[]]> => {
+    const create_and_upload = async (entry: UIEntryForm): Promise<[EntryForm, UploadResult]> => {
         let result = await create_entry(journals_id, entry);
 
         if (result.files.length === 0) {
-            return [result, []];
+            return [result, {successful: [], failed: []}];
         }
 
-        let failed_uploads = await parallel_uploads(journals_id, entry, result);
+        let uploaded = await parallel_uploads(
+            journals_id,
+            result.id,
+            entry.files,
+            result.files
+        );
 
-        return [result, failed_uploads];
+        return [result, uploaded];
     };
 
-    const update_and_upload = async (entry: EntryForm): Promise<[EntryForm, EntryFileForm[]]> => {
+    const update_and_upload = async (entry: UIEntryForm): Promise<[EntryForm, UploadResult]> => {
         let result = await update_entry(journals_id, entries_id, entry);
 
         if (result.files.length === 0) {
-            return [result, []];
+            return [result, {successful: [], failed: []}];
         }
 
-        let failed_uploads = await parallel_uploads(journals_id, entry, result);
+        let uploaded = await parallel_uploads(
+            journals_id,
+            result.id,
+            entry.files,
+            result.files
+        );
 
-        return [result, failed_uploads];
+        return [result, uploaded];
     };
 
-    const onSubmit: SubmitHandler<EntryForm> = async (data, event) => {
+    const onSubmit: SubmitHandler<UIEntryForm> = async (data, event) => {
         if (entries_id == null || entries_id == "new") {
             try {
-                let [result, failed] = await create_and_upload(data);
+                let [result, uploaded] = await create_and_upload(data);
 
-                console.log("created entry:", result, failed);
+                console.log("created entry:", result, uploaded.failed);
 
-                if (failed.length === 0) {
-                    form.reset(result);
+                (result as UIEntryForm).files = [
+                    ...uploaded.successful,
+                    ...uploaded.failed
+                ];
 
-                    navigate(`/journals/${journals_id}/entries/${result.id}`);
-                }
+                form.reset(result);
+
+                navigate(`/journals/${journals_id}/entries/${result.id}`);
             } catch(err) {
                 console.error("failed to create entry:", err);
             }
         } else {
             try {
-                let [result, failed] = await update_and_upload(data);
+                let [result, uploaded] = await update_and_upload(data);
 
-                console.log("updated entry:", result, failed);
+                console.log("updated entry:", result, uploaded);
 
-                if (failed.length === 0) {
-                    form.reset(result);
-                }
+                (result as UIEntryForm).files = [
+                    ...uploaded.successful,
+                    ...uploaded.failed
+                ];
+
+                form.reset(result);
             } catch(err) {
                 console.error("failed to update entry:", err);
             }
@@ -466,7 +519,7 @@ export function Entry() {
     }
 
     return <div className="max-w-3xl mx-auto my-auto">
-        <FormProvider<EntryForm> {...form} children={
+        <FormProvider<UIEntryForm> {...form} children={
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
                 <EntryHeader
                     journals_id={journals_id}
@@ -518,8 +571,8 @@ interface TagEntryProps {
 }
 
 function TagEntry({}: TagEntryProps) {
-    const form = useFormContext<EntryForm>();
-    const tags = useFieldArray<EntryForm, "tags">({
+    const form = useFormContext<UIEntryForm>();
+    const tags = useFieldArray<UIEntryForm, "tags">({
         control: form.control,
         name: "tags"
     });
@@ -606,14 +659,47 @@ function DownloadBtn({src, name}: DownloadBtnProps) {
     </a>;
 }
 
+interface FilePreviewProps {
+    mime_type: string,
+    data: Blob | File | string
+}
+
+function FilePreview({mime_type, data}: FilePreviewProps) {
+    switch (mime_type) {
+    case "audio":
+        return <PlayAudio src={data}/>;
+    case "video":
+        return <PlayVideo src={data}/>;
+    case "image":
+        return <ViewImage src={data}/>;
+    }
+}
+
+interface WarnButtonProps {
+    message: string
+}
+
+function WarnButton({message}: WarnButtonProps) {
+    return <Popover>
+        <PopoverTrigger asChild>
+            <Button type="button" variant="secondary" size="icon" className="text-yellow-300">
+                <Info/>
+            </Button>
+        </PopoverTrigger>
+        <PopoverContent>
+            {message}
+        </PopoverContent>
+    </Popover>;
+}
+
 interface FileEntryProps {
     journals_id: string,
     entries_id: string,
 }
 
 function FileEntry({journals_id, entries_id}: FileEntryProps) {
-    const form = useFormContext<EntryForm>();
-    const files = useFieldArray<EntryForm, "files">({
+    const form = useFormContext<UIEntryForm>();
+    const files = useFieldArray<UIEntryForm, "files">({
         control: form.control,
         name: "files"
     });
@@ -634,9 +720,6 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
                         key: uuidv4(),
                         name: file.name,
                         data: file,
-                        mime_type,
-                        mime_subtype,
-                        mime_param,
                     });
                 }
             }}/>
@@ -646,9 +729,6 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
                     key: uuidv4(),
                     data: blob,
                     name: `${timestamp_name()}_audio`,
-                    mime_type: "audio",
-                    mime_subtype: "webm",
-                    mime_param: null,
                 });
             }}/>
             <RecordVideo on_created={(blob) => {
@@ -657,64 +737,57 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
                     key: uuidv4(),
                     data: blob,
                     name: `${timestamp_name()}_video`,
-                    mime_type: "video",
-                    mime_subtype: "webm",
-                    mime_param: null,
                 });
             }}/>
         </div>
         {files.fields.map((field, index) => {
-            let download;
-            let player;
+            let download = null;
+            let player = null;
+            let status = null;
 
             switch (field.type) {
-            case "server":
-                let src = `/journals/${journals_id}/entries/${entries_id}/${field._id}`;
-
-                download = <DownloadBtn src={src}/>;
-
-                switch (field.mime_type) {
-                case "audio":
-                    player = <PlayAudio src={src}/>;
+                case "requested":
+                    status = <WarnButton message={"The file was never received by the server."}/>
                     break;
-                case "video":
-                    player = <PlayVideo src={src}/>;
+                case "received":
+                    let src = `/journals/${journals_id}/entries/${entries_id}/${field._id}`;
+
+                    download = <DownloadBtn src={`${src}?download=true`}/>;
+                    player = <FilePreview mime_type={field.mime_type} data={src}/>
                     break;
-                case "image":
-                    player = <ViewImage src={src}/>;
+                case "in-memory": {
+                    let mime = parse_mime(field.data.type);
+
+                    download = <DownloadBtn src={field.data} name={field.name}/>;
+                    player = <FilePreview mime_type={mime.type} data={field.data}/>;
                     break;
                 }
+                case "local": {
+                    let mime = parse_mime(field.data.type);
 
-                break;
-            case "in-memory":
-                download = <DownloadBtn src={field.data} name={field.name}/>;
-
-                switch (field.mime_type) {
-                case "audio":
-                    player = <PlayAudio src={field.data}/>;
-                    break;
-                case "video":
-                    player = <PlayVideo src={field.data}/>;
+                    player = <FilePreview mime_type={mime.type} data={field.data}/>;
                     break;
                 }
+                case "failed": {
+                    status = <WarnButton message={"There was an error when sending the file to the server."}/>;
 
-                break;
-            case "local":
-                download = null;
+                    switch (field.original.type) {
+                        case "local": {
+                            let mime = parse_mime(field.original.data.type);
 
-                switch (field.mime_type) {
-                case "audio":
-                    player = <PlayAudio src={field.data}/>;
-                    break;
-                case "video":
-                    player = <PlayVideo src={field.data}/>;
-                    break;
-                case "image":
-                    player = <ViewImage src={field.data}/>;
+                            player = <FilePreview mime_type={mime.type} data={field.original.data}/>;
+                            break;
+                        }
+                        case "in-memory": {
+                            let mime = parse_mime(field.original.data.type);
+
+                            download = <DownloadBtn src={field.original.data} name={field.name}/>;
+                            player = <FilePreview mime_type={mime.type} data={field.original.data}/>;
+                            break;
+                        }
+                    }
                     break;
                 }
-
-                break;
             }
 
             return <div key={field.id} className="flex flex-row flex-nowrap gap-x-4">
@@ -725,6 +798,7 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
                         </FormControl>
                     </FormItem>
                 }}/>
+                {status}
                 {download}
                 {player}
                 <Button type="button" variant="destructive" size="icon" onClick={() => {
