@@ -294,6 +294,7 @@ async function parallel_uploads(
     local: UIEntryFileForm[],
     server: EntryFileForm[],
 ): Promise<UploadResult> {
+    let to_skip = {};
     let mapped: {[key: string]: InMemoryFile | LocalFile} = {};
     let to_upload: [RequestedFile, InMemoryFile | LocalFile][] = [];
     let uploaders = [];
@@ -308,6 +309,8 @@ async function parallel_uploads(
                 mapped[file.key] = file;
                 break;
             case "failed":
+                to_skip[file._id] = 1;
+
                 to_upload.push([{
                     type: "requested",
                     _id: file._id,
@@ -331,7 +334,9 @@ async function parallel_uploads(
         }
 
         if (file_entry.attached == null) {
-            result.successful.push(file_entry);
+            if (!(file_entry._id in to_skip)) {
+                result.successful.push(file_entry);
+            }
 
             continue;
         }
@@ -654,6 +659,39 @@ function DownloadBtn({src, name}: DownloadBtnProps) {
     </a>;
 }
 
+interface FilePreviewProps {
+    mime_type: string,
+    data: Blob | File | string
+}
+
+function FilePreview({mime_type, data}: FilePreviewProps) {
+    switch (mime_type) {
+    case "audio":
+        return <PlayAudio src={data}/>;
+    case "video":
+        return <PlayVideo src={data}/>;
+    case "image":
+        return <ViewImage src={data}/>;
+    }
+}
+
+interface WarnButtonProps {
+    message: string
+}
+
+function WarnButton({message}: WarnButtonProps) {
+    return <Popover>
+        <PopoverTrigger asChild>
+            <Button type="button" variant="secondary" size="icon" className="text-yellow-300">
+                <Info/>
+            </Button>
+        </PopoverTrigger>
+        <PopoverContent>
+            {message}
+        </PopoverContent>
+    </Popover>;
+}
+
 interface FileEntryProps {
     journals_id: string,
     entries_id: string,
@@ -709,68 +747,45 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
 
             switch (field.type) {
                 case "requested":
-                    status = <Popover>
-                        <PopoverTrigger asChild>
-                            <Button type="button" variant="secondary" size="icon">
-                                <Info/>
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent>
-                            The file was never received by the server.
-                        </PopoverContent>
-                    </Popover>;
+                    status = <WarnButton message={"The file was never received by the server."}/>
                     break;
                 case "received":
                     let src = `/journals/${journals_id}/entries/${entries_id}/${field._id}`;
 
                     download = <DownloadBtn src={`${src}?download=true`}/>;
-
-                    switch (field.mime_type) {
-                    case "audio":
-                        player = <PlayAudio src={src}/>;
-                        break;
-                    case "video":
-                        player = <PlayVideo src={src}/>;
-                        break;
-                    case "image":
-                        player = <ViewImage src={src}/>;
-                        break;
-                    }
+                    player = <FilePreview mime_type={field.mime_type} data={src}/>
                     break;
                 case "in-memory": {
-                    download = <DownloadBtn src={field.data} name={field.name}/>;
-
                     let mime = parse_mime(field.data.type);
 
-                    switch (mime.type) {
-                    case "audio":
-                        player = <PlayAudio src={field.data}/>;
-                        break;
-                    case "video":
-                        player = <PlayVideo src={field.data}/>;
-                        break;
-                    }
-
+                    download = <DownloadBtn src={field.data} name={field.name}/>;
+                    player = <FilePreview mime_type={mime.type} data={field.data}/>;
                     break;
                 }
                 case "local": {
                     let mime = parse_mime(field.data.type);
 
-                    switch (mime.type) {
-                    case "audio":
-                        player = <PlayAudio src={field.data}/>;
-                        break;
-                    case "video":
-                        player = <PlayVideo src={field.data}/>;
-                        break;
-                    case "image":
-                        player = <ViewImage src={field.data}/>;
-                        break;
-                    }
-
+                    player = <FilePreview mime_type={mime.type} data={field.data}/>;
                     break;
                 }
                 case "failed": {
+                    status = <WarnButton message={"There was an error when sending the file to the server."}/>;
+
+                    switch (field.original.type) {
+                        case "local": {
+                            let mime = parse_mime(field.original.data.type);
+
+                            player = <FilePreview mime_type={mime.type} data={field.original.data}/>;
+                            break;
+                        }
+                        case "in-memory": {
+                            let mime = parse_mime(field.original.data.type);
+
+                            download = <DownloadBtn src={field.original.data} name={field.name}/>;
+                            player = <FilePreview mime_type={mime.type} data={field.original.data}/>;
+                            break;
+                        }
+                    }
                     break;
                 }
             }
@@ -783,9 +798,9 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
                         </FormControl>
                     </FormItem>
                 }}/>
+                {status}
                 {download}
                 {player}
-                {status}
                 <Button type="button" variant="destructive" size="icon" onClick={() => {
                     files.remove(index);
                 }}><Trash/></Button>
