@@ -1,25 +1,33 @@
 use std::str::FromStr;
 
 use axum::body::Body;
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::http::{StatusCode, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use futures::StreamExt;
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
 
-use crate::state;
+use crate::state::{self, Storage};
+use crate::db;
 use crate::db::ids::{JournalId, EntryId, FileEntryId};
 use crate::error::{self, Context};
-use crate::fs::FileUpdater;
-use crate::journal::{Journal, FileEntry};
+use crate::fs::{FileUpdater, FileCreater};
+use crate::journal::{
+    Journal,
+    FileEntry,
+    PromoteOptions,
+    RequestedFile,
+    ReceivedFile
+};
 use crate::router::body;
-use crate::router::macros;
+use crate::sec::authn::Initiator;
 use crate::sec::authz::{Scope, Ability};
 
 use super::auth;
+use super::EntryFileForm;
 
 #[derive(Debug, Deserialize)]
 pub struct FileEntryPath {
@@ -28,18 +36,24 @@ pub struct FileEntryPath {
     file_entry_id: FileEntryId,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FileEntryQuery {
+    download: Option<bool>
+}
+
 pub async fn retrieve_file(
     state: state::SharedState,
-    headers: HeaderMap,
+    initiator: Initiator,
     Path(FileEntryPath {
         journals_id,
         entries_id,
         file_entry_id
     }): Path<FileEntryPath>,
+    Query(FileEntryQuery {
+        download
+    }): Query<FileEntryQuery>,
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
-
-    let initiator = macros::require_initiator!(&conn, &headers, None::<&'static str>);
 
     let result = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
         .await
@@ -59,8 +73,12 @@ pub async fn retrieve_file(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
+    let Ok(received_file) = file_entry.into_received() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
     let file_path = state.storage()
-        .journal_file_entry(journal.id, file_entry.id);
+        .journal_file_entry(journal.id, received_file.id);
     let file = tokio::fs::OpenOptions::new()
         .read(true)
         .open(&file_path)
@@ -68,18 +86,53 @@ pub async fn retrieve_file(
         .context("failed to open file for journal file entry")?;
     let reader = ReaderStream::new(file);
 
-    let mime = file_entry.get_mime();
+    let mime = received_file.get_mime();
 
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header("content-type", mime.to_string())
-        .header("content-length", file_entry.size)
-        .body(Body::from_stream(reader))
+        .header("content-length", received_file.size);
+
+    if download.unwrap_or(false) {
+        let name = received_file.name.unwrap_or(received_file.uid.into());
+
+        builder = builder.header(
+            "content-disposition",
+            format!("attachment; filename=\"{}\"", name)
+        );
+    }
+
+    builder.body(Body::from_stream(reader))
         .context("failed to create file response")
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum UploadResult {
+    Successful(EntryFileForm),
+    JournalNotFound,
+    FileNotFound,
+}
+
+impl IntoResponse for UploadResult {
+    fn into_response(self) -> Response {
+        match &self {
+            Self::Successful(_) => (
+                StatusCode::OK,
+                body::Json(self)
+            ).into_response(),
+            Self::JournalNotFound |
+            Self::FileNotFound => (
+                StatusCode::NOT_FOUND,
+                body::Json(self)
+            ).into_response()
+        }
+    }
 }
 
 pub async fn upload_file(
     state: state::SharedState,
+    initiator: Initiator,
     headers: HeaderMap,
     Path(FileEntryPath {
         journals_id,
@@ -93,16 +146,12 @@ pub async fn upload_file(
         .await
         .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator!(&transaction, &headers, None::<&'static str>);
-
     let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
         .await
         .context("failed to retrieve default journal")?;
 
     let Some(journal) = result else {
-        tracing::debug!("failed to find journal");
-
-        return Ok(StatusCode::NOT_FOUND.into_response());
+        return Ok(UploadResult::JournalNotFound.into_response());
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
@@ -111,51 +160,133 @@ pub async fn upload_file(
         .await
         .context("failed to retrieve journal entry file")?;
 
-    let Some(mut file_entry) = result else {
-        tracing::debug!("failed to find file entry");
-
-        return Ok(StatusCode::NOT_FOUND.into_response());
+    let Some(file_entry) = result else {
+        return Ok(UploadResult::FileNotFound.into_response());
     };
 
     let mime = get_mime(&headers)?;
 
-    let file_path = state.storage()
-        .journal_file_entry(journal.id, file_entry.id);
-    let mut file_update = FileUpdater::new(file_path)
-        .await
-        .context("failed to create file updater")?;
+    let record = match file_entry {
+        FileEntry::Requested(requested) => {
+            create_file(
+                state.storage(),
+                transaction,
+                &journal,
+                requested,
+                mime,
+                stream,
+            )
+                .await
+                .context("failed to create file")?
+        }
+        FileEntry::Received(received) => {
+            update_file(
+                state.storage(),
+                transaction,
+                &journal,
+                received,
+                mime,
+                stream,
+            )
+                .await
+                .context("failed to update file")?
+        }
+    };
 
-    let (written, _hash) = match write_body(&mut file_update, stream).await {
+    Ok(UploadResult::Successful(record.into()).into_response())
+}
+
+async fn create_file(
+    storage: &Storage,
+    conn: db::Transaction<'_>,
+    journal: &Journal,
+    requested: RequestedFile,
+    mime: mime::Mime,
+    stream: Body,
+) -> Result<ReceivedFile, error::Error> {
+    let file_path = storage.journal_file_entry(journal.id, requested.id);
+    let mut file_create = FileCreater::new(file_path)
+        .await
+        .context("failed to init file creater")?;
+
+    let (written, _hash) = match write_body(&mut file_create, stream).await {
         Ok(rtn) => rtn,
         Err(err) => {
-            if let Err((_file_update, err)) = file_update.clean().await {
-                error::log_prefix_error(
-                    "failed to remove temp_path during upload",
-                    &err
-                );
-            }
+            file_create.log_clean().await;
 
             return Err(error::Error::context_source(
-                "failed to write request body to temp file",
+                "failed to write request body to file",
                 err
             ));
         }
     };
 
-    file_entry.mime_type = get_mime_type(&mime);
-    file_entry.mime_subtype = get_mime_subtype(&mime);
-    file_entry.mime_param = get_mime_params(mime.params());
-    file_entry.size = written;
-    file_entry.updated = Some(Utc::now());
+    let options = PromoteOptions {
+        mime,
+        size: written,
+        created: Utc::now()
+    };
 
-    // update the database record
-    if let Err(err) = file_entry.update(&transaction).await {
-        if let Err((_file_update, clean_err)) = file_update.clean().await {
-            error::log_prefix_error("failed to clean file update", &clean_err);
+    let received = match requested.promote(&conn, options).await {
+        Ok(rtn) => rtn,
+        Err((_, err)) => {
+            file_create.log_clean().await;
+
+            return Err(error::Error::context_source(
+                "failed to promote requested file entry",
+                err
+            ));
         }
+    };
+
+    let created = file_create.create();
+
+    if let Err(err) = conn.commit().await {
+        created.log_rollback().await;
+
+        Err(error::Error::context_source(
+            "failed to commit changes to file entry",
+            err
+        ))
+    } else {
+        Ok(received)
+    }
+}
+
+async fn update_file(
+    storage: &Storage,
+    conn: db::Transaction<'_>,
+    journal: &Journal,
+    mut received: ReceivedFile,
+    mime: mime::Mime,
+    stream: Body,
+) -> Result<ReceivedFile, error::Error> {
+    let file_path = storage.journal_file_entry(journal.id, received.id);
+    let mut file_update = FileUpdater::new(file_path)
+        .await
+        .context("failed to init file updater")?;
+
+    let (written, _hash) = match write_body(&mut file_update, stream).await {
+        Ok(rtn) => rtn,
+        Err(err) => {
+            file_update.log_clean().await;
+
+            return Err(error::Error::context_source(
+                "failed to write request body to file",
+                err
+            ));
+        }
+    };
+
+    received.update_mime(&mime);
+    received.size = written;
+    received.updated = Some(Utc::now());
+
+    if let Err(err) = received.update(&conn).await {
+        file_update.log_clean().await;
 
         return Err(error::Error::context_source(
-            "failed to update file_entries record",
+            "failed to update received file entry",
             err
         ));
     }
@@ -164,26 +295,18 @@ pub async fn upload_file(
         .await
         .context("failed to update file")?;
 
-    // attempt to commit changes
-    if let Err(err) = transaction.commit().await {
-        if let Err((_updated, roll_err)) = updated.rollback().await {
-            error::log_prefix_error("failed to rollback file changes", &roll_err);
-        }
+    if let Err(err) = conn.commit().await {
+        updated.log_rollback().await;
 
-        return Err(error::Error::context_source(
+        Err(error::Error::context_source(
             "failed to commit changes to file entry",
             err
-        ));
-    }
+        ))
+    } else {
+        updated.log_clean().await;
 
-    if let Err((_updated, clean_err)) = updated.clean().await {
-        error::log_prefix_error("failed to clean up file update", &clean_err);
+        Ok(received)
     }
-
-    Ok((
-        StatusCode::OK,
-        body::Json(file_entry)
-    ).into_response())
 }
 
 async fn write_body<'a, T>(
@@ -225,40 +348,11 @@ where
 }
 
 fn get_mime(headers: &HeaderMap) -> Result<mime::Mime, error::Error> {
-    if let Some(value) = headers.get("content-type") {
-        let content_type = value.to_str()
-            .context("content-type contains invalid utf8 characters")?;
+    let content_type = headers.get("content-type")
+        .context("missing content-type header")?
+        .to_str()
+        .context("contet-type contains invalid utf8 characters")?;
 
-        mime::Mime::from_str(&content_type).context(
-            "content-type is not a valid mime format"
-        )
-    } else {
-        Err(error::Error::context("missing content-type header"))
-    }
-}
-
-#[inline]
-fn get_mime_type(mime: &mime::Mime) -> String {
-    mime.type_()
-        .as_str()
-        .to_owned()
-}
-
-#[inline]
-fn get_mime_subtype(mime: &mime::Mime) -> String {
-    mime.subtype()
-        .as_str()
-        .to_owned()
-}
-
-fn get_mime_params(params: mime::Params<'_>) -> Option<String> {
-    let collected = params.map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<String>>()
-        .join(";");
-
-    if !collected.is_empty() {
-        Some(collected)
-    } else {
-        None
-    }
+    mime::Mime::from_str(&content_type)
+        .context("content-type is not a valid mime format")
 }

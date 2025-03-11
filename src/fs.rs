@@ -170,6 +170,17 @@ impl FileUpdater {
             Ok(())
         }
     }
+
+    pub async fn log_clean(self) {
+        if let Err((updater, err)) = self.clean().await {
+            let prefix = format!(
+                "failed to clean temp file: \"{}\"",
+                updater.temp.display()
+            );
+
+            error::log_prefix_error(&prefix, &err);
+        }
+    }
 }
 
 impl AsyncWrite for FileUpdater {
@@ -251,6 +262,17 @@ impl UpdatedFile {
         }
     }
 
+    pub async fn log_rollback(self) {
+        if let Err((updated, err)) = self.rollback().await {
+            let prefix = format!(
+                "failed to rollback updated file: \"{}\"",
+                updated.curr.display(),
+            );
+
+            error::log_prefix_error(&prefix, &err);
+        }
+    }
+
     /// attempts to remove "prev"
     pub async fn clean(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::remove_file(&self.prev).await {
@@ -261,6 +283,17 @@ impl UpdatedFile {
             // the previous file is now gone and all that is left is the
             // updated file
             Ok(())
+        }
+    }
+
+    pub async fn log_clean(self) {
+        if let Err((updated, err)) = self.clean().await {
+            let prefix = format!(
+                "failed to cleanup updated file: \"{}\"",
+                updated.prev.display()
+            );
+
+            error::log_prefix_error(&prefix, &err);
         }
     }
 }
@@ -443,7 +476,7 @@ impl RemovedFiles {
 
 /// the potential errors when creating a file
 #[derive(Debug, thiserror::Error)]
-pub enum CreatedFileError {
+pub enum FileCreaterError {
     /// the provided file already exists
     #[error("the provided file already exists")]
     AlreadyExists,
@@ -452,29 +485,97 @@ pub enum CreatedFileError {
     Io(#[from] std::io::Error)
 }
 
-/// similar to [`RemovedFile`] except will only create a single file
-#[derive(Debug)]
-pub struct CreatedFile(PathBuf);
+#[pin_project]
+pub struct FileCreater {
+    /// the underlying File that will be written to
+    #[pin]
+    file: File,
 
-impl CreatedFile {
-    /// attempts to create the specified file
-    pub async fn create(path: PathBuf) -> Result<Self, CreatedFileError> {
+    /// the file what will be updated when changes are committed
+    curr: PathBuf,
+}
+
+impl FileCreater {
+    pub async fn new(path: PathBuf) -> Result<Self, FileCreaterError> {
         let result = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
             .await;
 
-        if let Err(err) = result {
-            Err(match err.kind() {
-                ErrorKind::AlreadyExists => CreatedFileError::AlreadyExists,
-                _ => CreatedFileError::Io(err)
+        match result {
+            Ok(file) => Ok(Self {
+                file,
+                curr: path
+            }),
+            Err(err) => Err(match err.kind() {
+                ErrorKind::AlreadyExists => FileCreaterError::AlreadyExists,
+                _ => FileCreaterError::Io(err)
             })
-        } else {
-            Ok(Self(path))
         }
     }
 
+    /// attempts to create the specified file
+    pub fn create(self) -> CreatedFile {
+        CreatedFile(self.curr)
+    }
+
+    /// attempts to remove "curr" and consume self
+    pub async fn clean(self) -> Result<(), (Self, std::io::Error)> {
+        if let Err(err) = tokio::fs::remove_file(&self.curr).await {
+            Err((self, err))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn log_clean(self) {
+        if let Err((created, err)) = self.clean().await {
+            let prefix = format!(
+                "failed to clean up created file: \"{}\"",
+                created.curr.display()
+            );
+
+            error::log_prefix_error(&prefix, &err);
+        }
+    }
+}
+
+impl AsyncWrite for FileCreater {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, IoError>> {
+        let pinned = self.project();
+
+        pinned.file.poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Result<(), IoError>> {
+        let pinned = self.project();
+
+        pinned.file.poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Result<(), IoError>> {
+        let pinned = self.project();
+
+        pinned.file.poll_shutdown(cx)
+    }
+}
+
+/// similar to [`RemovedFile`] except will only create a single file
+#[derive(Debug)]
+pub struct CreatedFile(PathBuf);
+
+impl CreatedFile {
     /// attempts to remove the created file
     pub async fn rollback(self) -> Result<(), (Self, std::io::Error)> {
         if let Err(err) = tokio::fs::remove_file(&self.0).await {
@@ -483,64 +584,15 @@ impl CreatedFile {
             Ok(())
         }
     }
-}
 
-/// contains a list of files created
-#[derive(Debug)]
-pub struct CreatedFiles {
-    processed: Vec<CreatedFile>
-}
-
-impl CreatedFiles {
-    /// creates an empty CreatedFiles struct
-    pub fn new() -> Self {
-        Self {
-            processed: Vec::new()
-        }
-    }
-
-    /// attempts to create the desired file
-    ///
-    /// if the file is not created then the resulting error is returned
-    pub async fn add(&mut self, path: PathBuf) -> Result<(), CreatedFileError> {
-        self.processed.push(CreatedFile::create(path).await?);
-
-        Ok(())
-    }
-
-    /// attempts to remove all created files
-    ///
-    /// all failed that failed to be removed will be returned in a list with
-    /// the error that caused the failure.
-    pub async fn rollback(self) -> Vec<(CreatedFile, std::io::Error)> {
-        let mut futs = FuturesOrdered::new();
-
-        for created in self.processed {
-            futs.push_back(created.rollback());
-        }
-
-        let mut failed = Vec::new();
-
-        while let Some(result) = futs.next().await {
-            if let Err(fail) = result {
-                failed.push(fail);
-            }
-        }
-
-        failed
-    }
-
-    /// attempts to remove all created files and logs any errors
     pub async fn log_rollback(self) {
-        let failed = self.rollback().await;
-
-        for (created, err) in failed {
+        if let Err((created, err)) = self.rollback().await {
             let prefix = format!(
-                "failed to rollback file: \"{}\"",
+                "failed to rollback created file: \"{}\"",
                 created.0.display()
             );
 
-            error::log_prefix_error(prefix.as_str(), &err);
+            error::log_prefix_error(&prefix, &err);
         }
     }
 }

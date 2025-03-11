@@ -471,8 +471,8 @@ pub struct EntryTag {
 #[derive(Debug, Clone, Copy, Serialize_repr)]
 #[repr(i16)]
 pub enum FileStatus {
-    Requested,
-    Received,
+    Requested = 0,
+    Received = 1,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -519,11 +519,25 @@ impl<'a> pg_types::FromSql<'a> for FileStatus {
 }
 
 #[derive(Debug, Serialize)]
-pub struct FileEntry {
+pub enum FileEntry {
+    Requested(RequestedFile),
+    Received(ReceivedFile),
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestedFile {
     pub id: FileEntryId,
     pub uid: FileEntryUid,
     pub entries_id: EntryId,
-    pub status: FileStatus,
+    pub name: Option<String>,
+    pub created: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReceivedFile {
+    pub id: FileEntryId,
+    pub uid: FileEntryUid,
+    pub entries_id: EntryId,
     pub name: Option<String>,
     pub mime_type: String,
     pub mime_subtype: String,
@@ -540,7 +554,7 @@ impl FileEntry {
     ) -> Result<impl Stream<Item = Result<Self, PgError>>, PgError> {
         let params: db::ParamsArray<'_, 1> = [entries_id];
 
-        conn.query_raw(
+        Ok(conn.query_raw(
             "\
             select file_entries.id, \
                    file_entries.uid, \
@@ -557,19 +571,27 @@ impl FileEntry {
             where file_entries.entries_id = $1",
             params
         )
-            .await
-            .map(|top_res| top_res.map(|stream| stream.map(|record| Self {
-                id: record.get(0),
-                uid: record.get(1),
-                entries_id: record.get(2),
-                status: record.get(3),
-                name: record.get(4),
-                mime_type: record.get(5),
-                mime_subtype: record.get(6),
-                mime_param: record.get(7),
-                size: record.get(8),
-                created: record.get(9),
-                updated: record.get(10),
+            .await?
+            .map(|result| result.map(|record| match record.get::<usize, FileStatus>(3) {
+                FileStatus::Requested => Self::Requested(RequestedFile {
+                    id: record.get(0),
+                    uid: record.get(1),
+                    entries_id: record.get(2),
+                    name: record.get(4),
+                    created: record.get(9),
+                }),
+                FileStatus::Received => Self::Received(ReceivedFile {
+                    id: record.get(0),
+                    uid: record.get(1),
+                    entries_id: record.get(2),
+                    name: record.get(4),
+                    mime_type: record.get(5),
+                    mime_subtype: record.get(6),
+                    mime_param: record.get(7),
+                    size: record.get(8),
+                    created: record.get(9),
+                    updated: record.get(10),
+                })
             })))
     }
 
@@ -578,7 +600,7 @@ impl FileEntry {
         entries_id: &EntryId,
         file_entry_id: &FileEntryId
     ) -> Result<Option<Self>, PgError> {
-        conn.query_opt(
+        Ok(conn.query_opt(
             "\
             select file_entries.id, \
                    file_entries.uid, \
@@ -596,20 +618,128 @@ impl FileEntry {
                   file_entries.id = $2",
             &[entries_id, file_entry_id]
         )
-            .await
-            .map(|maybe| maybe.map(|record| Self {
-                id: record.get(0),
-                uid: record.get(1),
-                entries_id: record.get(2),
-                status: record.get(3),
-                name: record.get(4),
-                mime_type: record.get(5),
-                mime_subtype: record.get(6),
-                mime_param: record.get(7),
-                size: record.get(8),
-                created: record.get(9),
-                updated: record.get(10),
+            .await?
+            .map(|record| match record.get::<usize, FileStatus>(3) {
+                FileStatus::Requested => Self::Requested(RequestedFile {
+                    id: record.get(0),
+                    uid: record.get(1),
+                    entries_id: record.get(2),
+                    name: record.get(4),
+                    created: record.get(9),
+                }),
+                FileStatus::Received => Self::Received(ReceivedFile {
+                    id: record.get(0),
+                    uid: record.get(1),
+                    entries_id: record.get(2),
+                    name: record.get(4),
+                    mime_type: record.get(5),
+                    mime_subtype: record.get(6),
+                    mime_param: record.get(7),
+                    size: record.get(8),
+                    created: record.get(9),
+                    updated: record.get(10),
+                })
             }))
+    }
+
+    pub fn into_received(self) -> Result<ReceivedFile, Self> {
+        match self {
+            Self::Received(rec) => Ok(rec),
+            _ => Err(self)
+        }
+    }
+}
+
+pub struct PromoteOptions {
+    pub mime: mime::Mime,
+    pub size: i64,
+    pub created: DateTime<Utc>,
+}
+
+impl RequestedFile {
+    pub async fn promote(
+        self,
+        conn: &impl GenericClient,
+        PromoteOptions {
+            mime,
+            size,
+            created,
+        }: PromoteOptions,
+    ) -> Result<ReceivedFile, (Self, PgError)> {
+        let status = FileStatus::Received;
+        let mime_type = mime.type_()
+            .as_str()
+            .to_owned();
+        let mime_subtype = mime.subtype()
+            .as_str()
+            .to_owned();
+        let mime_param = get_mime_param(mime.params());
+
+        let result = conn.execute(
+            "\
+            update file_entries \
+            set name = $2, \
+                mime_type = $3, \
+                mime_subtype = $4, \
+                mime_param = $5, \
+                size = $6, \
+                created = $7, \
+                status = $8 \
+            where id = $1",
+            &[
+                &self.id,
+                &self.name,
+                &mime_type,
+                &mime_subtype,
+                &mime_param,
+                &size,
+                &created,
+                &status
+            ]
+        ).await;
+
+        match result {
+            Ok(_) => Ok(ReceivedFile {
+                id: self.id,
+                uid: self.uid,
+                entries_id: self.entries_id,
+                name: self.name,
+                mime_type,
+                mime_subtype,
+                mime_param,
+                size,
+                created,
+                updated: None
+            }),
+            Err(err) => Err((self, err))
+        }
+    }
+}
+
+impl ReceivedFile {
+    pub async fn update(&self, conn: &impl GenericClient) -> Result<(), PgError> {
+        conn.execute(
+            "\
+            update file_entries \
+            set name = $2, \
+                mime_type = $3, \
+                mime_subtype = $4, \
+                mime_param = $5, \
+                size = $6, \
+                updated = $7, \
+            where file_entries.id = $1",
+            &[
+                &self.id,
+                &self.name,
+                &self.mime_type,
+                &self.mime_subtype,
+                &self.mime_param,
+                &self.size,
+                &self.updated,
+            ]
+        ).await?;
+
+        Ok(())
     }
 
     pub fn get_mime(&self) -> mime::Mime {
@@ -623,31 +753,22 @@ impl FileEntry {
             .expect("failed to parse MIME from database")
     }
 
-    pub async fn update(&self, conn: &impl GenericClient) -> Result<(), PgError> {
-        conn.execute(
-            "\
-            update file_entries \
-            set name = $2, \
-                mime_type = $3, \
-                mime_subtype = $4, \
-                mime_param = $5, \
-                size = $6, \
-                updated = $7, \
-                status = $8 \
-            where file_entries.id = $1",
-            &[
-                &self.id,
-                &self.name,
-                &self.mime_type,
-                &self.mime_subtype,
-                &self.mime_param,
-                &self.size,
-                &self.updated,
-                &self.status,
-            ]
-        ).await?;
+    pub fn update_mime(&mut self, mime: &mime::Mime) {
+        self.mime_type = mime.type_().as_str().to_owned();
+        self.mime_subtype = mime.subtype().as_str().to_owned();
+        self.mime_param = get_mime_param(mime.params());
+    }
+}
 
-        Ok(())
+fn get_mime_param(params: mime::Params<'_>) -> Option<String> {
+    let collected = params.map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<String>>()
+        .join(";");
+
+    if !collected.is_empty() {
+        Some(collected)
+    } else {
+        None
     }
 }
 
