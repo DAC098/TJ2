@@ -60,7 +60,7 @@ import { getUserMedia } from "@/media";
 import { useObjectUrl } from "@/hooks";
 import { cn } from "@/utils";
 import { uuidv4 } from "@/uuid";
-import { parse_mime } from "@/parse";
+import { parse_mime, default_mime } from "@/parse";
 
 interface CustomFieldPartial {
     id: number,
@@ -756,14 +756,14 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
                     player = <FilePreview mime_type={field.mime_type} data={src}/>
                     break;
                 case "in-memory": {
-                    let mime = parse_mime(field.data.type);
+                    let mime = parse_mime(field.data.type) ?? default_mime();
 
                     download = <DownloadBtn src={field.data} name={field.name}/>;
                     player = <FilePreview mime_type={mime.type} data={field.data}/>;
                     break;
                 }
                 case "local": {
-                    let mime = parse_mime(field.data.type);
+                    let mime = parse_mime(field.data.type) ?? default_mime();
 
                     player = <FilePreview mime_type={mime.type} data={field.data}/>;
                     break;
@@ -773,13 +773,13 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
 
                     switch (field.original.type) {
                         case "local": {
-                            let mime = parse_mime(field.original.data.type);
+                            let mime = parse_mime(field.original.data.type) ?? default_mime();
 
                             player = <FilePreview mime_type={mime.type} data={field.original.data}/>;
                             break;
                         }
                         case "in-memory": {
-                            let mime = parse_mime(field.original.data.type);
+                            let mime = parse_mime(field.original.data.type) ?? default_mime();
 
                             download = <DownloadBtn src={field.original.data} name={field.name}/>;
                             player = <FilePreview mime_type={mime.type} data={field.original.data}/>;

@@ -28,3 +28,11 @@ export function parse_mime(given: string): MimeType | null {
         };
     }
 }
+
+export function default_mime(): MimeType {
+    return {
+        type: "application",
+        subtype: "octet-stream",
+        params: null
+    };
+}
