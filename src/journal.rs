@@ -22,6 +22,7 @@ use crate::db::ids::{
     CustomFieldUid,
 };
 use crate::error::BoxDynError;
+use crate::sec::Hash;
 
 pub mod custom_field;
 
@@ -605,6 +606,7 @@ pub struct ReceivedFile {
     pub mime_subtype: String,
     pub mime_param: Option<String>,
     pub size: i64,
+    pub hash: Hash,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
 }
@@ -627,6 +629,7 @@ impl FileEntry {
                    file_entries.mime_subtype, \
                    file_entries.mime_param, \
                    file_entries.size, \
+                   file_entries.hash, \
                    file_entries.created, \
                    file_entries.updated \
             from file_entries \
@@ -640,7 +643,7 @@ impl FileEntry {
                     uid: record.get(1),
                     entries_id: record.get(2),
                     name: record.get(4),
-                    created: record.get(9),
+                    created: record.get(10),
                 }),
                 FileStatus::Received => Self::Received(ReceivedFile {
                     id: record.get(0),
@@ -651,8 +654,9 @@ impl FileEntry {
                     mime_subtype: record.get(6),
                     mime_param: record.get(7),
                     size: record.get(8),
-                    created: record.get(9),
-                    updated: record.get(10),
+                    hash: record.get(9),
+                    created: record.get(10),
+                    updated: record.get(11),
                 })
             })))
     }
@@ -660,7 +664,7 @@ impl FileEntry {
     pub async fn retrieve_file_entry(
         conn: &impl GenericClient,
         entries_id: &EntryId,
-        file_entry_id: &FileEntryId
+        file_entry_id: &FileEntryId,
     ) -> Result<Option<Self>, PgError> {
         Ok(conn.query_opt(
             "\
@@ -673,6 +677,7 @@ impl FileEntry {
                    file_entries.mime_subtype, \
                    file_entries.mime_param, \
                    file_entries.size, \
+                   file_entries.hash, \
                    file_entries.created, \
                    file_entries.updated \
             from file_entries \
@@ -687,7 +692,7 @@ impl FileEntry {
                     uid: record.get(1),
                     entries_id: record.get(2),
                     name: record.get(4),
-                    created: record.get(9),
+                    created: record.get(10),
                 }),
                 FileStatus::Received => Self::Received(ReceivedFile {
                     id: record.get(0),
@@ -698,8 +703,9 @@ impl FileEntry {
                     mime_subtype: record.get(6),
                     mime_param: record.get(7),
                     size: record.get(8),
-                    created: record.get(9),
-                    updated: record.get(10),
+                    hash: record.get(9),
+                    created: record.get(10),
+                    updated: record.get(11),
                 })
             }))
     }
@@ -715,6 +721,7 @@ impl FileEntry {
 pub struct PromoteOptions {
     pub mime: mime::Mime,
     pub size: i64,
+    pub hash: Hash,
     pub created: DateTime<Utc>,
 }
 
@@ -725,6 +732,7 @@ impl RequestedFile {
         PromoteOptions {
             mime,
             size,
+            hash,
             created,
         }: PromoteOptions,
     ) -> Result<ReceivedFile, (Self, PgError)> {
@@ -745,8 +753,9 @@ impl RequestedFile {
                 mime_subtype = $4, \
                 mime_param = $5, \
                 size = $6, \
-                created = $7, \
-                status = $8 \
+                hash = $7, \
+                created = $8, \
+                status = $9 \
             where id = $1",
             &[
                 &self.id,
@@ -755,6 +764,7 @@ impl RequestedFile {
                 &mime_subtype,
                 &mime_param,
                 &size,
+                &hash,
                 &created,
                 &status
             ]
@@ -770,6 +780,7 @@ impl RequestedFile {
                 mime_subtype,
                 mime_param,
                 size,
+                hash,
                 created,
                 updated: None
             }),
@@ -788,7 +799,8 @@ impl ReceivedFile {
                 mime_subtype = $4, \
                 mime_param = $5, \
                 size = $6, \
-                updated = $7, \
+                hash = $7, \
+                updated = $8, \
             where file_entries.id = $1",
             &[
                 &self.id,
@@ -797,6 +809,7 @@ impl ReceivedFile {
                 &self.mime_subtype,
                 &self.mime_param,
                 &self.size,
+                &self.hash,
                 &self.updated,
             ]
         ).await?;

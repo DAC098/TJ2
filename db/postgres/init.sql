@@ -136,6 +136,7 @@ create table file_entries (
     mime_subtype varchar not null,
     mime_param varchar,
     size bigint default 0,
+    hash varchar not null,
     created timestamp with time zone not null,
     updated timestamp with time zone
 );
@@ -162,4 +163,11 @@ create table synced_entries (
     status smallint not null,
     updated timestamp with time zone,
     primary key (entries_id, server_id)
+);
+
+create table synced_file_entries (
+    file_entries_id bigint not null references file_entries (id),
+    server_id bigint not null references remote_servers (id),
+    updated timestamp with time zone,
+    primary key (file_entries_id, server_id)
 );

@@ -84,4 +84,14 @@ impl RemoteClient {
 
         self.client.post(url)
     }
+
+    pub fn put<P>(&self, path: P) -> reqwest::RequestBuilder
+    where
+        P: AsRef<str>
+    {
+        let mut url = self.origin.clone();
+        url.push_str(path.as_ref());
+
+        self.client.put(url)
+    }
 }
