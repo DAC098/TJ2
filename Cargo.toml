@@ -82,6 +82,7 @@ version = "0.10"
 
 [dependencies.blake3]
 version = "1"
+features = ["serde"]
 
 [dependencies.rand]
 version = "0.8"

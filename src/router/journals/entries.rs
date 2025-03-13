@@ -1360,7 +1360,8 @@ async fn upsert_files(
                 name, \
                 created, \
                 mime_type, \
-                mime_subtype \
+                mime_subtype, \
+                hash \
             ) values "
         );
 
@@ -1373,7 +1374,7 @@ async fn upsert_files(
                 EntryFileForm::Requested { uid, name, .. } => {
                     write!(
                         &mut ins_query,
-                        "(${}, $1, ${}, ${}, $2, '', '')",
+                        "(${}, $1, ${}, ${}, $2, '', '', '')",
                         db::push_param(&mut ins_params, uid),
                         db::push_param(&mut ins_params, &status),
                         db::push_param(&mut ins_params, name),
@@ -1384,8 +1385,6 @@ async fn upsert_files(
         }
 
         ins_query.push_str(" returning id");
-
-        tracing::debug!("file insert query: \"{ins_query}\"");
 
         let ins_results = conn.query_raw(&ins_query, ins_params)
             .await

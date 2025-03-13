@@ -179,6 +179,7 @@ async fn upsert_cfs(
         let fields = journal::CustomField::retrieve_journal_uid_map(conn, journals_id)
             .await
             .context("failed to retrieve journal custom fields")?;
+        let mut counted = 0;
         let mut params: db::ParamsVec<'_> = vec![entries_id];
         let mut query = String::from(
             "\
@@ -207,23 +208,29 @@ async fn upsert_cfs(
             );
 
             query.push_str(&statement);
+
+            counted += 1;
         }
 
-        query.push_str(" on conflict (custom_fields_id, entries_id) do update \
-                set value = excluded.value, \
-                    updated = excluded.updated \
-                returning custom_fields_id, \
-                          entries_id \
-            )
-            delete from custom_field_entries \
-            using tmp_insert \
-            where custom_field_entries.entries_id = tmp_insert.entries_id and \
-                  custom_field_entries.custom_fields_id != tmp_insert.custom_fields_id"
-        );
+        if counted > 0 {
+            query.push_str(" on conflict (custom_fields_id, entries_id) do update \
+                    set value = excluded.value, \
+                        updated = excluded.updated \
+                    returning custom_fields_id, \
+                              entries_id \
+                )
+                delete from custom_field_entries \
+                using tmp_insert \
+                where custom_field_entries.entries_id = tmp_insert.entries_id and \
+                      custom_field_entries.custom_fields_id != tmp_insert.custom_fields_id"
+            );
 
-        conn.execute(&query, params.as_slice())
-            .await
-            .context("failed to upsert custom fields")?;
+            tracing::debug!("query: {query}");
+
+            conn.execute(&query, params.as_slice())
+                .await
+                .context("failed to upsert custom fields")?;
+        }
     } else {
         conn.execute(
             "\

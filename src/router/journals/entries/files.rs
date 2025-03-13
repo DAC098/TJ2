@@ -23,6 +23,7 @@ use crate::journal::{
     ReceivedFile
 };
 use crate::router::body;
+use crate::sec::Hash;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{Scope, Ability};
 
@@ -165,15 +166,17 @@ pub async fn upload_file(
     };
 
     let mime = get_mime(&headers)?;
+    let hash_check = get_hash_check(&headers)?;
 
     let record = match file_entry {
         FileEntry::Requested(requested) => {
             create_file(
                 state.storage(),
                 transaction,
-                &journal,
+                journal,
                 requested,
                 mime,
+                hash_check,
                 stream,
             )
                 .await
@@ -183,9 +186,10 @@ pub async fn upload_file(
             update_file(
                 state.storage(),
                 transaction,
-                &journal,
+                journal,
                 received,
                 mime,
+                hash_check,
                 stream,
             )
                 .await
@@ -199,20 +203,21 @@ pub async fn upload_file(
 async fn create_file(
     storage: &Storage,
     conn: db::Transaction<'_>,
-    journal: &Journal,
+    journal: Journal,
     requested: RequestedFile,
     mime: mime::Mime,
+    hash_check: HashCheck,
     stream: Body,
 ) -> Result<ReceivedFile, error::Error> {
     let file_path = storage.journal_file_entry(journal.id, requested.id);
-    let mut file_create = FileCreater::new(file_path)
+    let mut creater = FileCreater::new(file_path)
         .await
         .context("failed to init file creater")?;
 
-    let (written, _hash) = match write_body(&mut file_create, stream).await {
+    let (written, hash) = match write_body(&mut creater, hash_check, stream).await {
         Ok(rtn) => rtn,
         Err(err) => {
-            file_create.log_clean().await;
+            creater.log_clean().await;
 
             return Err(error::Error::context_source(
                 "failed to write request body to file",
@@ -224,13 +229,14 @@ async fn create_file(
     let options = PromoteOptions {
         mime,
         size: written,
+        hash,
         created: Utc::now()
     };
 
     let received = match requested.promote(&conn, options).await {
         Ok(rtn) => rtn,
         Err((_, err)) => {
-            file_create.log_clean().await;
+            creater.log_clean().await;
 
             return Err(error::Error::context_source(
                 "failed to promote requested file entry",
@@ -239,7 +245,7 @@ async fn create_file(
         }
     };
 
-    let created = file_create.create();
+    let created = creater.create();
 
     if let Err(err) = conn.commit().await {
         created.log_rollback().await;
@@ -256,20 +262,21 @@ async fn create_file(
 async fn update_file(
     storage: &Storage,
     conn: db::Transaction<'_>,
-    journal: &Journal,
+    journal: Journal,
     mut received: ReceivedFile,
     mime: mime::Mime,
+    hash_check: HashCheck,
     stream: Body,
 ) -> Result<ReceivedFile, error::Error> {
     let file_path = storage.journal_file_entry(journal.id, received.id);
-    let mut file_update = FileUpdater::new(file_path)
+    let mut updater = FileUpdater::new(file_path)
         .await
         .context("failed to init file updater")?;
 
-    let (written, _hash) = match write_body(&mut file_update, stream).await {
+    let (written, hash) = match write_body(&mut updater, hash_check, stream).await {
         Ok(rtn) => rtn,
         Err(err) => {
-            file_update.log_clean().await;
+            updater.log_clean().await;
 
             return Err(error::Error::context_source(
                 "failed to write request body to file",
@@ -280,10 +287,11 @@ async fn update_file(
 
     received.update_mime(&mime);
     received.size = written;
+    received.hash = hash;
     received.updated = Some(Utc::now());
 
     if let Err(err) = received.update(&conn).await {
-        file_update.log_clean().await;
+        updater.log_clean().await;
 
         return Err(error::Error::context_source(
             "failed to update received file entry",
@@ -291,7 +299,7 @@ async fn update_file(
         ));
     }
 
-    let updated = file_update.update()
+    let updated = updater.update()
         .await
         .context("failed to update file")?;
 
@@ -309,42 +317,84 @@ async fn update_file(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum WriteError {
+    #[error("the calculated hash does not match")]
+    InvalidHash,
+
+    #[error("written bytes exceeds max")]
+    TooLarge,
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Axum(#[from] axum::Error),
+}
+
 async fn write_body<'a, T>(
     writer: &'a mut T,
+    hash_check: HashCheck,
     stream: Body,
-) -> Result<(i64, blake3::Hash), error::Error>
+) -> Result<(i64, Hash), WriteError>
 where
     T: AsyncWrite + Unpin,
 {
-    let mut written: usize = 0;
+    let mut written = 0usize;
     let mut hasher = blake3::Hasher::new();
-
     let mut stream = stream.into_data_stream();
 
     while let Some(result) = stream.next().await {
-        let bytes = result
-            .context("failed to get bytes from stream")?;
+        let bytes = result?;
         let slice = bytes.as_ref();
 
         hasher.update(slice);
 
-        let wrote = writer.write(slice)
-            .await
-            .context("failed to write bytes to stream")?;
+        let wrote = writer.write(slice).await?;
 
         written = written.checked_add(wrote)
-            .context("bytes written overflows usize")?;
+            .ok_or(WriteError::TooLarge)?;
     }
 
-    writer.flush()
-        .await
-        .context("failed to flush contents of stream")?;
+    writer.flush().await?;
 
-    let size = written.try_into()
-        .context("failed to convert bytes written to i64")?;
     let hash = hasher.finalize();
+    let size = written.try_into()
+        .map_err(|_| WriteError::TooLarge)?;
 
-    Ok((size, hash))
+    match hash_check {
+        HashCheck::Given(given) => {
+            if given != hash {
+                Err(WriteError::InvalidHash)
+            } else {
+                Ok((size, hash.into()))
+            }
+        }
+        HashCheck::None => {
+            Ok((size, hash.into()))
+        }
+    }
+}
+
+enum HashCheck {
+    Given(Hash),
+    // going to wait on this
+    //AtEnd,
+    None,
+}
+
+fn get_hash_check(headers: &HeaderMap) -> Result<HashCheck, error::Error> {
+    if let Some(x_hash) = headers.get("x-hash") {
+        let x_hash_str = x_hash.to_str()
+            .context("x-hash contains invalid utf8 characters")?;
+
+        let hash = Hash::from_hex(x_hash_str)
+            .context("invalid blake3 hash provided")?;
+
+        Ok(HashCheck::Given(hash))
+    } else {
+        Ok(HashCheck::None)
+    }
 }
 
 fn get_mime(headers: &HeaderMap) -> Result<mime::Mime, error::Error> {
