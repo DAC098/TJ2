@@ -634,10 +634,16 @@ export async function upload_data(
 
         console.log(path, data);
 
+        let content_type = data.type;
+
+        if (content_type.length === 0) {
+            content_type = "application/octet-stream";
+        }
+
         let result = await fetch(path, {
             method: "PUT",
             headers: {
-                "content-type": data.type,
+                "content-type": content_type,
                 "content-length": data.size.toString(10),
             },
             body: data
