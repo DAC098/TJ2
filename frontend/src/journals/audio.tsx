@@ -20,21 +20,88 @@ export interface RecordAudioProps {
 }
 
 export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
+    let canvas_ref = useRef<{
+        canvas: HTMLCanvasElement,
+        context: CanvasRenderingContext2D,
+        ready: boolean,
+    }>({
+        element: null,
+        context: null,
+        ready: false,
+    });
     let media_ref = useRef<{
         stream: MediaStream,
         recorder: MediaRecorder,
         buffer: Blob[],
-        blob: Blob
+        blob: Blob,
     }>({
         stream: null,
         recorder: null,
         buffer: [],
+        blob: null,
+    });
+    // oscillator ref
+    let osc_ref = useRef<{
+        audio_context: AudioContext,
+        analyser: AnalyserNode,
+        frame_id: number,
+        buffer_len: number,
+        buffer: Uint8Array,
+        ready: boolean,
+    }>({
+        audio_context: null,
+        analyser: null,
+        frame_id: 0,
+        buffer_len: 0,
+        buffer: null,
+        ready: false,
     });
 
     let [dialog_open, set_dialog_open] = useState(false);
     let [msg, setMsg] = useState(" ");
-    let [recording_started, setRecordingStarted] = useState(false);
-    let [recording_paused, setRecordingPaused] = useState(false);
+    let [recording_started, set_recording_started] = useState(false);
+    let [recording_paused, set_recording_paused] = useState(false);
+
+    const draw_osc = (ts) => {
+        if (canvas_ref.current.context == null) {
+            return;
+        }
+
+        osc_ref.current.frame_id = requestAnimationFrame(draw_osc);
+
+        // retrieve current data from the analyser
+        osc_ref.current.analyser.getByteTimeDomainData(osc_ref.current.buffer);
+
+        canvas_ref.current.context.clearRect(
+            0,
+            0,
+            canvas_ref.current.element.width,
+            canvas_ref.current.element.height
+        );
+
+        canvas_ref.current.context.lineWidth = 2;
+        canvas_ref.current.context.strokeStyle = "rgb(22 163 74)";
+
+        canvas_ref.current.context.beginPath();
+
+        const slice_width = canvas_ref.current.element.width * 1.0 / osc_ref.current.buffer_len;
+        let x = 0;
+
+        for (let index = 0; index < osc_ref.current.buffer_len; index += 1) {
+            const y = osc_ref.current.buffer[index] / 128.0 * canvas_ref.current.element.height / 2.0;
+
+            if (index === 0) {
+                canvas_ref.current.context.moveTo(x, y);
+            } else {
+                canvas_ref.current.context.lineTo(x, y);
+            }
+
+            x += slice_width;
+        }
+
+        canvas_ref.current.context.lineTo(canvas_ref.current.element.width, canvas_ref.current.element.height / 2.0);
+        canvas_ref.current.context.stroke();
+    };
 
     const create_media_recorder = (): Promise<MediaRecorder> => {
         return getUserMedia({audio: true}).then((result) => {
@@ -44,10 +111,24 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
                 return null;
             }
 
-            media_ref.current.stream = result;
-
             const media_recorder = new MediaRecorder(result, {mimeType: "audio/webm"});
             media_ref.current.recorder = media_recorder;
+            media_ref.current.stream = result;
+
+            const audio_context = new AudioContext();
+            const audio_analyser = audio_context.createAnalyser();
+            audio_analyser.fftSize = 2048;
+
+            const source = audio_context.createMediaStreamSource(result);
+            source.connect(audio_analyser);
+
+            osc_ref.current.audio_context = audio_context;
+            osc_ref.current.analyser = audio_analyser;
+            osc_ref.current.buffer_len = audio_analyser.frequencyBinCount;
+            osc_ref.current.buffer = new Uint8Array(osc_ref.current.buffer_len);
+            osc_ref.current.ready = true;
+
+            start_osc();
 
             media_recorder.addEventListener("dataavailable", (e) => {
                 if (e.data.size > 0) {
@@ -56,7 +137,7 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
             });
 
             media_recorder.addEventListener("stop", (e) => {
-                setRecordingStarted(false);
+                set_recording_started(false);
 
                 let blob = new Blob(
                     media_ref.current.buffer,
@@ -73,15 +154,15 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
             });
 
             media_recorder.addEventListener("pause", (e) => {
-                setRecordingPaused(true);
+                set_recording_paused(true);
             });
 
             media_recorder.addEventListener("start", (e) => {
-                setRecordingStarted(true);
+                set_recording_started(true);
             });
 
             media_recorder.addEventListener("resume", (e) => {
-                setRecordingPaused(false);
+                set_recording_paused(false);
             });
 
             media_recorder.addEventListener("error", (e) => {
@@ -102,6 +183,19 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
 
             return null;
         })
+    };
+
+    const start_osc = () => {
+        if (osc_ref.current.ready && canvas_ref.current.ready) {
+            // request to start drawing as soon as possible
+            osc_ref.current.frame_id = requestAnimationFrame(draw_osc);
+        }
+    };
+
+    const stop_osc = () => {
+        if (osc_ref.current.frame_id !== 0) {
+            cancelAnimationFrame(osc_ref.current.frame_id);
+        }
     };
 
     const stop_streams = () => {
@@ -147,7 +241,10 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
     };
 
     useEffect(() => {
-        return () => stop_streams();
+        return () => {
+            stop_streams();
+            stop_osc();
+        };
     }, []);
 
     return <Dialog open={dialog_open} onOpenChange={(open) => {
@@ -155,6 +252,7 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
             create_media_recorder();
         } else {
             stop_streams();
+            stop_osc();
         }
 
         set_dialog_open(open);
@@ -169,6 +267,21 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
             </DialogDescription>
         </VisuallyHidden>
         <DialogContent>
+            <canvas ref={(node) => {
+                if (node != null) {
+                    canvas_ref.current.element = node;
+                    canvas_ref.current.context = node.getContext("2d");
+                    canvas_ref.current.ready = true;
+
+                    start_osc();
+                } else {
+                    canvas_ref.current.element = null;
+                    canvas_ref.current.context = null;
+                    canvas_ref.current.ready = false;
+
+                    stop_osc();
+                }
+            }} className="w-full h-8"/>
             <div className="flex flex-row flex-nowrap items-center justify-center gap-x-4">
                 <Button
                     type="button"

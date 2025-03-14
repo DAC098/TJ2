@@ -21,6 +21,15 @@ export interface RecordVideoProps {
 
 export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
     const preview_ele_ref = useRef<HTMLMediaElement>(null);
+    let canvas_ref = useRef<{
+        canvas: HTMLCanvasElement,
+        context: CanvasRenderingContext2D,
+        ready: boolean,
+    }>({
+        element: null,
+        context: null,
+        ready: false,
+    });
     const media_ref = useRef<{
         stream: MediaStream,
         recorder: MediaRecorder,
@@ -31,12 +40,69 @@ export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
         recorder: null,
         buffer: [],
     });
+    // oscillator ref
+    let osc_ref = useRef<{
+        audio_context: AudioContext,
+        analyser: AnalyserNode,
+        frame_id: number,
+        buffer_len: number,
+        buffer: Uint8Array,
+        ready: boolean,
+    }>({
+        audio_context: null,
+        analyser: null,
+        frame_id: 0,
+        buffer_len: 0,
+        buffer: null,
+        ready: false,
+    });
 
     let [dialog_open, set_dialog_open] = useState(false);
     let [msg, setMsg] = useState(" ");
     let [recording_ready, setRecordingReady] = useState(false);
     let [recording_started, setRecordingStarted] = useState(false);
     let [recording_paused, setRecordingPaused] = useState(false);
+
+    const draw_osc = (ts) => {
+        if (canvas_ref.current.context == null) {
+            return;
+        }
+
+        osc_ref.current.frame_id = requestAnimationFrame(draw_osc);
+
+        // retrieve current data from the analyser
+        osc_ref.current.analyser.getByteTimeDomainData(osc_ref.current.buffer);
+
+        canvas_ref.current.context.clearRect(
+            0,
+            0,
+            canvas_ref.current.element.width,
+            canvas_ref.current.element.height
+        );
+
+        canvas_ref.current.context.lineWidth = 2;
+        canvas_ref.current.context.strokeStyle = "rgb(22 163 74)";
+
+        canvas_ref.current.context.beginPath();
+
+        const slice_width = canvas_ref.current.element.width * 1.0 / osc_ref.current.buffer_len;
+        let x = 0;
+
+        for (let index = 0; index < osc_ref.current.buffer_len; index += 1) {
+            const y = osc_ref.current.buffer[index] / 128.0 * canvas_ref.current.element.height / 2.0;
+
+            if (index === 0) {
+                canvas_ref.current.context.moveTo(x, y);
+            } else {
+                canvas_ref.current.context.lineTo(x, y);
+            }
+
+            x += slice_width;
+        }
+
+        canvas_ref.current.context.lineTo(canvas_ref.current.element.width, canvas_ref.current.element.height / 2.0);
+        canvas_ref.current.context.stroke();
+    };
 
     const create_media_recorder = (): Promise<MediaRecorder> => {
         return getUserMedia({audio: true, video: true}).then((result) => {
@@ -46,10 +112,24 @@ export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
                 return null;
             }
 
-            media_ref.current.stream = result;
-
             const media_recorder = new MediaRecorder(result, {mimeType: "video/webm"});
             media_ref.current.recorder = media_recorder;
+            media_ref.current.stream = result;
+
+            const audio_context = new AudioContext();
+            const audio_analyser = audio_context.createAnalyser();
+            audio_analyser.fftSize = 2048;
+
+            const source = audio_context.createMediaStreamSource(result);
+            source.connect(audio_analyser);
+
+            osc_ref.current.audio_context = audio_context;
+            osc_ref.current.analyser = audio_analyser;
+            osc_ref.current.buffer_len = audio_analyser.frequencyBinCount;
+            osc_ref.current.buffer = new Uint8Array(osc_ref.current.buffer_len);
+            osc_ref.current.ready = true;
+
+            start_osc();
 
             preview_ele_ref.current.srcObject = result;
 
@@ -108,6 +188,19 @@ export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
         })
     };
 
+    const start_osc = () => {
+        if (osc_ref.current.ready && canvas_ref.current.ready) {
+            // request to start drawing as soon as possible
+            osc_ref.current.frame_id = requestAnimationFrame(draw_osc);
+        }
+    };
+
+    const stop_osc = () => {
+        if (osc_ref.current.frame_id !== 0) {
+            cancelAnimationFrame(osc_ref.current.frame_id);
+        }
+    };
+
     const stop_streams = () => {
         if (media_ref.current.stream != null) {
             media_ref.current.stream.getTracks().forEach(track => {
@@ -151,7 +244,10 @@ export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
     };
 
     useEffect(() => {
-        return () => stop_streams();
+        return () => {
+            stop_streams();
+            stop_osc();
+        };
     }, []);
 
     return <Dialog open={dialog_open} onOpenChange={(open) => {
@@ -159,6 +255,7 @@ export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
             create_media_recorder();
         } else {
             stop_streams();
+            stop_osc();
         }
 
         set_dialog_open(open);
@@ -184,6 +281,21 @@ export function RecordVideo({on_created, disabled = false}: RecordVideoProps) {
                     setRecordingReady(true);
                 }}
             />
+            <canvas ref={(node) => {
+                if (node != null) {
+                    canvas_ref.current.element = node;
+                    canvas_ref.current.context = node.getContext("2d");
+                    canvas_ref.current.ready = true;
+
+                    start_osc();
+                } else {
+                    canvas_ref.current.element = null;
+                    canvas_ref.current.context = null;
+                    canvas_ref.current.ready = false;
+
+                    stop_osc();
+                }
+            }} className="w-full h-8"/>
             <div className="flex flex-row flex-nowrap items-center justify-center gap-x-4">
                 <Button
                     type="button"
