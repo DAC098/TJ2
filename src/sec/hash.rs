@@ -1,3 +1,4 @@
+use axum::http::HeaderMap;
 use bytes::BytesMut;
 use postgres_types as pg_types;
 use serde::{Serialize, Deserialize};
@@ -57,5 +58,50 @@ impl<'a> pg_types::FromSql<'a> for Hash {
 
     fn accepts(ty: &pg_types::Type) -> bool {
         <&str as pg_types::FromSql>::accepts(ty)
+    }
+}
+
+pub enum HashCheck {
+    Given(Hash),
+    AtEnd,
+    None,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HashCheckError {
+    #[error("the x-hash http header contains invalid utf8 characters")]
+    InvalidHeader,
+
+    #[error(transparent)]
+    InvalidHash(#[from] blake3::HexError),
+}
+
+impl From<axum::http::header::ToStrError> for HashCheckError {
+    fn from(_err: axum::http::header::ToStrError) -> Self {
+        HashCheckError::InvalidHeader
+    }
+}
+
+impl HashCheck {
+    pub fn from_headers(headers: &HeaderMap) -> Result<Self, HashCheckError> {
+        let Some(x_hash) = headers.get("x-hash") else {
+            return Ok(HashCheck::None);
+        };
+
+        let x_hash_str = x_hash.to_str()?;
+
+        if x_hash_str == "at_end" {
+            Ok(HashCheck::AtEnd)
+        } else {
+            Ok(HashCheck::Given(
+                Hash::from_hex(x_hash_str)?
+            ))
+        }
+    }
+}
+
+impl From<blake3::Hash> for HashCheck {
+    fn from(given: blake3::Hash) -> Self {
+        HashCheck::Given(given.into())
     }
 }
