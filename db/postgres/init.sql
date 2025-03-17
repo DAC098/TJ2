@@ -146,8 +146,10 @@ create table file_entries (
     mime_param varchar,
     size bigint default 0,
     hash varchar not null,
+    server_id bigint references remote_servers (id),
     created timestamp with time zone not null,
-    updated timestamp with time zone
+    updated timestamp with time zone,
+    unique (entries_id, name)
 );
 
 create table custom_field_entries (

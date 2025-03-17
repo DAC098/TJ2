@@ -202,6 +202,15 @@ pub enum EntryFileForm {
         mime_subtype: String,
         mime_param: Option<String>,
         size: i64,
+    },
+    Remote {
+        _id: FileEntryId,
+        uid: FileEntryUid,
+        name: Option<String>,
+        mime_type: String,
+        mime_subtype: String,
+        mime_param: Option<String>,
+        size: i64,
     }
 }
 
@@ -258,7 +267,8 @@ impl EntryFileForm {
     fn id(&self) -> &FileEntryId {
         match self {
             Self::Requested { _id, .. } |
-            Self::Received { _id, .. } => _id
+            Self::Received { _id, .. } |
+            Self::Remote { _id, .. } => _id
         }
     }
 
@@ -286,6 +296,15 @@ impl From<FileEntry> for EntryFileForm {
                 mime_subtype: rec.mime_subtype,
                 mime_param: rec.mime_param,
                 size: rec.size,
+            },
+            FileEntry::Remote(rmt) => Self::Remote {
+                _id: rmt.id,
+                uid: rmt.uid,
+                name: rmt.name,
+                mime_type: rmt.mime_type,
+                mime_subtype: rmt.mime_subtype,
+                mime_param: rmt.mime_param,
+                size: rmt.size,
             }
         }
     }
@@ -1337,6 +1356,10 @@ async fn upsert_files(
 
                                 update_indexs.push(files.len());
                             }
+                            // we are going to skip remotes as the server has
+                            // no control over the data since the peer server
+                            // controls the data
+                            EntryFileForm::Remote { .. } => {}
                         }
 
                         files.push(ResultFileEntry::from((found, None)));
@@ -1438,6 +1461,7 @@ async fn upsert_files(
                         db::push_param(&mut upd_params, name),
                     ).unwrap();
                 }
+                _ => unreachable!(),
             }
         }
 

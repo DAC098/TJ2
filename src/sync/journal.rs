@@ -21,8 +21,9 @@ use crate::db::ids::{
     RemoteServerId,
 };
 use crate::error::{self, BoxDynError, Context};
-use crate::journal::custom_field;
+use crate::journal::{FileStatus, custom_field};
 use crate::router::body;
+use crate::sec::Hash;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -35,6 +36,9 @@ pub enum SyncEntryResult {
     },
     CFInvalid {
         uids: Vec<CustomFieldUid>
+    },
+    FileNotFound {
+        uids: Vec<FileEntryUid>
     }
 }
 
@@ -51,7 +55,8 @@ impl IntoResponse for SyncEntryResult {
                 body::Json(self)
             ).into_response(),
             Self::CFNotFound { .. } |
-            Self::CFInvalid { .. } => (
+            Self::CFInvalid { .. } |
+            Self::FileNotFound { .. } => (
                 StatusCode::BAD_REQUEST,
                 body::Json(self)
             ).into_response()
@@ -213,8 +218,6 @@ impl EntrySync {
             order by entries.id \
             limit $5";
 
-        //tracing::debug!("query: {query}");
-
         let stream = conn.query_raw(query, params)
             .await
             .context("failed to retrieve entries batch")?;
@@ -336,15 +339,21 @@ impl EntryCFSync {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct EntryFileSync {
+pub struct ReceivedFile {
     pub uid: FileEntryUid,
     pub name: Option<String>,
     pub mime_type: String,
     pub mime_subtype: String,
     pub mime_param: Option<String>,
     pub size: i64,
+    pub hash: Hash,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum EntryFileSync {
+    Received(ReceivedFile)
 }
 
 impl EntryFileSync {
@@ -352,7 +361,8 @@ impl EntryFileSync {
         conn: &impl GenericClient,
         entries_id: &EntryId
     ) -> Result<Vec<Self>, error::Error> {
-        let params: ParamsArray<1> = [entries_id];
+        let status = FileStatus::Received;
+        let params: ParamsArray<2> = [entries_id, &status];
         let stream = conn.query_raw(
             "\
             select file_entries.uid, \
@@ -361,10 +371,12 @@ impl EntryFileSync {
                    file_entries.mime_subtype, \
                    file_entries.mime_param, \
                    file_entries.size, \
+                   file_entries.hash, \
                    file_entries.created, \
                    file_entries.updated \
             from file_entries \
-            where file_entries.id = $1",
+            where file_entries.entries_id = $1 and \
+                  file_entries.status = $2",
             params
         )
             .await
@@ -377,18 +389,25 @@ impl EntryFileSync {
         while let Some(try_record) = stream.next().await {
             let record = try_record.context("failed to retrieve entry file record")?;
 
-            rtn.push(Self {
+            rtn.push(Self::Received(ReceivedFile {
                 uid: record.get(0),
                 name: record.get(1),
                 mime_type: record.get(2),
                 mime_subtype: record.get(3),
                 mime_param: record.get(4),
                 size: record.get(5),
-                created: record.get(6),
-                updated: record.get(7),
-            });
+                hash: record.get(6),
+                created: record.get(7),
+                updated: record.get(8),
+            }));
         }
 
         Ok(rtn)
+    }
+
+    pub fn uid(&self) -> &FileEntryUid {
+        match self {
+            Self::Received(rec) => &rec.uid
+        }
     }
 }

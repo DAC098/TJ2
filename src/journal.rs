@@ -20,6 +20,7 @@ use crate::db::ids::{
     UserId,
     CustomFieldId,
     CustomFieldUid,
+    RemoteServerId,
 };
 use crate::error::BoxDynError;
 use crate::sec::Hash;
@@ -536,6 +537,7 @@ pub struct EntryTag {
 pub enum FileStatus {
     Requested = 0,
     Received = 1,
+    Remote = 2,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -549,6 +551,7 @@ impl TryFrom<i16> for FileStatus {
         match value {
             0 => Ok(Self::Requested),
             1 => Ok(Self::Received),
+            2 => Ok(Self::Remote),
             _ => Err(InvalidFileStatus),
         }
     }
@@ -585,6 +588,7 @@ impl<'a> pg_types::FromSql<'a> for FileStatus {
 pub enum FileEntry {
     Requested(RequestedFile),
     Received(ReceivedFile),
+    Remote(RemoteFile),
 }
 
 #[derive(Debug, Serialize)]
@@ -594,6 +598,7 @@ pub struct RequestedFile {
     pub entries_id: EntryId,
     pub name: Option<String>,
     pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -609,6 +614,39 @@ pub struct ReceivedFile {
     pub hash: Hash,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteFile {
+    pub id: FileEntryId,
+    pub uid: FileEntryUid,
+    pub entries_id: EntryId,
+    pub server_id: RemoteServerId,
+    pub name: Option<String>,
+    pub mime_type: String,
+    pub mime_subtype: String,
+    pub mime_param: Option<String>,
+    pub size: i64,
+    pub hash: Hash,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
+}
+
+pub enum RetrieveFileEntryQuery<'a> {
+    EntryAndId((&'a EntryId, &'a FileEntryId)),
+    Uid(&'a FileEntryUid),
+}
+
+impl<'a> From<(&'a EntryId, &'a FileEntryId)> for RetrieveFileEntryQuery<'a> {
+    fn from(given: (&'a EntryId, &'a FileEntryId)) -> Self {
+        Self::EntryAndId(given)
+    }
+}
+
+impl<'a> From<&'a FileEntryUid> for RetrieveFileEntryQuery<'a> {
+    fn from(given: &'a FileEntryUid) -> Self {
+        Self::Uid(given)
+    }
 }
 
 impl FileEntry {
@@ -630,6 +668,7 @@ impl FileEntry {
                    file_entries.mime_param, \
                    file_entries.size, \
                    file_entries.hash, \
+                   file_entries.server_id, \
                    file_entries.created, \
                    file_entries.updated \
             from file_entries \
@@ -643,7 +682,8 @@ impl FileEntry {
                     uid: record.get(1),
                     entries_id: record.get(2),
                     name: record.get(4),
-                    created: record.get(10),
+                    created: record.get(11),
+                    updated: record.get(12),
                 }),
                 FileStatus::Received => Self::Received(ReceivedFile {
                     id: record.get(0),
@@ -655,19 +695,34 @@ impl FileEntry {
                     mime_param: record.get(7),
                     size: record.get(8),
                     hash: record.get(9),
-                    created: record.get(10),
-                    updated: record.get(11),
+                    created: record.get(11),
+                    updated: record.get(12),
+                }),
+                FileStatus::Remote => Self::Remote(RemoteFile {
+                    id: record.get(0),
+                    uid: record.get(1),
+                    entries_id: record.get(2),
+                    server_id: record.get(10),
+                    name: record.get(4),
+                    mime_type: record.get(5),
+                    mime_subtype: record.get(6),
+                    mime_param: record.get(7),
+                    size: record.get(8),
+                    hash: record.get(9),
+                    created: record.get(11),
+                    updated: record.get(12),
                 })
             })))
     }
 
-    pub async fn retrieve_file_entry(
+    pub async fn retrieve<'a, T>(
         conn: &impl GenericClient,
-        entries_id: &EntryId,
-        file_entry_id: &FileEntryId,
-    ) -> Result<Option<Self>, PgError> {
-        Ok(conn.query_opt(
-            "\
+        given: T
+    ) -> Result<Option<Self>, PgError>
+    where
+        T: Into<RetrieveFileEntryQuery<'a>>
+    {
+        let base = "\
             select file_entries.id, \
                    file_entries.uid, \
                    file_entries.entries_id, \
@@ -679,40 +734,130 @@ impl FileEntry {
                    file_entries.size, \
                    file_entries.hash, \
                    file_entries.created, \
-                   file_entries.updated \
-            from file_entries \
-            where file_entries.entries_id = $1 and \
-                  file_entries.id = $2",
-            &[entries_id, file_entry_id]
-        )
-            .await?
-            .map(|record| match record.get::<usize, FileStatus>(3) {
-                FileStatus::Requested => Self::Requested(RequestedFile {
-                    id: record.get(0),
-                    uid: record.get(1),
-                    entries_id: record.get(2),
-                    name: record.get(4),
-                    created: record.get(10),
-                }),
-                FileStatus::Received => Self::Received(ReceivedFile {
-                    id: record.get(0),
-                    uid: record.get(1),
-                    entries_id: record.get(2),
-                    name: record.get(4),
-                    mime_type: record.get(5),
-                    mime_subtype: record.get(6),
-                    mime_param: record.get(7),
-                    size: record.get(8),
-                    hash: record.get(9),
-                    created: record.get(10),
-                    updated: record.get(11),
-                })
-            }))
+                   file_entries.updated, \
+                   file_entries.server_id \
+            from file_entries";
+
+        let result = match given.into() {
+            RetrieveFileEntryQuery::EntryAndId((entries_id, file_entry_id)) => {
+                let query = format!(
+                    "{base} \
+                    where file_entries.entries_id = $1 and \
+                          file_entries.id = $2"
+                );
+
+                conn.query_opt(&query, &[entries_id, file_entry_id]).await?
+            }
+            RetrieveFileEntryQuery::Uid(uid) => {
+                let query = format!("{base} where file_entries.uid = $1");
+
+                conn.query_opt(&query, &[uid]).await?
+            }
+        };
+
+        Ok(result.map(|record| match record.get::<usize, FileStatus>(3) {
+            FileStatus::Requested => Self::Requested(RequestedFile {
+                id: record.get(0),
+                uid: record.get(1),
+                entries_id: record.get(2),
+                name: record.get(4),
+                created: record.get(10),
+                updated: record.get(11),
+            }),
+            FileStatus::Received => Self::Received(ReceivedFile {
+                id: record.get(0),
+                uid: record.get(1),
+                entries_id: record.get(2),
+                name: record.get(4),
+                mime_type: record.get(5),
+                mime_subtype: record.get(6),
+                mime_param: record.get(7),
+                size: record.get(8),
+                hash: record.get(9),
+                created: record.get(10),
+                updated: record.get(11),
+            }),
+            FileStatus::Remote => Self::Remote(RemoteFile {
+                id: record.get(0),
+                uid: record.get(1),
+                entries_id: record.get(2),
+                server_id: record.get(12),
+                name: record.get(4),
+                mime_type: record.get(5),
+                mime_subtype: record.get(6),
+                mime_param: record.get(7),
+                size: record.get(8),
+                hash: record.get(9),
+                created: record.get(10),
+                updated: record.get(11),
+            })
+        }))
+    }
+
+    pub async fn retrieve_file_entry(
+        conn: &impl GenericClient,
+        entries_id: &EntryId,
+        file_entry_id: &FileEntryId,
+    ) -> Result<Option<Self>, PgError> {
+        Self::retrieve(conn, (entries_id, file_entry_id)).await
+    }
+
+    pub async fn retrieve_file_entries(
+        conn: &impl GenericClient,
+        entries_id: &EntryId
+    ) -> Result<Vec<Self>, PgError> {
+        let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = Vec::new();
+
+        while let Some(try_record) = stream.next().await {
+            let record = try_record?;
+
+            rtn.push(record);
+        }
+
+        Ok(rtn)
+    }
+
+    pub async fn retrieve_uid_map(
+        conn: &impl GenericClient,
+        entries_id: &EntryId,
+    ) -> Result<HashMap<FileEntryUid, Self>, PgError> {
+        let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
+
+        futures::pin_mut!(stream);
+
+        let mut rtn = HashMap::new();
+
+        while let Some(try_record) = stream.next().await {
+            let record = try_record?;
+
+            rtn.insert(record.uid().clone(), record);
+        }
+
+        Ok(rtn)
+    }
+
+    pub fn uid(&self) -> &FileEntryUid {
+        match self {
+            Self::Requested(req) => &req.uid,
+            Self::Received(rec) => &rec.uid,
+            Self::Remote(rmt) => &rmt.uid,
+        }
     }
 
     pub fn into_received(self) -> Result<ReceivedFile, Self> {
         match self {
             Self::Received(rec) => Ok(rec),
+            _ => Err(self)
+        }
+    }
+
+    pub fn into_requested(self) -> Result<RequestedFile, Self> {
+        match self {
+            Self::Requested(req) => Ok(req),
             _ => Err(self)
         }
     }
@@ -790,33 +935,6 @@ impl RequestedFile {
 }
 
 impl ReceivedFile {
-    pub async fn update(&self, conn: &impl GenericClient) -> Result<(), PgError> {
-        conn.execute(
-            "\
-            update file_entries \
-            set name = $2, \
-                mime_type = $3, \
-                mime_subtype = $4, \
-                mime_param = $5, \
-                size = $6, \
-                hash = $7, \
-                updated = $8, \
-            where file_entries.id = $1",
-            &[
-                &self.id,
-                &self.name,
-                &self.mime_type,
-                &self.mime_subtype,
-                &self.mime_param,
-                &self.size,
-                &self.hash,
-                &self.updated,
-            ]
-        ).await?;
-
-        Ok(())
-    }
-
     pub fn get_mime(&self) -> mime::Mime {
         let parse = if let Some(param) = &self.mime_param {
             format!("{}/{};{param}", self.mime_type, self.mime_subtype)
@@ -827,11 +945,36 @@ impl ReceivedFile {
         mime::Mime::from_str(&parse)
             .expect("failed to parse MIME from database")
     }
+}
 
-    pub fn update_mime(&mut self, mime: &mime::Mime) {
-        self.mime_type = mime.type_().as_str().to_owned();
-        self.mime_subtype = mime.subtype().as_str().to_owned();
-        self.mime_param = get_mime_param(mime.params());
+impl RemoteFile {
+    pub async fn promote(self, conn: &impl GenericClient) -> Result<ReceivedFile, (Self, PgError)> {
+        let status = FileStatus::Received;
+
+        let result = conn.execute(
+            "\
+            update file_entries
+            set status = $2 \
+            where file_entries.id = $1",
+            &[&self.id, &status]
+        ).await;
+
+        match result {
+            Ok(_) =>Ok(ReceivedFile {
+                id: self.id,
+                uid: self.uid,
+                entries_id: self.entries_id,
+                name: self.name,
+                mime_type: self.mime_type,
+                mime_subtype: self.mime_subtype,
+                mime_param: self.mime_param,
+                size: self.size,
+                hash: self.hash,
+                created: self.created,
+                updated: self.updated,
+            }),
+            Err(err) => Err((self, err))
+        }
     }
 }
 
