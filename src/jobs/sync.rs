@@ -93,8 +93,8 @@ async fn sync_journal(
             failed,
         } = result;
 
-        total_successful += successful;
-        total_failed += failed;
+        total_successful += successful.len();
+        total_failed += failed.len();
 
         if counted != BATCH_SIZE {
             break;
@@ -127,8 +127,8 @@ async fn sync_journal(
 struct BatchResults {
     last_id: EntryId,
     counted: i64,
-    successful: usize,
-    failed: usize,
+    successful: Vec<EntryId>,
+    failed: Vec<EntryId>,
 }
 
 async fn batch_entry_sync(
@@ -182,19 +182,16 @@ async fn batch_entry_sync(
         }
     }
 
-    let successful_len = successful.len();
-    let failed_len = failed.len();
-
     update_synced(
         conn,
-        successful,
+        &successful,
         client.remote().id(),
         sync::journal::SyncStatus::Synced,
         sync_date
     ).await?;
     update_synced(
         conn,
-        failed,
+        &failed,
         client.remote().id(),
         sync::journal::SyncStatus::Failed,
         sync_date
@@ -203,14 +200,14 @@ async fn batch_entry_sync(
     Ok(BatchResults {
         last_id,
         counted,
-        successful: successful_len,
-        failed: failed_len,
+        successful,
+        failed,
     })
 }
 
 async fn update_synced(
     conn: &impl GenericClient,
-    given: Vec<EntryId>,
+    given: &Vec<EntryId>,
     server_id: &RemoteServerId,
     status: sync::journal::SyncStatus,
     updated: &DateTime<Utc>,

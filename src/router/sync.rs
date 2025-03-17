@@ -2,19 +2,26 @@ use std::default::Default;
 
 use axum::Router;
 use axum::routing::post;
+use futures::StreamExt;
 
 use crate::db;
 use crate::db::ids::{
     JournalId,
     EntryId,
     CustomFieldUid,
+    FileEntryUid,
+    RemoteServerId,
 };
 use crate::error::{self, Context};
+use crate::fs::RemovedFiles;
 use crate::router::body;
-use crate::journal;
+use crate::journal::{self, FileStatus, FileEntry};
 use crate::state;
 use crate::sync;
-use crate::sync::journal::SyncEntryResult;
+use crate::sync::journal::{
+    SyncEntryResult,
+    EntryFileSync,
+};
 use crate::user;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
@@ -31,7 +38,7 @@ async fn receive_entry(
         .await
         .context("failed to create transaction")?;
 
-    //tracing::debug!("received entry from server: {}", json.uid);
+    tracing::debug!("received entry from server: {} {json:#?}", json.uid);
 
     let (journal_res, user_res) = tokio::join!(
         journal::Journal::retrieve(&transaction, &json.journals_uid),
@@ -88,9 +95,42 @@ async fn receive_entry(
         }
     }
 
-    transaction.commit()
+    let mut removed_files = RemovedFiles::new();
+
+    {
+        let tmp_server_id = RemoteServerId::new(1).unwrap();
+        let journal_dir = state.storage()
+            .journal_dir(&journal);
+
+        let UpsertFiles {
+            not_found
+        } = upsert_files(
+            &transaction,
+            &entries_id,
+            &tmp_server_id,
+            journal_dir,
+            json.files,
+            &mut removed_files
+        ).await?;
+
+        if !not_found.is_empty() {
+            return Ok(SyncEntryResult::FileNotFound {
+                uids: not_found,
+            });
+        }
+    }
+
+    let result = transaction.commit()
         .await
-        .context("failed to commit entry sync transaction")?;
+        .context("failed to commit entry sync transaction");
+
+    if let Err(err) = result {
+        removed_files.log_rollback().await;
+
+        return Err(err);
+    }
+
+    removed_files.log_clean().await;
 
     Ok(SyncEntryResult::Synced)
 }
@@ -218,14 +258,14 @@ async fn upsert_cfs(
                         updated = excluded.updated \
                     returning custom_fields_id, \
                               entries_id \
-                )
+                ) \
                 delete from custom_field_entries \
                 using tmp_insert \
                 where custom_field_entries.entries_id = tmp_insert.entries_id and \
                       custom_field_entries.custom_fields_id != tmp_insert.custom_fields_id"
             );
 
-            tracing::debug!("query: {query}");
+            //tracing::debug!("query: {query}");
 
             conn.execute(&query, params.as_slice())
                 .await
@@ -243,4 +283,188 @@ async fn upsert_cfs(
     }
 
     Ok(results)
+}
+
+#[derive(Debug, Default)]
+struct UpsertFiles {
+    not_found: Vec<FileEntryUid>
+}
+
+async fn upsert_files(
+    conn: &impl db::GenericClient,
+    entries_id: &EntryId,
+    server_id: &RemoteServerId,
+    journal_dir: journal::JournalDir,
+    files: Vec<sync::journal::EntryFileSync>,
+    removed_files: &mut RemovedFiles,
+) -> Result<UpsertFiles, error::Error> {
+    let status = FileStatus::Remote;
+    let mut rtn = UpsertFiles::default();
+
+    if !files.is_empty() {
+        let mut known = FileEntry::retrieve_uid_map(conn, entries_id)
+            .await
+            .context("failed to retrieve known file entries")?;
+        let mut counted = 0;
+        let mut params: db::ParamsVec<'_> = vec![entries_id, &status, server_id];
+        let mut query = String::from(
+            "\
+            insert into file_entries ( \
+                entries_id, \
+                status, \
+                server_id, \
+                uid, \
+                name, \
+                mime_type, \
+                mime_subtype, \
+                mime_param, \
+                size, \
+                hash, \
+                created, \
+                updated \
+            ) \
+            values "
+        );
+
+        for (index, file) in files.iter().enumerate() {
+            if let Some(exists) = known.remove(file.uid()) {
+                // we know that the file exists for this entry so we will not 
+                // need to check the entry id
+                match exists {
+                    FileEntry::Requested(_) => {
+                        // the journal should not have these as the peer should
+                        // only send received files and the local server should
+                        // not be modifying the journal
+                        return Err(error::Error::context(
+                            "encountered requested file when removing local files"
+                        ));
+                    }
+                    // skip the other entries as we do not need to worry about
+                    // them
+                    _ => {}
+                }
+            } else {
+                // do a lookup to make sure that the uid exists for a different
+                // entry
+                let lookup_result = FileEntry::retrieve(conn, file.uid())
+                    .await
+                    .context("failed to lookup file uid")?;
+
+                if let Some(found) = lookup_result {
+                    match found {
+                        FileEntry::Received(rec) => if rec.entries_id != *entries_id {
+                            // the given uid exists but is not attached to the
+                            // entry we are currently working on
+                            continue;
+                        },
+                        FileEntry::Remote(rmt) => if rmt.entries_id != *entries_id {
+                            // same as received
+                            continue;
+                        },
+                        FileEntry::Requested(_) => {
+                            return Err(error::Error::context(
+                                "encountered requested file when removing local files"
+                            ));
+                        }
+                    }
+                }
+            }
+            if index != 0 {
+                query.push_str(", ");
+            }
+
+            match file {
+                EntryFileSync::Received(rec) => {
+                    let statement = format!(
+                        "($1, $2, $3, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                        db::push_param(&mut params, &rec.uid),
+                        db::push_param(&mut params, &rec.name),
+                        db::push_param(&mut params, &rec.mime_type),
+                        db::push_param(&mut params, &rec.mime_subtype),
+                        db::push_param(&mut params, &rec.mime_param),
+                        db::push_param(&mut params, &rec.size),
+                        db::push_param(&mut params, &rec.hash),
+                        db::push_param(&mut params, &rec.created),
+                        db::push_param(&mut params, &rec.updated),
+                    );
+
+                    query.push_str(&statement);
+                }
+            }
+
+            counted += 1;
+        }
+
+        if !known.is_empty() {
+            // we will delete the entries that were not found in order to
+            // prevent the posibility that a new record or an updated one has
+            // a similar name
+            let uids = known.into_keys()
+                .collect::<Vec<FileEntryUid>>();
+
+            tracing::debug!("deleting file entries: {}", uids.len());
+
+            conn.execute(
+                "delete from file_entries where uid = any($1)",
+                &[&uids]
+            )
+                .await
+                .context("failed to delete from file entries")?;
+        }
+
+        if counted > 0 {
+            query.push_str(" on conflict (uid) do update \
+                set name = excluded.name, \
+                    updated = excluded.updated \
+                returning id, \
+                          entries_id"
+            );
+
+            tracing::debug!("upserting file entries: {counted} {query}");
+
+            conn.execute(&query, params.as_slice())
+                .await
+                .context("failed to upsert files")?;
+        }
+    } else {
+        // delete all files that are local to the manchine and just remove the
+        // entries that are marked remote
+        let known_files = FileEntry::retrieve_entry_stream(conn, entries_id)
+            .await
+            .context("failed to retrieve file entries")?;
+        let mut ids = Vec::new();
+
+        futures::pin_mut!(known_files);
+
+        while let Some(try_record) = known_files.next().await {
+            let file = try_record.context("failed to retrieve record")?;
+
+            match file {
+                FileEntry::Received(rec) => {
+                    removed_files.add(journal_dir.file_path(&rec.id))
+                        .await
+                        .context("failed to remove received journal file")?;
+
+                    ids.push(rec.id);
+                }
+                FileEntry::Remote(rmt) => {
+                    ids.push(rmt.id);
+                }
+                FileEntry::Requested(_) => {
+                    return Err(error::Error::context(
+                        "encountered requested file when removing local files"
+                    ));
+                }
+            }
+        }
+
+        conn.execute(
+            "delete from file_entries where entries_id = $1",
+            &[entries_id]
+        )
+            .await
+            .context("failed to delete file entries")?;
+    }
+
+    Ok(rtn)
 }

@@ -115,6 +115,7 @@ enum UploadResult {
     Successful(EntryFileForm),
     JournalNotFound,
     FileNotFound,
+    NotRequestedFile,
 }
 
 impl IntoResponse for UploadResult {
@@ -128,7 +129,11 @@ impl IntoResponse for UploadResult {
             Self::FileNotFound => (
                 StatusCode::NOT_FOUND,
                 body::Json(self)
-            ).into_response()
+            ).into_response(),
+            Self::NotRequestedFile => (
+                StatusCode::BAD_REQUEST,
+                body::Json(self)
+            ).into_response(),
         }
     }
 }
@@ -171,34 +176,21 @@ pub async fn upload_file(
     let hash_check = HashCheck::from_headers(&headers)
         .context("error retrieving x-hash header")?;
 
-    let record = match file_entry {
-        FileEntry::Requested(requested) => {
-            create_file(
-                state.storage(),
-                transaction,
-                journal,
-                requested,
-                mime,
-                hash_check,
-                stream,
-            )
-                .await
-                .context("failed to create file")?
-        }
-        FileEntry::Received(received) => {
-            update_file(
-                state.storage(),
-                transaction,
-                journal,
-                received,
-                mime,
-                hash_check,
-                stream,
-            )
-                .await
-                .context("failed to update file")?
-        }
+    let Ok(requested) = file_entry.into_requested() else {
+        return Ok(UploadResult::NotRequestedFile.into_response());
     };
+
+    let record = create_file(
+        state.storage(),
+        transaction,
+        journal,
+        requested,
+        mime,
+        hash_check,
+        stream,
+    )
+        .await
+        .context("failed to create file")?;
 
     Ok(UploadResult::Successful(record.into()).into_response())
 }
@@ -258,64 +250,6 @@ async fn create_file(
             err
         ))
     } else {
-        Ok(received)
-    }
-}
-
-async fn update_file(
-    storage: &Storage,
-    conn: db::Transaction<'_>,
-    journal: Journal,
-    mut received: ReceivedFile,
-    mime: mime::Mime,
-    hash_check: HashCheck,
-    stream: Body,
-) -> Result<ReceivedFile, error::Error> {
-    let file_path = storage.journal_file_entry(journal.id, received.id);
-    let mut updater = FileUpdater::new(file_path)
-        .await
-        .context("failed to init file updater")?;
-
-    let (written, hash) = match write_body(stream, &mut updater, hash_check).await {
-        Ok(rtn) => rtn,
-        Err(err) => {
-            updater.log_clean().await;
-
-            return Err(error::Error::context_source(
-                "failed to write request body to file",
-                err
-            ));
-        }
-    };
-
-    received.update_mime(&mime);
-    received.size = written;
-    received.hash = hash;
-    received.updated = Some(Utc::now());
-
-    if let Err(err) = received.update(&conn).await {
-        updater.log_clean().await;
-
-        return Err(error::Error::context_source(
-            "failed to update received file entry",
-            err
-        ));
-    }
-
-    let updated = updater.update()
-        .await
-        .context("failed to update file")?;
-
-    if let Err(err) = conn.commit().await {
-        updated.log_rollback().await;
-
-        Err(error::Error::context_source(
-            "failed to commit changes to file entry",
-            err
-        ))
-    } else {
-        updated.log_clean().await;
-
         Ok(received)
     }
 }
