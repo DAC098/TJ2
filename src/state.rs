@@ -11,7 +11,7 @@ use crate::config;
 use crate::db;
 use crate::db::ids::{JournalId, FileEntryId};
 use crate::error::{self, Context};
-use crate::journal::{Journal, JournalDir};
+use crate::journal::JournalDir;
 use crate::templates;
 
 #[derive(Debug, Clone)]
@@ -109,15 +109,15 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn journal_dir(&self, journal: &Journal) -> JournalDir {
-        JournalDir::new(&self.path, journal)
+    pub fn journal_dir(&self, journals_id: JournalId) -> JournalDir {
+        JournalDir::new(&self.path, journals_id)
     }
 
     pub fn journal_file_entry(
         &self,
-        journal_id: JournalId,
+        journals_id: JournalId,
         file_entry_id: FileEntryId
     ) -> PathBuf {
-        self.path.join(format!("journals/{journal_id}/files/{file_entry_id}.file"))
+        self.path.join(format!("journals/{journals_id}/files/{file_entry_id}.file"))
     }
 }

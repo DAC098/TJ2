@@ -13,13 +13,13 @@ use crate::db::ids::{
     RemoteServerId,
 };
 use crate::error::{self, Context};
-use crate::journal::Journal;
+use crate::journal::LocalJournal;
 use crate::state;
 use crate::sync::{self, RemoteServer, RemoteClient};
 
 const BATCH_SIZE: i64 = 50;
 
-pub async fn kickoff_sync_journal(state: state::SharedState, remote: RemoteServer, journal: Journal) {
+pub async fn kickoff_sync_journal(state: state::SharedState, remote: RemoteServer, journal: LocalJournal) {
     if let Err(err) = sync_journal(state, remote, journal).await {
         error::log_prefix_error("error when sync journal with remote server", &err);
     }
@@ -28,7 +28,7 @@ pub async fn kickoff_sync_journal(state: state::SharedState, remote: RemoteServe
 async fn sync_journal(
     state: state::SharedState,
     remote: RemoteServer,
-    journal: Journal,
+    journal: LocalJournal,
 ) -> Result<(), error::Error> {
     let mut conn = state.db_conn()
         .await
@@ -134,7 +134,7 @@ struct BatchResults {
 async fn batch_entry_sync(
     conn: &impl GenericClient,
     client: &RemoteClient,
-    journal: &Journal,
+    journal: &LocalJournal,
     prev_entry: &EntryId,
     sync_date: &DateTime<Utc>,
 ) -> Result<BatchResults, error::Error> {

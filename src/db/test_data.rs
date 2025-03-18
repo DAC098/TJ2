@@ -6,7 +6,7 @@ use rand::distributions::{Alphanumeric, Bernoulli};
 use super::{GenericClient, ids};
 
 use crate::error::{Error, Context};
-use crate::journal::{custom_field, Journal, CustomField};
+use crate::journal::{custom_field, CustomField, LocalJournal};
 use crate::user::{User, Group, assign_user_group};
 use crate::sec::password;
 use crate::sec::authz::{Role, Scope, Ability};
@@ -73,9 +73,9 @@ pub async fn create_journal(
     rng: &mut ThreadRng,
     users_id: ids::UserId
 ) -> Result<(), Error> {
-    let options = Journal::create_options(users_id, "default")
+    let options = LocalJournal::create_options(users_id, "default")
         .description("the default journal");
-    let journal = Journal::create(conn, options)
+    let journal = LocalJournal::create(conn, options)
         .await
         .context("failed to create journal for test user")?;
 
@@ -102,7 +102,7 @@ pub async fn create_journal(
     ];
 
     let journal_dir = state.storage()
-        .journal_dir(&journal);
+        .journal_dir(journal.id);
 
     journal_dir.create()
         .await

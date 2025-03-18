@@ -674,7 +674,7 @@ pub async fn retrieve_entry(
     auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
     if let Some(entries_id) = entries_id {
-        let result = EntryForm::retrieve_entry(&conn, &journal.id, &entries_id)
+        let result = EntryForm::retrieve_entry(&conn, journal.id(), &entries_id)
             .await
             .context("failed to retrieve journal entry for date")?;
 
@@ -686,7 +686,7 @@ pub async fn retrieve_entry(
 
         Ok(body::Json(entry).into_response())
     } else {
-        let blank = EntryForm::blank(&conn, &journal.id).await?;
+        let blank = EntryForm::blank(&conn, journal.id()).await?;
 
         Ok(body::Json(blank).into_response())
     }
@@ -786,6 +786,8 @@ fn opt_non_empty_str(given: Option<String>) -> Option<String> {
 #[serde(tag = "type")]
 pub enum CreateEntryResult {
     DateExists,
+    JournalNotFound,
+    NotLocalJournal,
     CustomFieldMismatch {
         mismatched: Vec<CustomFieldEntry>,
     },
@@ -814,12 +816,26 @@ pub async fn create_entry(
 
     let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
 
-    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-        .await
-        .context("failed to retrieve default journal")?;
+    let journal = {
+        let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+            .await
+            .context("failed to retrieve default journal")?;
 
-    let Some(journal) = result else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
+        let Some(journal) = result else {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                body::Json(CreateEntryResult::JournalNotFound)
+            ).into_response());
+        };
+
+        let Ok(rtn) = journal.into_local() else {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                body::Json(CreateEntryResult::NotLocalJournal)
+            ).into_response());
+        };
+
+        rtn
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Create);
@@ -916,7 +932,7 @@ pub async fn create_entry(
         ).into_response());
     }
 
-    let dir = state.storage().journal_dir(&journal);
+    let dir = state.storage().journal_dir(journal.id);
     let mut removed_files = RemovedFiles::new();
 
     let files = upsert_files(
@@ -952,6 +968,8 @@ pub async fn create_entry(
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum UpdateEntryResult {
+    JournalNotFound,
+    NotLocalJournal,
     CustomFieldMismatch {
         mismatched: Vec<CustomFieldEntry>,
     },
@@ -980,12 +998,26 @@ pub async fn update_entry(
 
     let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
 
-    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-        .await
-        .context("failed to retrieve default journal")?;
+    let journal = {
+        let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+            .await
+            .context("failed to retrieve default journal")?;
 
-    let Some(journal) = result else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
+        let Some(journal) = result else {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                body::Json(UpdateEntryResult::JournalNotFound),
+            ).into_response());
+        };
+
+        let Ok(rtn) = journal.into_local() else {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                body::Json(UpdateEntryResult::NotLocalJournal),
+            ).into_response());
+        };
+
+        rtn
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
@@ -1123,7 +1155,7 @@ pub async fn update_entry(
         ).into_response());
     }
 
-    let dir = state.storage().journal_dir(&journal);
+    let dir = state.storage().journal_dir(journal.id);
     let mut removed_files = RemovedFiles::new();
 
     let upsert_result = upsert_files(
@@ -1181,12 +1213,20 @@ pub async fn delete_entry(
 
     let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
 
-    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-        .await
-        .context("failed to retrieve default journal")?;
+    let journal = {
+        let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+            .await
+            .context("failed to retrieve default journal")?;
 
-    let Some(journal) = result else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
+        let Some(journal) = result else {
+            return Ok(StatusCode::NOT_FOUND.into_response());
+        };
+
+        let Ok(rtn) = journal.into_local() else {
+            return Ok(StatusCode::BAD_REQUEST.into_response());
+        };
+
+        rtn
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Delete);
@@ -1228,7 +1268,7 @@ pub async fn delete_entry(
     futures::pin_mut!(stream);
 
     let mut marked_files = RemovedFiles::new();
-    let journal_dir = state.storage().journal_dir(&journal);
+    let journal_dir = state.storage().journal_dir(journal.id);
 
     while let Some(try_row) = stream.next().await {
         let row = try_row.context("failed to retrieve file entry row")?;

@@ -45,10 +45,18 @@ async fn receive_entry(
         user::User::retrieve(&transaction, &json.users_uid),
     );
 
-    let Some(journal) = journal_res.context("failed to retrieve journal")? else {
-        tracing::debug!("failed to retrieve journal: {}", json.journals_uid);
+    let journal = {
+        let Some(journal) = journal_res.context("failed to retrieve journal")? else {
+            tracing::debug!("failed to retrieve journal: {}", json.journals_uid);
 
-        return Ok(SyncEntryResult::JournalNotFound);
+            return Ok(SyncEntryResult::JournalNotFound);
+        };
+
+        let Ok(rtn) = journal.into_remote() else {
+            return Ok(SyncEntryResult::NotRemoteJournal);
+        };
+
+        rtn
     };
 
     let Some(user) = user_res.context("failed to retrieve_user")? else {
@@ -100,7 +108,7 @@ async fn receive_entry(
     {
         let tmp_server_id = RemoteServerId::new(1).unwrap();
         let journal_dir = state.storage()
-            .journal_dir(&journal);
+            .journal_dir(journal.id);
 
         let UpsertFiles {
             not_found
@@ -299,7 +307,7 @@ async fn upsert_files(
     removed_files: &mut RemovedFiles,
 ) -> Result<UpsertFiles, error::Error> {
     let status = FileStatus::Remote;
-    let mut rtn = UpsertFiles::default();
+    let rtn = UpsertFiles::default();
 
     if !files.is_empty() {
         let mut known = FileEntry::retrieve_uid_map(conn, entries_id)
