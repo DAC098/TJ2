@@ -35,6 +35,7 @@ import {
     LocalFile,
     RequestedFile,
     ReceivedFile,
+    RemoteFile,
     EntryFileForm,
     UIEntryFileForm,
     EntryForm,
@@ -303,6 +304,7 @@ async function parallel_uploads(
         switch (file.type) {
             case "received":
             case "requested":
+            case "remote":
                 continue;
             case "local":
             case "in-memory":
@@ -327,7 +329,7 @@ async function parallel_uploads(
     };
 
     for (let file_entry of server) {
-        if (file_entry.type === "received") {
+        if (file_entry.type !== "requested") {
             result.successful.push(file_entry);
 
             continue;
@@ -755,6 +757,10 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
                     download = <DownloadBtn src={`${src}?download=true`}/>;
                     player = <FilePreview mime_type={field.mime_type} data={src}/>
                     break;
+                case "remote": {
+                    status = <WarnButton message={"This file is located on a peer server."}/>;
+                    break;
+                }
                 case "in-memory": {
                     let mime = parse_mime(field.data.type) ?? default_mime();
 
