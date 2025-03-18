@@ -30,6 +30,7 @@ use crate::sec::Hash;
 pub enum SyncEntryResult {
     Synced,
     JournalNotFound,
+    NotRemoteJournal,
     UserNotFound,
     CFNotFound {
         uids: Vec<CustomFieldUid>
@@ -54,6 +55,7 @@ impl IntoResponse for SyncEntryResult {
                 StatusCode::NOT_FOUND,
                 body::Json(self)
             ).into_response(),
+            Self::NotRemoteJournal |
             Self::CFNotFound { .. } |
             Self::CFInvalid { .. } |
             Self::FileNotFound { .. } => (

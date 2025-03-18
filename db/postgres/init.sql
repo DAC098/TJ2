@@ -97,6 +97,7 @@ create table journals (
     description varchar,
     created timestamp with time zone not null,
     updated timestamp with time zone,
+    server_id bigint references remote_servers (id),
     unique (users_id, name)
 );
 

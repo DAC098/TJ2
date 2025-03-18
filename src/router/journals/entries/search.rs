@@ -131,12 +131,12 @@ pub async fn retrieve_entries(
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Read);
 
     let custom_fields = if true {
-        Some(retrieve_journal_cfs(&transaction, &journal.id).await?)
+        Some(retrieve_journal_cfs(&transaction, journal.id()).await?)
     } else {
         None
     };
 
-    let rtn = multi_query_search(&transaction, &journal.id, 75).await?;
+    let rtn = multi_query_search(&transaction, journal.id(), 75).await?;
 
     transaction.rollback()
         .await
