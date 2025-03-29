@@ -10,6 +10,7 @@ use crate::router::{body, macros};
 mod users;
 mod groups;
 mod roles;
+mod invites;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
@@ -32,6 +33,11 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         .route("/roles/:role_id", get(roles::retrieve_role)
             .patch(roles::update_role)
             .delete(roles::delete_role))
+        .route("/invites", get(invites::search_invites)
+            .post(invites::create_invite))
+        .route("/invites/:token", get(invites::retrieve_invite)
+            .patch(invites::update_invite)
+            .delete(invites::delete_invite))
 }
 
 async fn retrieve_admin(

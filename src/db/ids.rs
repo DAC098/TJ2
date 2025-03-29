@@ -106,7 +106,7 @@ macro_rules! id_type {
 pub struct InvalidUidString;
 
 macro_rules! uid_type {
-    ($name:ident) => {
+    ($name:ident, $uid_size:expr) => {
         #[derive(
             Debug,
             Clone,
@@ -132,7 +132,7 @@ macro_rules! uid_type {
                     count += 1;
                 }
 
-                if count != UID_SIZE {
+                if count != $uid_size {
                     return false;
                 }
 
@@ -140,7 +140,7 @@ macro_rules! uid_type {
             }
 
             pub fn gen() -> Self {
-                Self(nanoid::format(nanoid::rngs::default, &UID_ALPHABET, UID_SIZE))
+                Self(nanoid::format(nanoid::rngs::default, &UID_ALPHABET, $uid_size))
             }
 
             pub fn new(given: String) -> Result<Self, InvalidUidString> {
@@ -292,30 +292,32 @@ macro_rules! set_type {
 }
 
 id_type!(UserId);
-uid_type!(UserUid);
+uid_type!(UserUid, UID_SIZE);
 set_type!(UserSet, UserId, UserUid);
 
 id_type!(GroupId);
-uid_type!(GroupUid);
+uid_type!(GroupUid, UID_SIZE);
 
 id_type!(JournalId);
-uid_type!(JournalUid);
+uid_type!(JournalUid, UID_SIZE);
 set_type!(JournalSet, JournalId, JournalUid);
 
 id_type!(EntryId);
-uid_type!(EntryUid);
+uid_type!(EntryUid, UID_SIZE);
 set_type!(EntrySet, EntryId, EntryUid);
 
 id_type!(FileEntryId);
-uid_type!(FileEntryUid);
+uid_type!(FileEntryUid, UID_SIZE);
 
 id_type!(RoleId);
-uid_type!(RoleUid);
+uid_type!(RoleUid, UID_SIZE);
 
 id_type!(PermissionId);
 
 id_type!(CustomFieldId);
-uid_type!(CustomFieldUid);
+uid_type!(CustomFieldUid, UID_SIZE);
+
+uid_type!(InviteToken, 8);
 
 /// creates a list of unique ids from a given list
 ///

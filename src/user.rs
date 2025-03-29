@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
+use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
-use serde::Serialize;
+use postgres_types as pg_types;
+use serde::{Serialize, Deserialize};
 
 use crate::db;
-use crate::db::ids::{UserId, UserUid, GroupId, GroupUid, RoleId};
+use crate::db::ids::{UserId, UserUid, GroupId, GroupUid, RoleId, InviteToken};
 use crate::sec::authz::Role;
-use crate::error::{self, Context};
+use crate::error::{self, Context, BoxDynError};
 
 #[derive(Debug)]
 pub struct User {
@@ -888,3 +890,121 @@ pub async fn assign_user_group(
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[repr(i16)]
+pub enum InviteStatus {
+    Pending = 0,
+    Accepted = 1,
+    Rejected = 2,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the provided status value is invalid")]
+pub struct InvalidInviteStatus;
+
+impl InviteStatus {
+    pub fn is_pending(&self) -> bool {
+        match self {
+            Self::Pending => true,
+            _ => false,
+        }
+    }
+}
+
+impl From<&InviteStatus> for i16 {
+    fn from(value: &InviteStatus) -> Self {
+        match value {
+            InviteStatus::Pending => 0,
+            InviteStatus::Accepted => 1,
+            InviteStatus::Rejected => 2,
+        }
+    }
+}
+
+impl TryFrom<i16> for InviteStatus {
+    type Error = InvalidInviteStatus;
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(InviteStatus::Pending),
+            1 => Ok(InviteStatus::Accepted),
+            2 => Ok(InviteStatus::Rejected),
+            _ => Err(InvalidInviteStatus)
+        }
+    }
+}
+
+impl<'a> pg_types::FromSql<'a> for InviteStatus {
+    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
+        let v = <i16 as pg_types::FromSql>::from_sql(ty, raw)?;
+
+        Self::try_from(v).map_err(Into::into)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <i16 as pg_types::FromSql>::accepts(ty)
+    }
+}
+
+impl pg_types::ToSql for InviteStatus {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        let v: i16 = self.into();
+
+        v.to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <i16 as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
+pub struct Invite {
+    pub token: InviteToken,
+    pub name: String,
+    pub issued_on: DateTime<Utc>,
+    pub expires_on: Option<DateTime<Utc>>,
+    pub status: InviteStatus,
+}
+
+pub enum InviteQuery<'a> {
+    Token(&'a InviteToken)
+}
+
+impl<'a> From<&'a InviteToken> for InviteQuery<'a> {
+    fn from(token: &'a InviteToken) -> Self {
+        Self::Token(token)
+    }
+}
+
+impl Invite {
+    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<InviteQuery<'a>>
+    {
+        let result = match given.into() {
+            InviteQuery::Token(token) => {
+                conn.query_opt(
+                    "\
+                    select user_invites.token, \
+                           user_invites.name, \
+                           user_invites.issued_on, \
+                           user_invites.expires_on, \
+                           user_invites.status \
+                    from user_invites \
+                    where token = $1",
+                    &[token]
+                ).await?
+            }
+        };
+
+        Ok(result.map(|v| Self {
+            token: v.get(0),
+            name: v.get(1),
+            issued_on: v.get(2),
+            expires_on: v.get(3),
+            status: v.get(4),
+        }))
+    }
+}
