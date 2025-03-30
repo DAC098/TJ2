@@ -74,13 +74,29 @@ pub struct InvitePath {
     token: InviteToken
 }
 
+pub async fn new_invite(
+    state: state::SharedState,
+    _initiator: Initiator,
+    headers: HeaderMap,
+) -> Result<Response, error::Error> {
+    macros::res_if_html!(state.templates(), &headers);
+
+    Ok(body::Json("Ok").into_response())
+}
+
 #[derive(Debug, Serialize)]
-pub struct InviteFull {
+pub struct InviteForm {
     token: InviteToken,
     name: String,
     issued_on: DateTime<Utc>,
-    expires_on: Option<DateTime<Utc>>,
+    expires_on: InviteExpires,
     status: InviteStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InviteExpires {
+    enabled: bool,
+    date: DateTime<Utc>,
 }
 
 pub async fn retrieve_invite(
@@ -113,11 +129,14 @@ pub async fn retrieve_invite(
 
     Ok((
         StatusCode::OK,
-        body::Json(InviteFull {
+        body::Json(InviteForm {
             token,
             name,
             issued_on,
-            expires_on,
+            expires_on: InviteExpires {
+                enabled: expires_on.is_some(),
+                date: expires_on.unwrap_or_default(),
+            },
             status,
         })
     ).into_response())
@@ -134,7 +153,7 @@ pub struct NewInvite {
 pub enum CreateResult {
     NameExists,
     InvalidExpiresOn,
-    Created(InviteFull)
+    Created(InviteForm)
 }
 
 impl IntoResponse for CreateResult {
@@ -210,11 +229,14 @@ pub async fn create_invite(
         .await
         .context("failed to create transaction")?;
 
-    Ok(CreateResult::Created(InviteFull {
+    Ok(CreateResult::Created(InviteForm {
         token,
         name,
         issued_on,
-        expires_on,
+        expires_on: InviteExpires {
+            enabled: expires_on.is_some(),
+            date: expires_on.unwrap_or_default(),
+        },
         status
     }))
 }
@@ -232,7 +254,7 @@ pub enum UpdateResult {
     NotPending,
     NameExists,
     InvalidExpiresOn,
-    Updated(InviteFull),
+    Updated(InviteForm),
 }
 
 impl IntoResponse for UpdateResult {
@@ -327,11 +349,18 @@ pub async fn update_invite(
         ));
     }
 
-    Ok(UpdateResult::Updated(InviteFull {
+    transaction.commit()
+        .await
+        .context("failed to commit transaction")?;
+
+    Ok(UpdateResult::Updated(InviteForm {
         token,
         name,
         issued_on,
-        expires_on,
+        expires_on: InviteExpires {
+            enabled: expires_on.is_some(),
+            date: expires_on.unwrap_or_default(),
+        },
         status
     }))
 }

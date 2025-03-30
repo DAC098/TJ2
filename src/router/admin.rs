@@ -35,6 +35,7 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
             .delete(roles::delete_role))
         .route("/invites", get(invites::search_invites)
             .post(invites::create_invite))
+        .route("/invites/new", get(invites::new_invite))
         .route("/invites/:token", get(invites::retrieve_invite)
             .patch(invites::update_invite)
             .delete(invites::delete_invite))
