@@ -6,7 +6,7 @@ use futures::StreamExt;
 use serde::{Serialize, Deserialize};
 
 use crate::db;
-use crate::db::ids::InviteToken;
+use crate::db::ids::{UserId, InviteToken};
 use crate::error::{self, Context};
 use crate::router::{body, macros};
 use crate::sec::authn::Initiator;
@@ -91,6 +91,66 @@ pub struct InviteForm {
     issued_on: DateTime<Utc>,
     expires_on: InviteExpires,
     status: InviteStatus,
+    user: Option<InviteUser>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InviteUser {
+    pub id: UserId,
+    pub username: String,
+    pub created: DateTime<Utc>,
+    pub updated: Option<DateTime<Utc>>,
+}
+
+impl InviteForm {
+    pub async fn retrieve(
+        conn: &impl db::GenericClient,
+        token: &InviteToken
+    ) -> Result<Option<Self>, db::PgError> {
+        let result = conn.query_opt(
+            "\
+            select user_invites.token, \
+                   user_invites.name, \
+                   user_invites.issued_on, \
+                   user_invites.expires_on, \
+                   user_invites.status, \
+                   users.id, \
+                   users.username, \
+                   users.created, \
+                   users.updated \
+            from user_invites \
+                left join users on \
+                    user_invites.users_id = users.id \
+            where user_invites.token = $1",
+            &[token]
+        ).await?;
+
+        Ok(result.map(|record| {
+            let expires_on: Option<DateTime<Utc>> = record.get(3);
+            let user = if let Some(id) = record.get::<usize, Option<UserId>>(5) {
+                Some(InviteUser {
+                    id,
+                    username: record.get(6),
+                    created: record.get(7),
+                    updated: record.get(8),
+                })
+            } else {
+                None
+            };
+
+            Self {
+                token: record.get(0),
+                name: record.get(1),
+                issued_on: record.get(2),
+                expires_on: InviteExpires {
+                    enabled: expires_on.is_some(),
+                    date: expires_on.unwrap_or_default(),
+                },
+                status: record.get(4),
+                user,
+            }
+        }))
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -113,33 +173,15 @@ pub async fn retrieve_invite(
 
     // check if the user has permission to view invites
 
-    let maybe = Invite::retrieve(&conn, &token)
+    let maybe = InviteForm::retrieve(&conn, &token)
         .await
         .context("failed to retrieve user invite")?;
 
-    let Some(Invite {
-        name,
-        issued_on,
-        expires_on,
-        status,
-        ..
-    }) = maybe else {
+    let Some(record) = maybe else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    Ok((
-        StatusCode::OK,
-        body::Json(InviteForm {
-            token,
-            name,
-            issued_on,
-            expires_on: InviteExpires {
-                enabled: expires_on.is_some(),
-                date: expires_on.unwrap_or_default(),
-            },
-            status,
-        })
-    ).into_response())
+    Ok(body::Json(record).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,7 +279,8 @@ pub async fn create_invite(
             enabled: expires_on.is_some(),
             date: expires_on.unwrap_or_default(),
         },
-        status
+        status,
+        user: None,
     }))
 }
 
@@ -361,7 +404,8 @@ pub async fn update_invite(
             enabled: expires_on.is_some(),
             date: expires_on.unwrap_or_default(),
         },
-        status
+        status,
+        user: None,
     }))
 }
 

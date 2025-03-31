@@ -13,7 +13,8 @@ create table user_invites (
     name varchar not null unique,
     issued_on timestamp with time zone not null,
     expires_on timestamp with time zone,
-    status smallint not null default 0
+    status smallint not null default 0,
+    users_id bigint references users (id)
 );
 
 create table groups (

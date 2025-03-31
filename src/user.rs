@@ -966,6 +966,7 @@ pub struct Invite {
     pub issued_on: DateTime<Utc>,
     pub expires_on: Option<DateTime<Utc>>,
     pub status: InviteStatus,
+    pub users_id: Option<UserId>,
 }
 
 pub enum InviteQuery<'a> {
@@ -991,7 +992,8 @@ impl Invite {
                            user_invites.name, \
                            user_invites.issued_on, \
                            user_invites.expires_on, \
-                           user_invites.status \
+                           user_invites.status, \
+                           user_invites.users_id \
                     from user_invites \
                     where token = $1",
                     &[token]
@@ -1005,6 +1007,7 @@ impl Invite {
             issued_on: v.get(2),
             expires_on: v.get(3),
             status: v.get(4),
+            users_id: v.get(5),
         }))
     }
 }
