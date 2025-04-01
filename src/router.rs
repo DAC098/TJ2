@@ -71,6 +71,8 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/ping", get(ping))
         .route("/login", get(auth::login)
             .post(auth::request_login))
+        .route("/register", get(auth::get_register)
+            .post(auth::register))
         .route("/logout", post(auth::request_logout))
         .nest("/journals", journals::build(state))
         .nest("/admin", admin::build(state))

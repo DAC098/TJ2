@@ -22,6 +22,18 @@ pub struct User {
     pub updated: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum UserCreateError {
+    #[error("username already exists")]
+    UsernameExists,
+
+    #[error("uid already exists")]
+    UidExists,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
+}
+
 impl User {
     pub async fn retrieve_username(conn: &impl db::GenericClient, username: &str) -> Result<Option<Self>, db::PgError> {
         conn.query_opt(
@@ -75,21 +87,25 @@ impl User {
             }))
     }
 
-    pub async fn create(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Option<Self>, db::PgError> {
+    pub async fn create(
+        conn: &impl db::GenericClient,
+        username: &str,
+        hash: &str,
+        version: i64,
+    ) -> Result<Self, UserCreateError> {
         let uid = UserUid::gen();
         let created = Utc::now();
 
-        let result = conn.query_opt(
+        let result = conn.query_one(
             "\
             insert into users (uid, username, password, version, created) \
             values ($1, $2, $3, $4, $5) \
-            on conflict on constraint users_username_key do nothing \
             returning id",
             &[&uid, &username, &hash, &version, &created]
-        ).await?;
+        ).await;
 
         match result {
-            Some(row) => Ok(Some(Self {
+            Ok(row) => Ok(Self {
                 id: row.get(0),
                 uid,
                 username: username.to_owned(),
@@ -97,8 +113,19 @@ impl User {
                 version,
                 created,
                 updated: None,
-            })),
-            None => Ok(None)
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "users_username_key" => Err(UserCreateError::UsernameExists),
+                        "users_uid_key" => Err(UserCreateError::UidExists),
+                        _ => Err(err.into())
+                    },
+                    _ => Err(err.into())
+                }
+            } else {
+                Err(err.into())
+            }
         }
     }
 
@@ -960,6 +987,7 @@ impl pg_types::ToSql for InviteStatus {
     pg_types::to_sql_checked!();
 }
 
+#[derive(Debug)]
 pub struct Invite {
     pub token: InviteToken,
     pub name: String,
@@ -967,6 +995,18 @@ pub struct Invite {
     pub expires_on: Option<DateTime<Utc>>,
     pub status: InviteStatus,
     pub users_id: Option<UserId>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InviteError {
+    #[error("the action cannot be completed as the invite is not pending")]
+    NotPending,
+
+    #[error("the specified user does not exist")]
+    UserNotFound,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
 }
 
 pub enum InviteQuery<'a> {
@@ -1009,5 +1049,43 @@ impl Invite {
             status: v.get(4),
             users_id: v.get(5),
         }))
+    }
+
+    pub async fn mark_accepted(
+        &mut self,
+        conn: &impl db::GenericClient,
+        users_id: &UserId
+    ) -> Result<(), InviteError> {
+        if !self.status.is_pending() {
+            return Err(InviteError::NotPending);
+        }
+
+        let status = InviteStatus::Accepted;
+        let result = conn.execute(
+            "\
+            update user_invites \
+            set status = $2, \
+                users_id = $3 \
+            where token = $1",
+            &[&self.token, &status, users_id]
+        ).await;
+
+        if let Err(err) = result {
+            if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::ForeignKey(constraint) => if constraint == "user_invites_users_id_fkey" {
+                        return Err(InviteError::UserNotFound);
+                    },
+                    _ => {}
+                }
+            }
+
+            Err(err.into())
+        } else {
+            self.status = status;
+            self.users_id = Some(*users_id);
+
+            Ok(())
+        }
     }
 }

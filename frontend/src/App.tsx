@@ -9,7 +9,7 @@ import { AppSidebar } from "@/sidebar";
 import { JournalRoutes } from "@/journals";
 import { AdminRoutes } from "@/admin";
 
-function App() {
+export function App() {
     return <div className="flex flex-row flex-nowrap w-full h-full">
         <SidebarProvider style={{"--sidebar-width": "350px"}}>
             <AppSidebar/>
@@ -25,5 +25,3 @@ function App() {
         </SidebarProvider>
     </div>;
 }
-
-export default App;

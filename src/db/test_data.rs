@@ -208,8 +208,7 @@ async fn create_user(
 
     User::create(conn, username, &hash, 0)
         .await
-        .context("failed to create user")?
-        .context("user already exists?")
+        .context("failed to create user")
 }
 
 fn gen_username(rng: &mut ThreadRng) -> String {

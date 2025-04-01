@@ -11,9 +11,9 @@ use crate::error::{Error, Context};
 use crate::sec::authz::{Scope, Ability, Role};
 use crate::sec::password;
 use crate::state;
-use crate::user::User;
+use crate::user::{User, UserCreateError};
 
-pub use deadpool_postgres::{Pool, GenericClient, Object, Transaction};
+pub use deadpool_postgres::{Pool, GenericClient, Object, Transaction, PoolError};
 pub use tokio_postgres::Error as PgError;
 
 mod test_data;
@@ -100,9 +100,14 @@ async fn create_admin_user(conn: &impl GenericClient) -> Result<Option<User>, Er
     let hash = password::create("password")
         .context("failed to create admin password")?;
 
-    User::create(conn, "admin", &hash, 0)
-        .await
-        .context("failed to create admin user")
+    match User::create(conn, "admin", &hash, 0).await {
+        Ok(user) => Ok(Some(user)),
+        Err(err) => match err {
+            UserCreateError::UsernameExists => Ok(None),
+            UserCreateError::UidExists => Err(Error::context("user uid collision")),
+            UserCreateError::Db(db_err) => Err(Error::context_source("failed to create admin", db_err))
+        }
+    }
 }
 
 /// creates the default admin role
