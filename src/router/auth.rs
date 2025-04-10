@@ -3,15 +3,19 @@ use argon2::password_hash::PasswordHash;
 use axum::extract::Query;
 use axum::http::{StatusCode, HeaderMap};
 use axum::response::{IntoResponse, Response};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::db;
+use crate::db::ids::InviteToken;
 use crate::error::{self, Context};
 use crate::header::{Location, is_accepting_html};
-use crate::router::body;
+use crate::router::{body, macros};
 use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
+use crate::sec;
 use crate::state;
-use crate::user;
+use crate::user::{self, User, UserCreateError, Invite, InviteError};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
@@ -236,4 +240,162 @@ pub async fn request_logout(
         StatusCode::OK,
         Session::clear_cookie()
     ).into_response())
+}
+
+pub async fn get_register(
+    state: state::SharedState,
+    headers: HeaderMap,
+) -> Result<Response, error::Error> {
+    macros::res_if_html!(state.templates(), &headers);
+
+    Ok(body::Json("okay").into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterBody {
+    token: InviteToken,
+    username: String,
+    password: String,
+    confirm: String,
+}
+
+// going to try something
+#[derive(Debug, thiserror::Error, Serialize)]
+#[serde(tag = "type")]
+pub enum RegisterError {
+    #[error("the requested invite was not found")]
+    InviteNotFound,
+
+    #[error("the requested invite has already been used")]
+    InviteUsed,
+
+    #[error("the requested invite has expired")]
+    InviteExpired,
+
+    #[error("the confirm does not equal password")]
+    InvalidConfirm,
+
+    #[error("the specified username already exists")]
+    UsernameExists,
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    DbPool(#[from] db::PoolError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Argon(#[from] sec::password::HashError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Error(#[from] error::Error),
+}
+
+impl IntoResponse for RegisterError {
+    fn into_response(self) -> Response {
+        error::log_error(&self);
+
+        let status = match &self {
+            Self::InviteNotFound => StatusCode::NOT_FOUND,
+            Self::UsernameExists |
+            Self::InvalidConfirm |
+            Self::InviteExpired |
+            Self::InviteUsed => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        (status, body::Json(self)).into_response()
+    }
+}
+
+pub async fn register(
+    state: state::SharedState,
+    body::Json(RegisterBody {
+        token,
+        username,
+        password,
+        confirm,
+    }): body::Json<RegisterBody>
+) -> Result<Response, RegisterError> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
+
+    let user = register_user(
+        &transaction,
+        token,
+        username,
+        password,
+        confirm,
+    ).await?;
+
+    let mut options = SessionOptions::new(user.id);
+    options.authenticated = true;
+    options.verified = true;
+
+    let session = Session::create(&transaction, options).await?;
+    let session_cookie = session.build_cookie();
+
+    transaction.commit().await?;
+
+    Ok((
+        session_cookie,
+        StatusCode::CREATED
+    ).into_response())
+}
+
+async fn register_user(
+    conn: &impl db::GenericClient,
+    token: InviteToken,
+    username: String,
+    password: String,
+    confirm: String,
+) -> Result<User, RegisterError> {
+    let mut invite = Invite::retrieve(conn, &token)
+        .await?
+        .ok_or(RegisterError::InviteNotFound)?;
+
+    if !invite.status.is_pending() {
+        return Err(RegisterError::InviteUsed);
+    }
+
+    if let Some(expires_on) = invite.expires_on.as_ref() {
+        let now = Utc::now();
+
+        if *expires_on < now {
+            return Err(RegisterError::InviteExpired);
+        }
+    }
+
+    if password != confirm {
+        return Err(RegisterError::InvalidConfirm);
+    }
+
+    let hash = sec::password::create(&password)?;
+    let user = match User::create(conn, &username, &hash, 0).await {
+        Ok(u) => u,
+        Err(err) => match err {
+            UserCreateError::UsernameExists =>
+                return Err(RegisterError::UsernameExists),
+            UserCreateError::UidExists =>
+                return Err(error::Error::context("user uid collision").into()),
+            UserCreateError::Db(db_err) =>
+                return Err(db_err.into()),
+        }
+    };
+
+    // we have pre-checked that the invite is pending and the user
+    // was just created so the id should be valid as well the only
+    // thing will be the db
+    if let Err(err) = invite.mark_accepted(conn, &user.id).await {
+        match err {
+            InviteError::Db(db_err) => return Err(db_err.into()),
+            _ => unreachable!("invite precheck failed {err}"),
+        }
+    }
+
+    Ok(user)
 }

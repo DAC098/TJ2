@@ -13,7 +13,7 @@ use crate::router::macros;
 use crate::state;
 use crate::sec::{password, authz};
 use crate::sec::authz::{AttachedRole, create_attached_roles, update_attached_roles};
-use crate::user::{User, AttachedGroup, create_attached_groups, update_attached_groups};
+use crate::user::{User, UserCreateError, AttachedGroup, create_attached_groups, update_attached_groups};
 
 #[derive(Debug, Serialize)]
 pub struct UserPartial {
@@ -250,15 +250,21 @@ pub async fn create_user(
     let hashed = password::create(&json.password)
         .context("failed to hash new user password")?;
 
-    let result = User::create(&transaction, &json.username, &hashed, 0)
-        .await
-        .context("failed to create new user")?;
-
-    let Some(user) = result else {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            body::Json(NewUserResult::UsernameExists)
-        ).into_response())
+    let user = match User::create(&transaction, &json.username, &hashed, 0).await {
+        Ok(user) => user,
+        Err(err) => match err {
+            UserCreateError::UsernameExists => return Ok((
+                StatusCode::BAD_REQUEST,
+                body::Json(NewUserResult::UsernameExists)
+            ).into_response()),
+            UserCreateError::UidExists => return Err(error::Error::context(
+                "user uid collision"
+            )),
+            UserCreateError::Db(db_err) => return Err(error::Error::context_source(
+                "failed to create new user",
+                db_err
+            )),
+        }
     };
 
     let (groups, not_found) = create_attached_groups(&transaction, &user, json.groups).await?;

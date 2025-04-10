@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
+use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
-use serde::Serialize;
+use postgres_types as pg_types;
+use serde::{Serialize, Deserialize};
 
 use crate::db;
-use crate::db::ids::{UserId, UserUid, GroupId, GroupUid, RoleId};
+use crate::db::ids::{UserId, UserUid, GroupId, GroupUid, RoleId, InviteToken};
 use crate::sec::authz::Role;
-use crate::error::{self, Context};
+use crate::error::{self, Context, BoxDynError};
 
 #[derive(Debug)]
 pub struct User {
@@ -48,6 +50,18 @@ impl<'a> From<&'a UserUid> for RetrieveUserQuery<'a> {
     fn from(given: &'a UserUid) -> Self {
         Self::Uid(given)
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum UserCreateError {
+    #[error("username already exists")]
+    UsernameExists,
+
+    #[error("uid already exists")]
+    UidExists,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
 }
 
 impl User {
@@ -115,21 +129,25 @@ impl User {
         Self::retrieve(conn, RetrieveUserQuery::Id(&id)).await
     }
 
-    pub async fn create(conn: &impl db::GenericClient, username: &str, hash: &str, version: i64) -> Result<Option<Self>, db::PgError> {
+    pub async fn create(
+        conn: &impl db::GenericClient,
+        username: &str,
+        hash: &str,
+        version: i64,
+    ) -> Result<Self, UserCreateError> {
         let uid = UserUid::gen();
         let created = Utc::now();
 
-        let result = conn.query_opt(
+        let result = conn.query_one(
             "\
             insert into users (uid, username, password, version, created) \
             values ($1, $2, $3, $4, $5) \
-            on conflict on constraint users_username_key do nothing \
             returning id",
             &[&uid, &username, &hash, &version, &created]
-        ).await?;
+        ).await;
 
         match result {
-            Some(row) => Ok(Some(Self {
+            Ok(row) => Ok(Self {
                 id: row.get(0),
                 uid,
                 username: username.to_owned(),
@@ -137,8 +155,19 @@ impl User {
                 version,
                 created,
                 updated: None,
-            })),
-            None => Ok(None)
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "users_username_key" => Err(UserCreateError::UsernameExists),
+                        "users_uid_key" => Err(UserCreateError::UidExists),
+                        _ => Err(err.into())
+                    },
+                    _ => Err(err.into())
+                }
+            } else {
+                Err(err.into())
+            }
         }
     }
 
@@ -928,4 +957,177 @@ pub async fn assign_user_group(
     ).await?;
 
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[repr(i16)]
+pub enum InviteStatus {
+    Pending = 0,
+    Accepted = 1,
+    Rejected = 2,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the provided status value is invalid")]
+pub struct InvalidInviteStatus;
+
+impl InviteStatus {
+    pub fn is_pending(&self) -> bool {
+        match self {
+            Self::Pending => true,
+            _ => false,
+        }
+    }
+}
+
+impl From<&InviteStatus> for i16 {
+    fn from(value: &InviteStatus) -> Self {
+        match value {
+            InviteStatus::Pending => 0,
+            InviteStatus::Accepted => 1,
+            InviteStatus::Rejected => 2,
+        }
+    }
+}
+
+impl TryFrom<i16> for InviteStatus {
+    type Error = InvalidInviteStatus;
+
+    fn try_from(value: i16) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(InviteStatus::Pending),
+            1 => Ok(InviteStatus::Accepted),
+            2 => Ok(InviteStatus::Rejected),
+            _ => Err(InvalidInviteStatus)
+        }
+    }
+}
+
+impl<'a> pg_types::FromSql<'a> for InviteStatus {
+    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
+        let v = <i16 as pg_types::FromSql>::from_sql(ty, raw)?;
+
+        Self::try_from(v).map_err(Into::into)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <i16 as pg_types::FromSql>::accepts(ty)
+    }
+}
+
+impl pg_types::ToSql for InviteStatus {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        let v: i16 = self.into();
+
+        v.to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <i16 as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
+#[derive(Debug)]
+pub struct Invite {
+    pub token: InviteToken,
+    pub name: String,
+    pub issued_on: DateTime<Utc>,
+    pub expires_on: Option<DateTime<Utc>>,
+    pub status: InviteStatus,
+    pub users_id: Option<UserId>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InviteError {
+    #[error("the action cannot be completed as the invite is not pending")]
+    NotPending,
+
+    #[error("the specified user does not exist")]
+    UserNotFound,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
+}
+
+pub enum InviteQuery<'a> {
+    Token(&'a InviteToken)
+}
+
+impl<'a> From<&'a InviteToken> for InviteQuery<'a> {
+    fn from(token: &'a InviteToken) -> Self {
+        Self::Token(token)
+    }
+}
+
+impl Invite {
+    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<InviteQuery<'a>>
+    {
+        let result = match given.into() {
+            InviteQuery::Token(token) => {
+                conn.query_opt(
+                    "\
+                    select user_invites.token, \
+                           user_invites.name, \
+                           user_invites.issued_on, \
+                           user_invites.expires_on, \
+                           user_invites.status, \
+                           user_invites.users_id \
+                    from user_invites \
+                    where token = $1",
+                    &[token]
+                ).await?
+            }
+        };
+
+        Ok(result.map(|v| Self {
+            token: v.get(0),
+            name: v.get(1),
+            issued_on: v.get(2),
+            expires_on: v.get(3),
+            status: v.get(4),
+            users_id: v.get(5),
+        }))
+    }
+
+    pub async fn mark_accepted(
+        &mut self,
+        conn: &impl db::GenericClient,
+        users_id: &UserId
+    ) -> Result<(), InviteError> {
+        if !self.status.is_pending() {
+            return Err(InviteError::NotPending);
+        }
+
+        let status = InviteStatus::Accepted;
+        let result = conn.execute(
+            "\
+            update user_invites \
+            set status = $2, \
+                users_id = $3 \
+            where token = $1",
+            &[&self.token, &status, users_id]
+        ).await;
+
+        if let Err(err) = result {
+            if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::ForeignKey(constraint) => if constraint == "user_invites_users_id_fkey" {
+                        return Err(InviteError::UserNotFound);
+                    },
+                    _ => {}
+                }
+            }
+
+            Err(err.into())
+        } else {
+            self.status = status;
+            self.users_id = Some(*users_id);
+
+            Ok(())
+        }
+    }
 }

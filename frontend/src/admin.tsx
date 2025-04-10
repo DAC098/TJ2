@@ -28,6 +28,7 @@ import {
 import { Groups, Group } from "@/groups";
 import { Roles, Role } from "@/roles";
 import { Users, User } from "@/users";
+import { InviteTable, Invite } from "@/admin/invites";
 
 interface MenuOptionProps {
     title: string,
@@ -77,6 +78,11 @@ function AdminSidebar() {
                             path="/admin/roles"
                             active={location.pathname.startsWith("/admin/roles")}
                         />
+                        <MenuOption
+                            title="Invites"
+                            path="/admin/invites"
+                            active={location.pathname.startsWith("/admin/invites")}
+                        />
                     </SidebarMenu>
                 </SidebarGroupContent>
             </SidebarGroup>
@@ -93,6 +99,8 @@ function AdminRoutes() {
         <Route path="/groups/:groups_id" element={<Group />}/>
         <Route path="/roles" element={<Roles />}/>
         <Route path="/roles/:role_id" element={<Role />}/>
+        <Route path="/invites" element={<InviteTable />}/>
+        <Route path="/invites/:token" element={<Invite />}/>
     </Routes>;
 }
 

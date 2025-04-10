@@ -1,4 +1,3 @@
 /assets/stylesheet.css
-/assets/index.js
-/assets/vendor-*.js
-/assets/**/*.map
+/assets/js/*.bundle.js
+/assets/js/*.bundle.js.map

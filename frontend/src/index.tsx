@@ -1,10 +1,11 @@
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
-import Login from "./Login";
-import App from "./App";
+import { Login } from "@/Login";
+import { App } from "@/App";
+import { Register } from "@/register";
 
-import "./media";
+import "@/media";
 
 function get_window_theme() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -32,6 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
         <BrowserRouter basename="/">
             <Routes>
                 <Route path="/login" element={<Login/>}/>
+                <Route path="/register" element={<Register />}/>
                 <Route path="*" element={<App/>}/>
             </Routes>
         </BrowserRouter>
