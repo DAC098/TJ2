@@ -8,6 +8,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::db;
 use crate::db::ids::{UserId, UserUid, GroupId, GroupUid, RoleId, InviteToken};
+use crate::sec;
 use crate::sec::authz::Role;
 use crate::error::{self, Context, BoxDynError};
 
@@ -22,13 +23,24 @@ pub struct User {
     pub updated: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct UserBuilder {
+    username: String,
+    password: String,
+    version: i64,
+    uid: Option<UserUid>,
+}
+
 #[derive(Debug, thiserror::Error)]
-pub enum UserCreateError {
+pub enum UserBuilderError {
     #[error("username already exists")]
     UsernameExists,
 
     #[error("uid already exists")]
     UidExists,
+
+    #[error(transparent)]
+    Argon(#[from] sec::password::HashError),
 
     #[error(transparent)]
     Db(#[from] db::PgError)
@@ -134,41 +146,10 @@ impl User {
         username: &str,
         hash: &str,
         version: i64,
-    ) -> Result<Self, UserCreateError> {
-        let uid = UserUid::gen();
-        let created = Utc::now();
+    ) -> Result<Self, UserBuilderError> {
+        let builder = UserBuilder::new_hash(username.to_owned(), hash.to_owned(), version);
 
-        let result = conn.query_one(
-            "\
-            insert into users (uid, username, password, version, created) \
-            values ($1, $2, $3, $4, $5) \
-            returning id",
-            &[&uid, &username, &hash, &version, &created]
-        ).await;
-
-        match result {
-            Ok(row) => Ok(Self {
-                id: row.get(0),
-                uid,
-                username: username.to_owned(),
-                password: hash.to_owned(),
-                version,
-                created,
-                updated: None,
-            }),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "users_username_key" => Err(UserCreateError::UsernameExists),
-                        "users_uid_key" => Err(UserCreateError::UidExists),
-                        _ => Err(err.into())
-                    },
-                    _ => Err(err.into())
-                }
-            } else {
-                Err(err.into())
-            }
-        }
+        builder.build(conn).await
     }
 
     pub async fn update(&mut self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
@@ -198,6 +179,74 @@ impl User {
                 }
             } else {
                 Err(err)
+            }
+        }
+    }
+}
+
+impl UserBuilder {
+    /// user builder with a pre generated argon hash
+    pub fn new_hash(username: String, hash: String, version: i64) -> Self {
+        Self {
+            username,
+            password: hash,
+            version,
+            uid: None,
+        }
+    }
+
+    /// user builder that will generate a argon hash from the given password
+    pub fn new_password(username: String, password: String) -> Result<Self, UserBuilderError> {
+        let hash = sec::password::create(&password)?;
+
+        Ok(Self {
+            username,
+            password: hash,
+            version: 0,
+            uid: None
+        })
+    }
+
+    pub fn with_uid(&mut self, uid: UserUid) {
+        self.uid = Some(uid);
+    }
+
+    pub async fn build(self, conn: &impl db::GenericClient) -> Result<User, UserBuilderError> {
+        let username = self.username;
+        let password = self.password;
+        let version = self.version;
+        let uid = self.uid.unwrap_or(UserUid::gen());
+        let created = Utc::now();
+
+        let result = conn.query_one(
+            "\
+            insert into users (uid, username, password, version, created) \
+            values ($1, $2, $3, $4, $5) \
+            returning id",
+            &[&uid, &username, &password, &version, &created]
+        ).await;
+
+        match result {
+            Ok(row) => Ok(User {
+                id: row.get(0),
+                uid,
+                username,
+                password,
+                version,
+                created,
+                updated: None,
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "users_username_key" => Err(UserBuilderError::UsernameExists),
+                        "users_uid_key" => Err(UserBuilderError::UidExists),
+                        _ => Err(err.into())
+                    },
+                    _ => Err(err.into())
+                }
+            } else {
+                Err(err.into())
             }
         }
     }
@@ -1091,6 +1140,14 @@ impl Invite {
             status: v.get(4),
             users_id: v.get(5),
         }))
+    }
+
+    pub fn is_expired(&self) -> bool {
+        let Some(expires_on) = self.expires_on.as_ref() else {
+            return false;
+        };
+
+        *expires_on >= Utc::now()
     }
 
     pub async fn mark_accepted(

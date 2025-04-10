@@ -3,7 +3,6 @@ use argon2::password_hash::PasswordHash;
 use axum::extract::Query;
 use axum::http::{StatusCode, HeaderMap};
 use axum::response::{IntoResponse, Response};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::db;
@@ -15,7 +14,7 @@ use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
 use crate::sec;
 use crate::state;
-use crate::user::{self, User, UserCreateError, Invite, InviteError};
+use crate::user::{self, User, UserBuilder, UserBuilderError, Invite, InviteError};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
@@ -362,28 +361,31 @@ async fn register_user(
         return Err(RegisterError::InviteUsed);
     }
 
-    if let Some(expires_on) = invite.expires_on.as_ref() {
-        let now = Utc::now();
-
-        if *expires_on < now {
-            return Err(RegisterError::InviteExpired);
-        }
+    if invite.is_expired() {
+        return Err(RegisterError::InviteExpired);
     }
 
     if password != confirm {
         return Err(RegisterError::InvalidConfirm);
     }
 
-    let hash = sec::password::create(&password)?;
-    let user = match User::create(conn, &username, &hash, 0).await {
+    let builder = match UserBuilder::new_password(username, password) {
+        Ok(b) => b,
+        Err(err) => match err {
+            UserBuilderError::Argon(argon_err) => return Err(argon_err.into()),
+            _ => unreachable!()
+        }
+    };
+    let user = match builder.build(conn).await {
         Ok(u) => u,
         Err(err) => match err {
-            UserCreateError::UsernameExists =>
+            UserBuilderError::UsernameExists =>
                 return Err(RegisterError::UsernameExists),
-            UserCreateError::UidExists =>
+            UserBuilderError::UidExists =>
                 return Err(error::Error::context("user uid collision").into()),
-            UserCreateError::Db(db_err) =>
+            UserBuilderError::Db(db_err) =>
                 return Err(db_err.into()),
+            _ => unreachable!(),
         }
     };
 

@@ -13,7 +13,7 @@ use crate::router::macros;
 use crate::state;
 use crate::sec::{password, authz};
 use crate::sec::authz::{AttachedRole, create_attached_roles, update_attached_roles};
-use crate::user::{User, UserCreateError, AttachedGroup, create_attached_groups, update_attached_groups};
+use crate::user::{User, UserBuilder, UserBuilderError, AttachedGroup, create_attached_groups, update_attached_groups};
 
 #[derive(Debug, Serialize)]
 pub struct UserPartial {
@@ -247,23 +247,31 @@ pub async fn create_user(
         return Ok(StatusCode::UNAUTHORIZED.into_response());
     }
 
-    let hashed = password::create(&json.password)
-        .context("failed to hash new user password")?;
+    let builder = match UserBuilder::new_password(json.username, json.password) {
+        Ok(b) => b,
+        Err(err) => match err {
+            UserBuilderError::Argon(_argon_err) => return Err(error::Error::context(
+                "failed to hash new user password"
+            )),
+            _ => unreachable!()
+        }
+    };
 
-    let user = match User::create(&transaction, &json.username, &hashed, 0).await {
+    let user = match builder.build(&transaction).await {
         Ok(user) => user,
         Err(err) => match err {
-            UserCreateError::UsernameExists => return Ok((
+            UserBuilderError::UsernameExists => return Ok((
                 StatusCode::BAD_REQUEST,
                 body::Json(NewUserResult::UsernameExists)
             ).into_response()),
-            UserCreateError::UidExists => return Err(error::Error::context(
+            UserBuilderError::UidExists => return Err(error::Error::context(
                 "user uid collision"
             )),
-            UserCreateError::Db(db_err) => return Err(error::Error::context_source(
+            UserBuilderError::Db(db_err) => return Err(error::Error::context_source(
                 "failed to create new user",
                 db_err
             )),
+            _ => unreachable!()
         }
     };
 

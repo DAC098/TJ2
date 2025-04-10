@@ -13,7 +13,7 @@ use crate::error::{Error, Context, BoxDynError};
 use crate::sec::authz::{Scope, Ability, Role};
 use crate::sec::password;
 use crate::state;
-use crate::user::{User, UserCreateError};
+use crate::user::{User, UserBuilderError};
 
 pub use deadpool_postgres::{Pool, GenericClient, Object, Transaction, PoolError};
 pub use tokio_postgres::Error as PgError;
@@ -122,9 +122,10 @@ async fn create_admin_user(conn: &impl GenericClient) -> Result<Option<User>, Er
     match User::create(conn, "admin", &hash, 0).await {
         Ok(user) => Ok(Some(user)),
         Err(err) => match err {
-            UserCreateError::UsernameExists => Ok(None),
-            UserCreateError::UidExists => Err(Error::context("user uid collision")),
-            UserCreateError::Db(db_err) => Err(Error::context_source("failed to create admin", db_err))
+            UserBuilderError::UsernameExists => Ok(None),
+            UserBuilderError::UidExists => Err(Error::context("user uid collision")),
+            UserBuilderError::Db(db_err) => Err(Error::context_source("failed to create admin", db_err)),
+            _ => unreachable!(),
         }
     }
 }
