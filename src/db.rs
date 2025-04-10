@@ -1,13 +1,15 @@
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use bytes::BytesMut;
 use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
+use postgres_types as pg_types;
 use tokio_postgres::{Config as PgConfig, NoTls};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::ToSql;
 
 use crate::config::Config;
-use crate::error::{Error, Context};
+use crate::error::{Error, Context, BoxDynError};
 use crate::sec::authz::{Scope, Ability, Role};
 use crate::sec::password;
 use crate::state;
@@ -25,6 +27,23 @@ pub type ParamsVec<'a> = Vec<&'a (dyn ToSql + Sync)>;
 
 /// type alias for creating a fixed size array of ToSql references
 pub type ParamsArray<'a, const N: usize> = [&'a (dyn ToSql + Sync); N];
+
+#[derive(Debug)]
+pub struct U16toI32<'a>(pub &'a u16);
+
+impl<'a> pg_types::ToSql for U16toI32<'a> {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        let casted: i32 = (*self.0).into();
+
+        casted.to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&[u8] as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
 
 /// creates the postgres database connection pool
 ///

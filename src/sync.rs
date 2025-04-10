@@ -1,17 +1,20 @@
+use serde::Serialize;
+
 use crate::db;
 use crate::db::ids::RemoteServerId;
 
 pub mod journal;
 
+#[derive(Debug, Serialize)]
 pub struct RemoteServer {
-    id: RemoteServerId,
-    addr: String,
-    port: u16,
-    secure: bool,
+    pub id: RemoteServerId,
+    pub addr: String,
+    pub port: u16,
+    pub secure: bool,
 }
 
 impl RemoteServer {
-    fn get_port(given: i32) -> u16 {
+    pub fn get_port(given: i32) -> u16 {
         match given.try_into() {
             Ok(valid) => valid,
             Err(_) => panic!("invalid port value from remote server database record. value: {given}"),
