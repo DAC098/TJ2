@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod sec;
 
+/// a command line utility for managing / developing a TJ2 server
 #[derive(Debug, Parser)]
 struct AppCli {
     #[command(subcommand)]
