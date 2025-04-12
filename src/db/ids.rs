@@ -26,11 +26,9 @@ macro_rules! id_type {
             Debug,
             Clone, Copy,
             PartialEq, Eq, PartialOrd, Ord, Hash,
-            sqlx::Type,
             ToSql, FromSql,
             Serialize, Deserialize,
         )]
-        #[sqlx(transparent)]
         #[postgres(transparent)]
         #[serde(try_from = "i64", into = "i64")]
         pub struct $name(i64);
@@ -111,11 +109,9 @@ macro_rules! uid_type {
             Debug,
             Clone,
             PartialEq, Eq, PartialOrd, Ord, Hash,
-            sqlx::Type,
             ToSql, FromSql,
             Serialize, Deserialize,
         )]
-        #[sqlx(transparent)]
         #[postgres(transparent)]
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
