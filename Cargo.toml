@@ -7,187 +7,157 @@ edition = "2021"
 default = ["rustls"]
 rustls = ["axum-server/tls-rustls"]
 
+[workspace]
+members = ["cli", "lib"]
+
+[workspace.dependencies.tj2-lib]
+path = "./lib"
+
 # -----------------------------------------------------------------------------
 # serde
 # -----------------------------------------------------------------------------
 
-[dependencies.serde]
+[workspace.dependencies.serde]
 version = "1"
 features = ["derive"]
 
-[dependencies.serde_repr]
+[workspace.dependencies.serde_repr]
 version = "0.1"
 
-[dependencies.serde_json]
+[workspace.dependencies.serde_json]
 version = "1"
 
-[dependencies.toml]
+[workspace.dependencies.toml]
 version = "0.8"
 
-[dependencies.serde_yml]
+[workspace.dependencies.serde_yml]
 version = "0.0"
 
 # -----------------------------------------------------------------------------
 # utility
 # -----------------------------------------------------------------------------
 
-[dependencies.clap]
+[workspace.dependencies.clap]
 version = "4"
 features = ["derive"]
 
-[dependencies.thiserror]
+[workspace.dependencies.thiserror]
 version = "1"
 
-[dependencies.num_cpus]
+[workspace.dependencies.num_cpus]
 version = "1"
 
-[dependencies.futures]
+[workspace.dependencies.futures]
 version = "0.3"
 
-[dependencies.pin-project]
+[workspace.dependencies.pin-project]
 version = "1"
 
-[dependencies.async-trait]
+[workspace.dependencies.async-trait]
 version = "0.1"
 
-[dependencies.chrono]
+[workspace.dependencies.chrono]
 version = "0.4"
 features = ["serde"]
 
-[dependencies.base64]
+[workspace.dependencies.base64]
 version = "0.22"
 
-[dependencies.cron]
+[workspace.dependencies.cron]
 version = "0.12"
 
-[dependencies.nanoid]
+[workspace.dependencies.nanoid]
 version = "0.4"
 
-[dependencies.bytes]
+[workspace.dependencies.bytes]
 version = "1"
 
-[dependencies.uuid]
+[workspace.dependencies.uuid]
 version = "1"
 features = ["v4"]
 
-[dependencies.ringbuf]
+[workspace.dependencies.ringbuf]
 version = "0.4"
 
 # -----------------------------------------------------------------------------
 # security
 # -----------------------------------------------------------------------------
 
-[dependencies.sha2]
+[workspace.dependencies.sha2]
 version = "0.10"
 
-[dependencies.sha3]
+[workspace.dependencies.sha3]
 version = "0.10"
 
-[dependencies.blake3]
+[workspace.dependencies.blake3]
 version = "1"
 features = ["serde"]
 
-[dependencies.rand]
+[workspace.dependencies.rand]
 version = "0.8"
 features = ["small_rng", "std"]
 
-[dependencies.argon2]
+[workspace.dependencies.argon2]
 version = "0.5"
 
-[dependencies.validator]
+[workspace.dependencies.validator]
 version = "0.18"
 
-[dependencies.ammonia]
+[workspace.dependencies.ammonia]
 version = "4"
 
-[dependencies.x509-cert]
+[workspace.dependencies.x509-cert]
 version = "0.2"
+
+[workspace.dependencies.crypto_box]
+version = "0.9.1"
+features = ["chacha20"]
 
 # -----------------------------------------------------------------------------
 # templates
 # -----------------------------------------------------------------------------
 
-[dependencies.tera]
+[workspace.dependencies.tera]
 version = "1"
 
 # -----------------------------------------------------------------------------
 # network
 # -----------------------------------------------------------------------------
 
-[dependencies.tokio]
+[workspace.dependencies.tokio]
 version = "1"
-features = ["signal", "time", "rt-multi-thread", "net", "fs", "tracing"]
+features = ["signal", "time", "rt-multi-thread", "net", "fs", "tracing", "io-util"]
 
-[dependencies.tokio-util]
+[workspace.dependencies.tokio-util]
 version = "0.7"
 
-[dependencies.hyper]
-version = "1"
+[workspace.dependencies.reqwest]
+version = "0.12"
+features = ["json"]
 
-[dependencies.axum]
-version = "0.7"
-features = ["macros"]
+# -----------------------------------------------------------------------------
+# logging
+# -----------------------------------------------------------------------------
 
-[dependencies.axum-server]
-git = "https://github.com/DAC098/axum-server.git"
-version = "0.7"
-
-[dependencies.tower]
-version = "0.4"
-features = ["timeout"]
-
-[dependencies.tower-http]
-version = "0.5"
-features = ["trace"]
-
-[dependencies.mime]
-version = "0.3"
-
-[dependencies.mime_guess]
-version = "2"
-
-[dependencies.tracing]
+[workspace.dependencies.tracing]
 version = "0.1"
 
-[dependencies.tracing-subscriber]
+[workspace.dependencies.tracing-subscriber]
 version = "0.3"
 features = ["env-filter"]
 
-[dependencies.url]
-version = "2"
-
-[dependencies.urlencoding]
-version = "2"
-
-[dependencies.reqwest]
-version = "0.12"
-features = ["json"]
+[workspace.dependencies.tracing-test]
+version = "0.2"
 
 # -----------------------------------------------------------------------------
 # database
 # -----------------------------------------------------------------------------
 
-[dependencies.sqlx]
-version = "0.8"
-default-features = false
-
-features = [
-    "sqlite",
-    "json",
-    "derive",
-    "macros",
-    "chrono",
-    "runtime-tokio",
-]
-
-[dependencies.tokio-postgres]
+[workspace.dependencies.tokio-postgres]
 version = "0.7"
 features = ["with-serde_json-1", "with-chrono-0_4"]
 
-[dependencies.deadpool-postgres]
-version = "0.14"
-
-[dependencies.postgres-types]
+[workspace.dependencies.postgres-types]
 version = "0.2"
 features = ["derive"]
 
@@ -195,5 +165,70 @@ features = ["derive"]
 # dev dependencies
 # -----------------------------------------------------------------------------
 
-[dev-dependencies.tracing-test]
-version = "0.2"
+[dependencies]
+
+# serde
+
+serde = { workspace = true }
+serde_repr = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+serde_yml = { workspace = true }
+
+# utility
+
+clap = { workspace = true }
+thiserror = { workspace = true }
+num_cpus = { workspace = true }
+futures = { workspace = true }
+pin-project = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }
+cron = { workspace = true }
+nanoid = { workspace = true }
+bytes = { workspace = true }
+uuid = { workspace = true }
+ringbuf = { workspace = true }
+
+# security
+
+sha2 = { workspace = true }
+sha3 = { workspace = true }
+blake3 = { workspace = true }
+rand = { workspace = true }
+argon2 = { workspace = true }
+validator = { workspace = true }
+ammonia = { workspace = true }
+x509-cert = { workspace = true }
+crypto_box = { workspace = true }
+
+# templates
+
+tera = { workspace = true }
+
+# network
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+hyper = { version = "1" }
+axum = { version = "0.7", features = ["macros"] }
+axum-server = { git = "https://github.com/DAC098/axum-server.git", version = "0.7" }
+tower = { version = "0.4", features = ["timeout"] }
+tower-http = { version = "0.5", features = ["trace"] }
+mime = { version = "0.3" }
+mime_guess = { version = "2" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { version = "2" }
+urlencoding = { version = "2" }
+reqwest = { workspace = true }
+
+# database
+
+tokio-postgres = { workspace = true }
+deadpool-postgres = { version = "0.14" }
+postgres-types = { workspace = true }
+
+[dev-dependencies]
+tracing-test = { workspace = true }

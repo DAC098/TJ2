@@ -1,0 +1,12 @@
+[package]
+name = "tj2-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tj2-lib = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+crypto_box = { workspace = true }
+anyhow = { version = "1" }
+rand = { workspace = true }
