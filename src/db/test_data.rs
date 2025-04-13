@@ -7,7 +7,8 @@ use super::{GenericClient, ids};
 
 use crate::error::{Error, Context};
 use crate::journal::{custom_field, CustomField, LocalJournal};
-use crate::user::{User, Group, assign_user_group};
+use crate::user::User;
+use crate::user::group::{Group, assign_user_group};
 use crate::sec::password;
 use crate::sec::authz::{Role, Scope, Ability};
 use crate::state;
@@ -56,6 +57,19 @@ pub async fn create(
         let user = create_user(conn, &username, password).await?;
 
         tracing::debug!("create new user: {}", user.id);
+
+        let user_dir = state.storage().user_dir(user.id);
+
+        user_dir.create()
+            .await
+            .context("failed to create user directory")?;
+
+        let private_key = tj2_lib::sec::pki::gen_private_key()
+            .context("failed to create private key")?;
+
+        tj2_lib::sec::pki::save_private_key(user_dir.private_key(), &private_key, false)
+            .await
+            .context("failed to save private key")?;
 
         assign_user_group(conn, user.id, journalists_group.id)
             .await

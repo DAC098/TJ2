@@ -9,10 +9,11 @@ use axum::http::request::Parts;
 
 use crate::config;
 use crate::db;
-use crate::db::ids::{JournalId, FileEntryId};
+use crate::db::ids::{UserId, JournalId, FileEntryId};
 use crate::error::{self, Context};
 use crate::journal::JournalDir;
 use crate::templates;
+use crate::user::UserDir;
 
 #[derive(Debug, Clone)]
 pub struct SharedState(Arc<State>);
@@ -103,12 +104,16 @@ impl Assets {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Storage {
     path: PathBuf
 }
 
 impl Storage {
+    pub fn user_dir(&self, users_id: UserId) -> UserDir {
+        UserDir::new(&self.path, users_id)
+    }
+
     pub fn journal_dir(&self, journals_id: JournalId) -> JournalDir {
         JournalDir::new(&self.path, journals_id)
     }
@@ -119,5 +124,17 @@ impl Storage {
         file_entry_id: FileEntryId
     ) -> PathBuf {
         self.path.join(format!("journals/{journals_id}/files/{file_entry_id}.file"))
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<SharedState> for Storage {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        _: &mut Parts,
+        state: &SharedState
+    ) -> Result<Self, Self::Rejection> {
+        Ok(state.0.storage.clone())
     }
 }

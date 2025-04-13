@@ -12,7 +12,8 @@ use crate::router::body;
 use crate::router::macros;
 use crate::state;
 use crate::sec::authz::{self, AttachedRole, create_attached_roles, update_attached_roles};
-use crate::user::{Group, AttachedUser, create_attached_users, update_attached_users};
+use crate::user::{AttachedUser, create_attached_users, update_attached_users};
+use crate::user::group::Group;
 
 #[derive(Debug, Serialize)]
 pub struct GroupPartial {

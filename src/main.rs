@@ -96,6 +96,8 @@ async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error
         .await
         .context("failed to create SharedState")?;
 
+    db::check_database(&state).await?;
+
     if args.gen_test_data {
         db::gen_test_data(&state).await?;
     }

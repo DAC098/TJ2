@@ -11,7 +11,7 @@ use crate::error::{self, Context};
 use crate::router::{body, macros};
 use crate::sec::authn::Initiator;
 use crate::state;
-use crate::user::{Invite, InviteStatus};
+use crate::user::invite::{Invite, InviteStatus};
 
 #[derive(Debug, Serialize)]
 pub struct PartialInvite {
