@@ -13,7 +13,8 @@ use crate::router::macros;
 use crate::state;
 use crate::sec::{password, authz};
 use crate::sec::authz::{AttachedRole, create_attached_roles, update_attached_roles};
-use crate::user::{User, UserBuilder, UserBuilderError, AttachedGroup, create_attached_groups, update_attached_groups};
+use crate::user::{User, UserBuilder, UserBuilderError};
+use crate::user::group::{AttachedGroup, create_attached_groups, update_attached_groups};
 
 #[derive(Debug, Serialize)]
 pub struct UserPartial {
@@ -221,6 +222,7 @@ pub enum NewUserResult {
 
 pub async fn create_user(
     db::Conn(mut conn): db::Conn,
+    storage: state::Storage,
     headers: HeaderMap,
     body::Json(json): body::Json<NewUser>,
 ) -> Result<Response, error::Error> {
@@ -296,6 +298,19 @@ pub async fn create_user(
             })
         ).into_response());
     }
+
+    let user_dir = storage.user_dir(user.id);
+
+    user_dir.create()
+        .await
+        .context("failed to create user directory")?;
+
+    let private_key = tj2_lib::sec::pki::gen_private_key()
+        .context("failed to generate private key")?;
+
+    tj2_lib::sec::pki::save_private_key(user_dir.private_key(), &private_key, false)
+        .await
+        .context("failed to save private key")?;
 
     transaction.commit()
         .await

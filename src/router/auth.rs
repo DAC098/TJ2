@@ -14,7 +14,8 @@ use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
 use crate::sec;
 use crate::state;
-use crate::user::{self, User, UserBuilder, UserBuilderError, Invite, InviteError};
+use crate::user::{self, User, UserBuilder, UserBuilderError};
+use crate::user::invite::{Invite, InviteError};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
@@ -292,6 +293,10 @@ pub enum RegisterError {
     #[serde(skip)]
     #[error(transparent)]
     Error(#[from] error::Error),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Io(#[from] std::io::Error)
 }
 
 impl IntoResponse for RegisterError {
@@ -313,23 +318,12 @@ impl IntoResponse for RegisterError {
 
 pub async fn register(
     state: state::SharedState,
-    body::Json(RegisterBody {
-        token,
-        username,
-        password,
-        confirm,
-    }): body::Json<RegisterBody>
+    body::Json(body): body::Json<RegisterBody>
 ) -> Result<Response, RegisterError> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    let user = register_user(
-        &transaction,
-        token,
-        username,
-        password,
-        confirm,
-    ).await?;
+    let user = register_user(&transaction, body).await?;
 
     let mut options = SessionOptions::new(user.id);
     options.authenticated = true;
@@ -337,6 +331,19 @@ pub async fn register(
 
     let session = Session::create(&transaction, options).await?;
     let session_cookie = session.build_cookie();
+
+    let user_dir = state.storage()
+        .user_dir(user.id);
+
+    user_dir.create().await?;
+
+    // do this last since we are making changes to the file system
+    let private_key = tj2_lib::sec::pki::gen_private_key()
+        .context("failed to generate private key")?;
+
+    tj2_lib::sec::pki::save_private_key(user_dir.private_key(), &private_key, false)
+        .await
+        .context("failed to save private key")?;
 
     transaction.commit().await?;
 
@@ -348,10 +355,12 @@ pub async fn register(
 
 async fn register_user(
     conn: &impl db::GenericClient,
-    token: InviteToken,
-    username: String,
-    password: String,
-    confirm: String,
+    RegisterBody {
+        token,
+        username,
+        password,
+        confirm,
+    }: RegisterBody
 ) -> Result<User, RegisterError> {
     let mut invite = Invite::retrieve(conn, &token)
         .await?

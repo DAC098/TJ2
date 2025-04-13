@@ -38,6 +38,7 @@ dependencies = [
  "sha3",
  "tera",
  "thiserror",
+ "tj2-lib",
  "tokio",
  "tokio-postgres",
  "tokio-util",

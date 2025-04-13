@@ -11,7 +11,8 @@ use serde::{Serialize, Deserialize};
 use crate::db;
 use crate::db::ids::{GroupId, UserId, RoleId, RoleUid, PermissionId};
 use crate::error::{self, Context, BoxDynError};
-use crate::user::{User, Group};
+use crate::user::User;
+use crate::user::group::Group;
 
 #[derive(Debug, thiserror::Error)]
 #[error("the provided string is not a valid Ability")]

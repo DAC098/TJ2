@@ -66,14 +66,10 @@ pub async fn from_config(config: &Config) -> Result<Pool, Error> {
 
     let manager = Manager::from_config(pg_config, NoTls, manager_config);
 
-    let pool = Pool::builder(manager)
+    Pool::builder(manager)
         .max_size(4)
         .build()
-        .context("failed to create postgresql connection pool")?;
-
-    check_database(&pool).await?;
-
-    Ok(pool)
+        .context("failed to create postgresql connection pool")
 }
 
 /// checks to make sure that the admin account exists in the database with
@@ -82,11 +78,8 @@ pub async fn from_config(config: &Config) -> Result<Pool, Error> {
 /// if the admin account is not found then it will attempt to create the
 /// user and role. this is a quick check will assume that if the admin
 /// user exists then the role will as well.
-pub async fn check_database(pool: &Pool) -> Result<(), Error> {
-    let mut conn = pool.get()
-        .await
-        .context("failed to retrieve database connection")?;
-
+pub async fn check_database(state: &state::SharedState) -> Result<(), Error> {
+    let mut conn = state.db_conn().await?;
     let transaction = conn.transaction()
         .await
         .context("failed to create transaction")?;
@@ -99,6 +92,20 @@ pub async fn check_database(pool: &Pool) -> Result<(), Error> {
         let admin = create_admin_user(&transaction)
             .await?
             .context("admin already exists. prior lookup failed")?;
+
+        let user_dir = state.storage().user_dir(admin.id);
+
+        user_dir.create()
+            .await
+            .context("failed to create admin user directory")?;
+
+        let private_key = tj2_lib::sec::pki::gen_private_key()
+            .context("failed to generate private key")?;
+
+        tj2_lib::sec::pki::save_private_key(user_dir.private_key(), &private_key, false)
+            .await
+            .context("failed to save private key")?;
+
         let admin_role = create_default_roles(&transaction)
             .await?;
 

@@ -167,6 +167,8 @@ features = ["derive"]
 
 [dependencies]
 
+tj2-lib = { workspace = true }
+
 # serde
 
 serde = { workspace = true }
