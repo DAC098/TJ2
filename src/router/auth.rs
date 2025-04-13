@@ -338,10 +338,10 @@ pub async fn register(
     user_dir.create().await?;
 
     // do this last since we are making changes to the file system
-    let private_key = tj2_lib::sec::pki::gen_private_key()
+    let private_key = tj2_lib::sec::pki::PrivateKey::generate()
         .context("failed to generate private key")?;
 
-    tj2_lib::sec::pki::save_private_key(user_dir.private_key(), &private_key, false)
+    private_key.save(user_dir.private_key(), false)
         .await
         .context("failed to save private key")?;
 

@@ -33,6 +33,10 @@ version = "0.8"
 [workspace.dependencies.serde_yml]
 version = "0.0"
 
+[workspace.dependencies.bincode]
+version = "2"
+features = ["serde"]
+
 # -----------------------------------------------------------------------------
 # utility
 # -----------------------------------------------------------------------------
@@ -111,7 +115,7 @@ version = "0.2"
 
 [workspace.dependencies.crypto_box]
 version = "0.9.1"
-features = ["chacha20"]
+features = ["chacha20", "serde"]
 
 # -----------------------------------------------------------------------------
 # templates

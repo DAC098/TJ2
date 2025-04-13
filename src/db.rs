@@ -99,10 +99,10 @@ pub async fn check_database(state: &state::SharedState) -> Result<(), Error> {
             .await
             .context("failed to create admin user directory")?;
 
-        let private_key = tj2_lib::sec::pki::gen_private_key()
+        let private_key = tj2_lib::sec::pki::PrivateKey::generate()
             .context("failed to generate private key")?;
 
-        tj2_lib::sec::pki::save_private_key(user_dir.private_key(), &private_key, false)
+        private_key.save(user_dir.private_key(), false)
             .await
             .context("failed to save private key")?;
 
