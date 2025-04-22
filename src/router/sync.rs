@@ -1,31 +1,40 @@
 use std::default::Default;
 
 use axum::Router;
+use axum::http::StatusCode;
+use axum::response::{Response, IntoResponse};
 use axum::routing::post;
 use futures::StreamExt;
+use serde::{Serialize, Deserialize};
+use tj2_lib::sec::pki::{PgPublicKey, PublicKey, PrivateKey, PrivateKeyError};
 
 use crate::db;
 use crate::db::ids::{
+    UserUid,
     JournalId,
     EntryId,
     CustomFieldUid,
     FileEntryUid,
     RemoteServerId,
+    InviteToken,
 };
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
 use crate::router::body;
 use crate::journal::{self, FileStatus, FileEntry};
-use crate::state;
-use crate::sync;
+use crate::sec;
+use crate::state::{self, Storage};
+use crate::sync::{self, RemoteServer, PeerAddr};
 use crate::sync::journal::{
     SyncEntryResult,
     EntryFileSync,
 };
-use crate::user;
+use crate::user::{self, UserBuilder, UserBuilderError};
+use crate::user::invite::{Invite, InviteError};
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
+        .route("/register", post(register_peer_user))
         .route("/entries", post(receive_entry))
 }
 
@@ -475,4 +484,232 @@ async fn upsert_files(
     }
 
     Ok(rtn)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterPeerUser {
+    token: InviteToken,
+    user: RegisterUser,
+    peer: RegisterPeer,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterUser {
+    uid: UserUid,
+    username: String,
+    password: String,
+    confirm: String,
+    public_key: PublicKey,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterPeer {
+    addr: PeerAddr,
+    port: u16,
+    public_key: PublicKey,
+}
+
+#[derive(Debug, thiserror::Error, Serialize)]
+#[serde(tag = "type")]
+pub enum RegisterPeerUserError {
+    #[error("the requested invite was not found")]
+    InviteNotFound,
+
+    #[error("the requested invite has already been used")]
+    InviteUsed,
+
+    #[error("the requested invite has expired")]
+    InviteExpired,
+
+    #[error("the confirm does not equal password")]
+    InvalidConfirm,
+
+    #[error("the specified username already exists")]
+    UsernameExists,
+
+    #[error("the specified user uid already exists")]
+    UserUidExists,
+
+    #[error("server address already exists")]
+    ServerAddrExists,
+
+    #[error("invalid server address")]
+    InvalidServerAddr,
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    DbPool(#[from] db::PoolError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Argon(#[from] sec::password::HashError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Pki(#[from] PrivateKeyError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Error(#[from] error::Error),
+}
+
+impl IntoResponse for RegisterPeerUserError {
+    fn into_response(self) -> Response {
+        error::log_error(&self);
+
+        let status = match &self {
+            Self::InviteNotFound => StatusCode::NOT_FOUND,
+            Self::UsernameExists |
+            Self::InvalidConfirm |
+            Self::InviteExpired |
+            Self::InviteUsed |
+            Self::UserUidExists |
+            Self::ServerAddrExists |
+            Self::InvalidServerAddr => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        (status, body::Json(self)).into_response()
+    }
+}
+
+impl From<UserBuilderError> for RegisterPeerUserError {
+    fn from(err: UserBuilderError) -> Self {
+        match err {
+            UserBuilderError::Argon(argon_err) =>
+                RegisterPeerUserError::Argon(argon_err),
+            UserBuilderError::UsernameExists =>
+                RegisterPeerUserError::UsernameExists,
+            UserBuilderError::UidExists =>
+                RegisterPeerUserError::UserUidExists,
+            UserBuilderError::Db(db_err) =>
+                RegisterPeerUserError::Db(db_err)
+        }
+    }
+}
+
+pub async fn register_peer_user(
+    state: state::SharedState,
+    body::Json(RegisterPeerUser {
+        token,
+        user,
+        peer,
+    }): body::Json<RegisterPeerUser>,
+) -> Result<(), RegisterPeerUserError> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
+
+    let mut invite = Invite::retrieve(&transaction, &token)
+        .await?
+        .ok_or(RegisterPeerUserError::InviteNotFound)?;
+
+    if !invite.status.is_pending() {
+        return Err(RegisterPeerUserError::InviteUsed);
+    }
+
+    if invite.is_expired() {
+        return Err(RegisterPeerUserError::InviteExpired);
+    }
+
+    let peer = register_peer(&transaction, peer).await?;
+    let user = register_user(&transaction, state.storage(), &peer, user).await?;
+
+    invite.mark_accepted(&transaction, &user.id)
+        .await
+        .map_err(|err| match err {
+            InviteError::Db(db) => RegisterPeerUserError::Db(db),
+            _ => unreachable!("invite pre-check failed {err}")
+        })?;
+
+    Ok(())
+}
+
+pub async fn register_user(
+    conn: &impl db::GenericClient,
+    storage: &Storage,
+    server: &RemoteServer,
+    RegisterUser {
+        uid,
+        username,
+        password,
+        confirm,
+        public_key
+    }: RegisterUser
+) -> Result<user::User, RegisterPeerUserError> {
+    if password != confirm {
+        return Err(RegisterPeerUserError::InvalidConfirm);
+    }
+
+    let mut builder = UserBuilder::new_password(username, password)?;
+    builder.with_uid(uid);
+
+    let user = builder.build(conn).await?;
+
+    conn.execute(
+        "\
+        insert into remote_server_users (server_id, users_id, public_key) values \
+        ($1, $2, $3)",
+        &[&server.id, &user.id, &PgPublicKey(&public_key)]
+    ).await?;
+
+    let user_dir = storage.user_dir(user.id);
+    user_dir.create().await?;
+
+    let private_key = PrivateKey::generate()?;
+    private_key.save(user_dir.private_key(), false).await?;
+
+    Ok(user)
+}
+
+pub async fn register_peer(
+    conn: &impl db::GenericClient,
+    RegisterPeer {
+        addr,
+        port,
+        public_key,
+    }: RegisterPeer
+) -> Result<RemoteServer, RegisterPeerUserError> {
+    if let Some(exists) = RemoteServer::retrieve(conn, &public_key).await? {
+        return Ok(exists);
+    }
+
+    let Some(addr) = addr.to_valid_string() else {
+        return Err(RegisterPeerUserError::InvalidServerAddr);
+    };
+
+    let result = conn.query_one(
+        "\
+        insert into remote_servers (addr, port, secure, public_key) values \
+        ($1, $2, $3, $4) \
+        returning id",
+        &[&addr, &db::U16toI32(&port), &PgPublicKey(&public_key)]
+    ).await;
+
+    let record = result.map_err(|err| if let Some(kind) = db::ErrorKind::check(&err) {
+        match kind {
+            db::ErrorKind::Unique(constraint) => match constraint {
+                "remote_servers_addr_key" => RegisterPeerUserError::ServerAddrExists,
+                _ => err.into()
+            }
+            _ => err.into()
+        }
+    } else {
+        err.into()
+    })?;
+
+    Ok(RemoteServer {
+        id: record.get(0),
+        addr,
+        port,
+        secure: false,
+        public_key,
+    })
 }

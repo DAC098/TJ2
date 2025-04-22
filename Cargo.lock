@@ -2583,12 +2583,15 @@ name = "tj2-lib"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "bytes",
  "chrono",
  "crypto_box",
+ "postgres-types",
  "rand",
  "serde",
  "thiserror",
  "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]

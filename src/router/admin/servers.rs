@@ -80,6 +80,7 @@ pub struct RemoteServerPath {
 
 #[derive(Debug, Serialize)]
 pub struct RemoteServerForm {
+    id: db::ids::RemoteServerId,
     addr: String,
     port: u16,
     secure: bool,
@@ -111,6 +112,7 @@ pub async fn retrieve_server(
     Ok((
         StatusCode::OK,
         body::Json(RemoteServerForm {
+            id: server.id,
             addr: server.addr,
             port: server.port,
             secure: server.secure,
@@ -157,7 +159,7 @@ pub async fn create_server(
 
     Ok((
         StatusCode::CREATED,
-        body::Json(RemoteServer {
+        body::Json(RemoteServerForm {
             id,
             addr,
             port,
@@ -214,7 +216,7 @@ pub async fn update_server(
 
     Ok((
         StatusCode::OK,
-        body::Json(RemoteServer {
+        body::Json(RemoteServerForm {
             id: server_id,
             addr,
             port,

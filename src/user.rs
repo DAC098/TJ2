@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use serde::Serialize;
+use tj2_lib::sec::pki::{PrivateKey, PrivateKeyError};
 
 use crate::db;
 use crate::db::ids::{UserId, UserUid, GroupId, RoleId};
+use crate::error::{self, Context};
 use crate::sec;
 use crate::sec::authz::Role;
-use crate::error::{self, Context};
+use crate::state::Storage;
 
 pub mod invite;
 pub mod group;
@@ -254,6 +256,38 @@ impl UserBuilder {
             }
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum UserGenerateError {
+    #[error(transparent)]
+    Builder(#[from] UserBuilderError),
+
+    #[error(transparent)]
+    Pki(#[from] PrivateKeyError),
+
+    #[error(transparent)]
+    Dir(std::io::Error),
+}
+
+pub async fn generate_user(
+    conn: &impl db::GenericClient,
+    storage: &Storage,
+    builder: UserBuilder
+) -> Result<(User, PrivateKey), UserGenerateError> {
+    let user = builder.build(conn).await?;
+    let user_dir = storage.user_dir(user.id);
+
+    user_dir.create()
+        .await
+        .map_err(|err| UserGenerateError::Dir(err))?;
+
+    let private_key_path = user_dir.private_key();
+    let private_key = PrivateKey::generate()?;
+
+    private_key.save(private_key_path, true).await?;
+
+    Ok((user, private_key))
 }
 
 #[derive(Debug, Clone, Copy)]
