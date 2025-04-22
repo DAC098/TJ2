@@ -36,7 +36,21 @@ create table remote_servers (
     id bigint primary key generated always as identity,
     addr varchar unique not null,
     port int not null,
-    secure boolean not null
+    secure boolean not null,
+    public_key bytea not null unique,
+);
+
+create table remote_server_users (
+    server_id bigint not null references remote_servers (id),
+    users_id bigint not null references users (id),
+    public_key bytea not null unique,
+    unique (server_id, users_id),
+);
+
+create table user_peers (
+    users_id bigint not null references users (id),
+    peer_id bigint not null references remote_servers (id),
+    public_key bytea not null unique
 );
 
 create table authn_totp (

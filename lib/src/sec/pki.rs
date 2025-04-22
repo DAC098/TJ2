@@ -6,6 +6,10 @@ use rand::RngCore;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 
+use crate::error::BoxDynError;
+
+pub use crypto_box::PublicKey;
+
 #[derive(Debug)]
 pub struct PrivateKey {
     created: DateTime<Utc>,
@@ -112,4 +116,24 @@ impl PrivateKey {
 
         Ok(())
     }
+}
+
+use bytes::BytesMut;
+use postgres_types as pg_types;
+
+#[derive(Debug)]
+pub struct PgPublicKey<'a>(pub &'a PublicKey);
+
+impl<'a> pg_types::ToSql for PgPublicKey<'a> {
+    fn to_sql(&self, ty: &pg_types::Type, out: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+            self.0.as_bytes()
+                .as_slice()
+                .to_sql(ty, out)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&[u8] as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
 }
