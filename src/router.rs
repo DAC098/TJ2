@@ -23,10 +23,12 @@ mod assets;
 pub mod macros;
 pub mod body;
 
-mod auth;
 mod journals;
 mod sync;
 mod admin;
+mod login;
+mod logout;
+mod register;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -70,11 +72,11 @@ pub fn build(state: &state::SharedState) -> Router {
     Router::new()
         .route("/", get(retrieve_root))
         .route("/ping", get(ping))
-        .route("/login", get(auth::login)
-            .post(auth::request_login))
-        .route("/register", get(auth::get_register)
-            .post(auth::register))
-        .route("/logout", post(auth::request_logout))
+        .route("/login", get(login::get)
+            .post(login::post))
+        .route("/logout", post(logout::post))
+        .route("/register", get(register::get)
+            .post(register::post))
         .nest("/journals", journals::build(state))
         .nest("/sync", sync::build(state))
         .nest("/admin", admin::build(state))
