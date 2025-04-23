@@ -8,6 +8,7 @@ import {
 import { AppSidebar } from "@/sidebar";
 import { JournalRoutes } from "@/journals";
 import { AdminRoutes } from "@/admin";
+import { SettingsRoutes } from "@/settings";
 
 export function App() {
     return <div className="flex flex-row flex-nowrap w-full h-full">
@@ -18,6 +19,7 @@ export function App() {
                     <Routes>
                         <Route index element={<div>root page</div>}/>
                         <Route path="/journals/*" element={<JournalRoutes />}/>
+                        <Route path="/settings/*" element={<SettingsRoutes />}/>
                         <Route path="/admin/*" element={<AdminRoutes />}/>
                     </Routes>
                 </div>

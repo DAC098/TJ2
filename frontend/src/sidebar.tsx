@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/sidebar";
 import { JournalSidebar } from "@/journals/sidebar";
 import { AdminSidebar } from "@/admin";
+import { SettingsSidebar } from "@/settings";
 
 async function send_logout() {
     let res = await fetch("/logout", {
@@ -228,6 +229,7 @@ function AppSidebar() {
             <Routes>
                 <Route path="/journals/*" element={<JournalSidebar />}/>
                 <Route path="/admin/*" element={<AdminSidebar />}/>
+                <Route path="/settings/*" element={<SettingsSidebar />}/>
             </Routes>
         </Sidebar>
     </Sidebar>

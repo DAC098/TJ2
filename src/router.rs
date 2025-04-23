@@ -29,6 +29,7 @@ mod admin;
 mod login;
 mod logout;
 mod register;
+mod settings;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -78,6 +79,7 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/register", get(register::get)
             .post(register::post))
         .nest("/journals", journals::build(state))
+        .nest("/settings", settings::build(state))
         .nest("/sync", sync::build(state))
         .nest("/admin", admin::build(state))
         .fallback(assets::handle)
