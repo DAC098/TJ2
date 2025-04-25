@@ -14,7 +14,7 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
         .route("/", get(get_))
         .route("/auth", get(auth::get)
-            .post(auth::post))
+            .patch(auth::patch))
 }
 
 async fn get_(

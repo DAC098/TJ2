@@ -1,4 +1,18 @@
+use base64::{engine, alphabet, Engine as _};
+
 pub const HEX_CHARS: [char; 16] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'];
+
+pub fn to_base32<T>(bytes: T) -> String
+where
+    T: AsRef<[u8]>
+{
+    let alphabet = alphabet::Alphabet::new("ABCDEFGHIGJKLMNOPQRSTUVWXYZ234567").unwrap();
+    let config = engine::GeneralPurposeConfig::new();
+
+    let engine = engine::GeneralPurpose::new(&alphabet, config);
+
+    engine.encode(bytes)
+}
 
 pub fn to_hex_str<T>(bytes: T) -> String
 where

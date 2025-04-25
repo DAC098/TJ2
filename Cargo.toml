@@ -103,6 +103,7 @@ features = ["small_rng", "std"]
 
 [workspace.dependencies.argon2]
 version = "0.5"
+features = ["std"]
 
 [workspace.dependencies.validator]
 version = "0.18"
@@ -116,6 +117,10 @@ version = "0.2"
 [workspace.dependencies.crypto_box]
 version = "0.9.1"
 features = ["chacha20", "serde"]
+
+[workspace.dependencies.rust-otp]
+git = "https://github.com/DAC098/rust-otp.git"
+version = "0.3"
 
 # -----------------------------------------------------------------------------
 # templates
@@ -208,6 +213,7 @@ validator = { workspace = true }
 ammonia = { workspace = true }
 x509-cert = { workspace = true }
 crypto_box = { workspace = true }
+rust-otp = { workspace = true }
 
 # templates
 

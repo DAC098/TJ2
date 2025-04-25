@@ -189,6 +189,19 @@ impl Session {
         }
     }
 
+    pub async fn update(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+        let result = conn.execute(
+            "\
+            update authn_sessions \
+            set expires_on = $2, \
+                verified = $3 \
+            where token = $1",
+            &[&self.token, &self.expires_on, &self.verified]
+        ).await?;
+
+        Ok(result == 1)
+    }
+
     pub async fn delete(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
         let result = conn.execute(
             "delete from authn_sessions where token = $1",

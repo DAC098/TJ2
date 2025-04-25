@@ -1,30 +1,18 @@
-use argon2::{Argon2, PasswordVerifier};
-use argon2::password_hash::PasswordHash;
 use axum::extract::Query;
 use axum::http::{StatusCode, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::db;
 use crate::error::{self, Context};
 use crate::header::{Location, is_accepting_html};
 use crate::router::body;
+use crate::sec;
 use crate::sec::authn::{Session, Initiator, InitiatorError};
 use crate::sec::authn::session::SessionOptions;
+use crate::sec::otp;
 use crate::state;
 use crate::user;
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", content = "value")]
-pub enum LoginResult {
-    Success,
-    Failed(LoginFailed)
-}
-
-#[derive(Debug, Serialize)]
-pub enum LoginFailed {
-    UsernameNotFound,
-    InvalidPassword,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct LoginQuery {
@@ -126,65 +114,106 @@ pub struct LoginRequest {
     password: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "value")]
+pub enum LoginResult {
+    Success,
+    Verify
+}
+
+#[derive(Debug, Serialize, thiserror::Error)]
+#[serde(tag = "type")]
+pub enum LoginError {
+    #[error("the specified username was not found")]
+    UsernameNotFound,
+
+    #[error("invalid password provided")]
+    InvalidPassword,
+
+    #[error("user has already been authenticated")]
+    AlreadyAuthenticated,
+
+    // will have to think about how to handle this later on
+    #[error("invalid session id")]
+    InvalidSession,
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    DbPool(#[from] db::PoolError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Hash(#[from] sec::password::HashError),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    Error(#[from] error::Error),
+}
+
+impl IntoResponse for LoginError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            Self::AlreadyAuthenticated => StatusCode::BAD_REQUEST,
+            Self::UsernameNotFound => StatusCode::NOT_FOUND,
+            Self::InvalidPassword => StatusCode::FORBIDDEN,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        (status, body::Json(self)).into_response()
+    }
+}
+
 pub async fn post(
     state: state::SharedState,
+    headers: HeaderMap,
     body::Json(login): body::Json<LoginRequest>,
-) -> Result<Response, error::Error> {
-    let mut conn = state.db()
-        .get()
-        .await
-        .context("failed to retrieve database connection")?;
+) -> Result<impl IntoResponse, LoginError> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    let transaction = conn.transaction()
-        .await
-        .context("failed to create transaction")?;
-
-    let maybe_user = user::User::retrieve_username(&transaction, &login.username)
-        .await
-        .context("database error when searching for login username")?;
-
-    let Some(user) = maybe_user else {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            body::Json(LoginResult::Failed(LoginFailed::UsernameNotFound))
-        ).into_response());
-    };
-
-    let argon_config = Argon2::default();
-    let parsed_hash = match PasswordHash::new(&user.password) {
-        Ok(hash) => hash,
-        Err(err) => {
-            tracing::debug!("argon2 PasswordHash error: {err:#?}");
-
-            return Err(error::Error::context("failed to create argon2 password hash"));
+    match Initiator::from_headers(&transaction, &headers).await {
+        Ok(_) => return Err(LoginError::AlreadyAuthenticated),
+        Err(err) => match err {
+            InitiatorError::Unverified(session) => {
+                session.delete(&transaction).await?;
+            }
+            InitiatorError::DbPg(err) => return Err(LoginError::Db(err)),
+            _ => return Err(LoginError::InvalidSession),
         }
-    };
+    }
 
-    if let Err(err) = argon_config.verify_password(login.password.as_bytes(), &parsed_hash) {
-        tracing::debug!("verify_password failed: {err:#?}");
+    let user = user::User::retrieve(&transaction, &login.username)
+        .await?
+        .ok_or(LoginError::UsernameNotFound)?;
 
-        return Ok((
-            StatusCode::FORBIDDEN,
-            body::Json(LoginResult::Failed(LoginFailed::InvalidPassword))
-        ).into_response());
+    if !sec::password::verify(&user.password, &login.password)? {
+        return Err(LoginError::InvalidPassword);
     }
 
     let mut options = SessionOptions::new(user.id);
     options.authenticated = true;
-    options.verified = true;
 
-    let session = Session::create(&transaction, options)
-        .await
-        .context("failed to create session for login")?;
+    let result = if otp::Totp::exists(&transaction, &user.id).await? {
+        options.verified = false;
 
+        LoginResult::Verify
+    } else {
+        options.verified = true;
+
+        LoginResult::Success
+    };
+
+    let session = Session::create(&transaction, options).await?;
     let session_cookie = session.build_cookie();
 
-    transaction.commit()
-        .await
-        .context("failed to commit transaction for login")?;
+    transaction.commit().await?;
 
     Ok((
         session_cookie,
-        body::Json(LoginResult::Success)
+        body::Json(result)
     ).into_response())
 }

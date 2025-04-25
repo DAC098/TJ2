@@ -39,7 +39,24 @@ impl<'a> pg_types::ToSql for U16toI32<'a> {
     }
 
     fn accepts(ty: &pg_types::Type) -> bool {
-        <&[u8] as pg_types::ToSql>::accepts(ty)
+        <i32 as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
+#[derive(Debug)]
+pub struct U8toI16<'a>(pub &'a u8);
+
+impl<'a> pg_types::ToSql for U8toI16<'a> {
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        let casted: i16 = (*self.0).into();
+
+        casted.to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <i16 as pg_types::ToSql>::accepts(ty)
     }
 
     pg_types::to_sql_checked!();

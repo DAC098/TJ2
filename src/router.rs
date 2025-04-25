@@ -27,6 +27,7 @@ mod journals;
 mod sync;
 mod admin;
 mod login;
+mod verify;
 mod logout;
 mod register;
 mod settings;
@@ -75,6 +76,8 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/ping", get(ping))
         .route("/login", get(login::get)
             .post(login::post))
+        .route("/verify", get(verify::get)
+            .post(verify::post))
         .route("/logout", post(logout::post))
         .route("/register", get(register::get)
             .post(register::post))
