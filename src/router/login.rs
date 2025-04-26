@@ -156,14 +156,23 @@ pub enum LoginError {
 
 impl IntoResponse for LoginError {
     fn into_response(self) -> Response {
-        let status = match self {
-            Self::AlreadyAuthenticated => StatusCode::BAD_REQUEST,
-            Self::UsernameNotFound => StatusCode::NOT_FOUND,
-            Self::InvalidPassword => StatusCode::FORBIDDEN,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        error::log_prefix_error("response error", &self);
 
-        (status, body::Json(self)).into_response()
+        match self {
+            Self::AlreadyAuthenticated => (
+                StatusCode::BAD_REQUEST,
+                body::Json(self)
+            ).into_response(),
+            Self::UsernameNotFound => (
+                StatusCode::NOT_FOUND,
+                body::Json(self)
+            ).into_response(),
+            Self::InvalidPassword => (
+                StatusCode::FORBIDDEN,
+                body::Json(self)
+            ).into_response(),
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
     }
 }
 
@@ -175,9 +184,14 @@ pub async fn post(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    match Initiator::from_headers(&transaction, &headers).await {
+    let result = Initiator::from_headers(&transaction, &headers).await;
+
+    tracing::debug!("initiator result: {result:#?}");
+
+    match result {
         Ok(_) => return Err(LoginError::AlreadyAuthenticated),
         Err(err) => match err {
+            InitiatorError::SessionIdNotFound => {}
             InitiatorError::Unverified(session) => {
                 session.delete(&transaction).await?;
             }

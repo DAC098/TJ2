@@ -38,9 +38,6 @@ pub enum VerifyError {
     #[error("invalid session id")]
     InvalidSession,
 
-    #[error("failed to update session")]
-    UpdateFailed,
-
     #[serde(skip)]
     #[error(transparent)]
     Db(#[from] db::PgError),
@@ -60,14 +57,21 @@ pub enum VerifyError {
 
 impl IntoResponse for VerifyError {
     fn into_response(self) -> Response {
-        let status = match self {
-            Self::InvalidCode |
-            Self::AlreadyVerified => StatusCode::BAD_REQUEST,
-            Self::MFANotFound => StatusCode::NOT_FOUND,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        error::log_prefix_error("response error", &self);
 
-        (status, body::Json(self)).into_response()
+        match self {
+            Self::InvalidSession |
+            Self::InvalidCode |
+            Self::AlreadyVerified => (
+                StatusCode::BAD_REQUEST,
+                body::Json(self)
+            ).into_response(),
+            Self::MFANotFound => (
+                StatusCode::NOT_FOUND,
+                body::Json(self),
+            ).into_response(),
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
     }
 }
 
@@ -98,9 +102,7 @@ pub async fn post(
 
     session.verified = true;
 
-    if !session.update(&transaction).await? {
-        return Err(VerifyError::UpdateFailed);
-    }
+    session.update(&transaction).await?;
 
     transaction.commit().await?;
 

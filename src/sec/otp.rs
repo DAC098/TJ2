@@ -161,11 +161,7 @@ impl Totp {
             ..rust_otp::TotpSettings::default()
         };
 
-        tracing::debug!("verifying code: {} {settings:#?}", given.as_ref());
-
         let result = rust_otp::verify_totp_code(&self.secret, given, &settings)?;
-
-        tracing::debug!("verify result: {result:#?}");
 
         match result {
             rust_otp::VerifyResult::Valid => Ok(true),

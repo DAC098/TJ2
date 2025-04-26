@@ -62,20 +62,28 @@ export function Login() {
         setSending(true);
 
         send_login(data).then(result => {
-            if (result.type == "Success") {
-                console.log("successful");
+            let prev = new URL(location.pathname + location.search, window.location.origin)
+                .searchParams
+                .get("prev");
 
-                let prev = new URL(location.pathname + location.search, window.location.origin)
-                    .searchParams
-                    .get("prev");
+            switch (result.type) {
+                case "Success":
+                    navigate(prev ?? "/journals");
+                    break;
+                case "Verify":
+                    if (prev != null) {
+                        navigate(`/verify?prev=${encodeURI(prev)}`);
+                    } else {
+                        navigate("/verify");
+                    }
 
-                if (prev != null) {
-                    navigate(prev);
-                } else {
-                    navigate("/journals");
-                }
-            } else {
-                console.log("login failed:", result.value);
+                    break;
+                default:
+                    console.log("login failed:", result.type);
+
+                    setSending(false);
+
+                    break;
             }
         }).catch(err => {
             console.error("error when sending login:", err);
