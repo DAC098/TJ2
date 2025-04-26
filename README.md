@@ -14,7 +14,10 @@ Features:
  - [x] Storing text / audio / video for journal entries
  - [x] File uploads
  - [x] Tags with optional values
- - [ ] MFA (U2F, TOTP, Passkey, etc)
+ - [ ] MFA
+   - [x] TOTP
+   - [ ] U2F
+   - [ ] Passkey
  - [ ] Synchronizing journals between servers
  - [ ] Email support (notifications, invites, logins, etc)
  - [ ] Notifications
