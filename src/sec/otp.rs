@@ -2,6 +2,7 @@ use bytes::BytesMut;
 use postgres_types as pg_types;
 use rand::RngCore;
 use serde::{Serialize, Deserialize};
+use serde_repr::{Serialize_repr, Deserialize_repr};
 
 use crate::db;
 use crate::db::ids::UserId;
@@ -9,9 +10,11 @@ use crate::error::BoxDynError;
 
 pub use rust_otp::UnixTimestampError;
 
-pub const SECRET_LEN: usize = 24;
+// we are using 25 bytes to not have padding in the base32 string sent to the
+// user
+pub const SECRET_LEN: usize = 25;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Totp {
     pub users_id: UserId,
     pub algo: Algo,
@@ -20,7 +23,7 @@ pub struct Totp {
     pub secret: Secret,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize_repr, Deserialize_repr)]
 #[repr(u64)]
 pub enum Step {
     Small = 15,
@@ -32,7 +35,7 @@ pub enum Step {
 #[error("invalid step number")]
 pub struct InvalidStep;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Algo {
     Sha1,
     Sha256,
@@ -43,7 +46,7 @@ pub enum Algo {
 #[error("invalid algo number")]
 pub struct InvalidAlgo;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Secret([u8; SECRET_LEN]);
 
 #[derive(Debug, thiserror::Error)]
@@ -53,9 +56,6 @@ pub enum TotpError {
 
     #[error(transparent)]
     Db(#[from] db::PgError),
-
-    #[error(transparent)]
-    Rand(#[from] rand::Error),
 }
 
 impl Totp {
@@ -65,6 +65,21 @@ impl Totp {
         } else {
             Some(given as u8)
         }
+    }
+
+    pub fn generate(users_id: UserId) -> Result<Self, rand::Error> {
+        let digits = 6;
+        let algo = Algo::default();
+        let step = Step::default();
+        let secret = Secret::gen()?;
+
+        Ok(Self {
+            users_id,
+            algo,
+            step,
+            digits,
+            secret,
+        })
     }
 
     pub async fn retrieve(conn: &impl db::GenericClient, users_id: &UserId) -> Result<Option<Self>, db::PgError> {
@@ -102,31 +117,20 @@ impl Totp {
         Ok(result == 1)
     }
 
-    pub async fn create(conn: &impl db::GenericClient, users_id: &UserId) -> Result<Self, TotpError> {
-        let digits = 6;
-        let algo = Algo::default();
-        let step = Step::default();
-        let secret = Secret::gen()?;
-
+    pub async fn save(&self, conn: &impl db::GenericClient) -> Result<(), TotpError> {
         let result = conn.execute(
             "\
-            insert into auth_totp (users_id, algo, step, digits, secret) values \
+            insert into authn_totp (users_id, algo, step, digits, secret) values \
             ($1, $2, $3, $4, $5)",
-            &[users_id, &algo, &step, &db::U8toI16(&digits), &secret]
+            &[&self.users_id, &self.algo, &self.step, &db::U8toI16(&self.digits), &self.secret]
         ).await;
 
         match result {
-            Ok(_count) => Ok(Self {
-                users_id: *users_id,
-                algo,
-                step,
-                digits,
-                secret
-            }),
+            Ok(_count) => Ok(()),
             Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
                 match kind {
                     db::ErrorKind::Unique(constraint) => match constraint {
-                        "" => Err(TotpError::AlreadyExists),
+                        "authn_totp_pkey" => Err(TotpError::AlreadyExists),
                         _ => Err(TotpError::Db(err)),
                     },
                     _ => Err(TotpError::Db(err)),
@@ -137,9 +141,9 @@ impl Totp {
         }
     }
 
-    pub async fn delete(&self, conn: &impl db::GenericClient) -> Result<(), TotpError> {
+    pub async fn delete(&self, conn: &impl db::GenericClient) -> Result<(), db::PgError> {
         conn.execute(
-            "delete from auth_totp where users_id = $1",
+            "delete from authn_totp where users_id = $1",
             &[&self.users_id]
         ).await?;
 
@@ -157,7 +161,11 @@ impl Totp {
             ..rust_otp::TotpSettings::default()
         };
 
+        tracing::debug!("verifying code: {} {settings:#?}", given.as_ref());
+
         let result = rust_otp::verify_totp_code(&self.secret, given, &settings)?;
+
+        tracing::debug!("verify result: {result:#?}");
 
         match result {
             rust_otp::VerifyResult::Valid => Ok(true),
@@ -225,7 +233,7 @@ impl<'a> pg_types::FromSql<'a> for Step {
 
 impl Default for Algo {
     fn default() -> Self {
-        Self::Sha256
+        Self::Sha1
     }
 }
 
@@ -298,7 +306,7 @@ impl Secret {
     }
 
     pub fn as_base32(&self) -> String {
-        tj2_lib::string::to_base32(&self.0)
+        data_encoding::BASE32.encode(&self.0)
     }
 }
 

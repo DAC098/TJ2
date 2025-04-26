@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
@@ -12,6 +13,7 @@ use crate::db;
 use crate::db::ids::{UserId, JournalId, FileEntryId};
 use crate::error::{self, Context};
 use crate::journal::JournalDir;
+use crate::sec::otp::Totp;
 use crate::templates;
 use crate::user::UserDir;
 
@@ -22,6 +24,7 @@ impl SharedState {
     pub async fn new(config: &config::Config) -> Result<Self, error::Error> {
         let db_pool = db::from_config(config).await?;
         let templates = templates::initialize(config)?;
+        let security = Security::new();
 
         Ok(SharedState(Arc::new(State {
             db_pool,
@@ -33,6 +36,7 @@ impl SharedState {
                 path: config.settings.storage.clone(),
             },
             templates,
+            security,
         })))
     }
 
@@ -50,6 +54,10 @@ impl SharedState {
 
     pub fn storage(&self) -> &Storage {
         &self.0.storage
+    }
+
+    pub fn security(&self) -> &Security {
+        &self.0.security
     }
 
     pub async fn db_conn(&self) -> Result<db::Object, error::Error> {
@@ -74,6 +82,7 @@ pub struct State {
     assets: Assets,
     storage: Storage,
     templates: tera::Tera,
+    security: Security,
 }
 
 #[derive(Debug)]
@@ -136,5 +145,34 @@ impl FromRequestParts<SharedState> for Storage {
         state: &SharedState
     ) -> Result<Self, Self::Rejection> {
         Ok(state.0.storage.clone())
+    }
+}
+
+#[derive(Debug)]
+pub struct Security {
+    pub vetting: Vetting
+}
+
+#[derive(Debug)]
+pub struct Vetting {
+    pub totp: moka::sync::Cache<UserId, Totp>
+}
+
+impl Security {
+    fn new() -> Self {
+        Self {
+            vetting: Vetting::new(),
+        }
+    }
+}
+
+impl Vetting {
+    fn new() -> Self {
+        let totp = moka::sync::Cache::builder()
+            .max_capacity(1000)
+            .time_to_live(Duration::from_secs(3 * 60))
+            .build();
+
+        Self { totp }
     }
 }

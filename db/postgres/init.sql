@@ -57,7 +57,7 @@ create table authn_totp (
     users_id bigint primary key not null references users (id),
     algo int not null,
     step int not null,
-    digits int not null,
+    digits smallint not null,
     secret bytea not null
 );
 

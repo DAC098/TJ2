@@ -3,32 +3,47 @@ use axum::response::{Response, IntoResponse};
 use serde::{Serialize, Deserialize};
 
 use crate::db;
-use crate::error;
+use crate::error::{self, Context};
 use crate::router::{body, macros};
-use crate::state;
+use crate::state::{self, Security};
 use crate::sec::authn::Initiator;
 use crate::sec::otp;
 use crate::user::User;
 
+#[derive(Debug, Serialize)]
+pub struct AuthSettings {
+    totp: bool
+}
+
 pub async fn get(
     state: state::SharedState,
-    _initiator: Initiator,
+    initiator: Initiator,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
-    Ok(body::Json("ok").into_response())
+    let conn = state.db()
+        .get()
+        .await
+        .context("failed to retrieve database connection")?;
+
+    let totp = otp::Totp::exists(&conn, &initiator.user.id)
+        .await
+        .context("failed to check totp")?;
+
+    Ok(body::Json(AuthSettings {
+        totp
+    }).into_response())
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum UpdateAuth {
-    Totp(UpdateTotp),
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateTotp {
-    enable: bool,
+    EnableTotp,
+    DisableTotp,
+    VerifyTotp {
+        code: String
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +52,7 @@ pub enum ResultAuth {
     Noop,
     CreatedTotp(ResultTotp),
     DeletedTotp,
+    VerifiedTotp,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +66,15 @@ pub struct ResultTotp {
 #[derive(Debug, Serialize, thiserror::Error)]
 #[serde(tag = "type")]
 pub enum UpdateAuthError {
+    #[error("the provided totp code is invalid")]
+    InvalidTotpCode,
+
+    #[error("totp does not exist")]
+    TotpNotFound,
+
+    #[error("a totp registration already exists")]
+    AlreadyExists,
+
     #[serde(skip)]
     #[error(transparent)]
     Db(#[from] db::PgError),
@@ -65,15 +90,28 @@ pub enum UpdateAuthError {
     #[serde(skip)]
     #[error(transparent)]
     Rand(#[from] rand::Error),
+
+    #[serde(skip)]
+    #[error(transparent)]
+    UnixTimestamp(#[from] otp::UnixTimestampError),
 }
 
 impl IntoResponse for UpdateAuthError {
     fn into_response(self) -> Response {
-        let status = match self {
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        error::log_prefix_error("response error", &self);
 
-        (status, body::Json(self)).into_response()
+        match self {
+            Self::AlreadyExists |
+            Self::InvalidTotpCode => (
+                StatusCode::BAD_REQUEST,
+                body::Json(self),
+            ).into_response(),
+            Self::TotpNotFound => (
+                StatusCode::NOT_FOUND,
+                body::Json(self),
+            ).into_response(),
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
     }
 }
 
@@ -86,9 +124,15 @@ pub async fn patch(
     let transaction = conn.transaction().await?;
 
     let result = match action {
-        UpdateAuth::Totp(options) => update_totp(
-            &transaction, initiator.user, options
+        UpdateAuth::EnableTotp => enable_totp(
+            state.security(), &transaction, initiator.user
         ).await?,
+        UpdateAuth::DisableTotp => disable_totp(
+            state.security(), &transaction, initiator.user
+        ).await?,
+        UpdateAuth::VerifyTotp { code } => verify_totp(
+            state.security(), &transaction, initiator.user, code
+        ).await?
     };
 
     transaction.commit().await?;
@@ -96,37 +140,77 @@ pub async fn patch(
     Ok(body::Json(result))
 }
 
-pub async fn update_totp(
+pub async fn enable_totp(
+    security: &Security,
+    conn: &impl db::GenericClient,
+    user: User
+) -> Result<ResultAuth, UpdateAuthError> {
+    if otp::Totp::exists(conn, &user.id).await? {
+        return Ok(ResultAuth::Noop);
+    }
+
+    let totp = match security.vetting.totp.get(&user.id) {
+        Some(cached) => cached,
+        None => {
+            let gen = otp::Totp::generate(user.id)?;
+
+            security.vetting.totp.insert(user.id, gen.clone());
+
+            gen
+        }
+    };
+
+    let otp::Totp { algo, step, digits, secret, .. } = totp;
+
+    Ok(ResultAuth::CreatedTotp(ResultTotp {
+        algo,
+        step,
+        digits,
+        secret: secret.as_base32(),
+    }))
+}
+
+pub async fn verify_totp(
+    security: &Security,
     conn: &impl db::GenericClient,
     user: User,
-    UpdateTotp {
-        enable
-    }: UpdateTotp
+    code: String,
 ) -> Result<ResultAuth, UpdateAuthError> {
-    let maybe_exists = otp::Totp::retrieve(conn, &user.id).await?;
+    if otp::Totp::exists(conn, &user.id).await? {
+        return Ok(ResultAuth::Noop);
+    }
 
-    match (enable, maybe_exists) {
-        (true, Some(_)) => Ok(ResultAuth::Noop),
-        (true, None) => match otp::Totp::create(conn, &user.id).await {
-            Ok(otp::Totp { algo, step, digits, secret, .. }) => Ok(ResultAuth::CreatedTotp(ResultTotp {
-                algo,
-                step,
-                digits,
-                secret: secret.as_base32(),
-            })),
-            Err(err) => match err {
-                otp::TotpError::Db(err) => Err(UpdateAuthError::Db(err)),
-                otp::TotpError::Rand(err) => Err(UpdateAuthError::Rand(err)),
-                otp::TotpError::AlreadyExists => Ok(ResultAuth::Noop),
+    match security.vetting.totp.get(&user.id) {
+        Some(record) => if record.verify(code)? {
+            if let Err(err) = record.save(conn).await {
+                return match err {
+                    otp::TotpError::AlreadyExists => Err(UpdateAuthError::AlreadyExists),
+                    otp::TotpError::Db(err) => Err(UpdateAuthError::Db(err)),
+                };
             }
+
+            security.vetting.totp.invalidate(&user.id);
+
+            Ok(ResultAuth::VerifiedTotp)
+        } else {
+            Err(UpdateAuthError::InvalidTotpCode)
         },
-        (false, Some(record)) => match record.delete(conn).await {
+        None => Err(UpdateAuthError::TotpNotFound)
+    }
+}
+
+pub async fn disable_totp(
+    security: &Security,
+    conn: &impl db::GenericClient,
+    user: User,
+) -> Result<ResultAuth, UpdateAuthError> {
+    security.vetting.totp.invalidate(&user.id);
+
+    match otp::Totp::retrieve(conn, &user.id).await? {
+        Some(record) => match record.delete(conn).await {
             Ok(_) => Ok(ResultAuth::DeletedTotp),
-            Err(err) => match err {
-                otp::TotpError::Db(err) => Err(UpdateAuthError::Db(err)),
-                _ => unreachable!(),
-            }
+            Err(err) => Err(UpdateAuthError::Db(err)),
         },
-        (false, None) => Ok(ResultAuth::Noop),
+        None => Ok(ResultAuth::Noop)
     }
 }
