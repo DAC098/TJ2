@@ -146,6 +146,30 @@ function TotpEdit() {
 
     const [state, set_state] = useState<TotpState>({type: "disabled"});
 
+    async function fetch_totp() {
+        set_loading(true);
+
+        try {
+            let res = await fetch("/settings/auth?kind=Totp")
+
+            if (res.status === 200) {
+                let json = await res.json();
+
+                if (json.type === "Totp") {
+                    set_state({type: json.enabled ? "enabled" : "disabled"});
+                } else {
+                    console.warn("unhandled response type", json.type);
+                }
+            } else {
+                console.warn("unhandled response code");
+            }
+        } catch (err) {
+            console.error("failed to retrieve totp settings", err);
+        }
+
+        set_loading(false);
+    }
+
     async function enable_totp() {
         set_loading(true);
 
@@ -288,6 +312,12 @@ function TotpEdit() {
         set_loading(false);
     }
 
+    useEffect(() => {
+        fetch_totp();
+
+        return () => {};
+    }, []);
+
     let button;
 
     switch (state.type) {
@@ -375,6 +405,9 @@ function TotpEdit() {
                         null
                     }
                 </div>
+                <p className="text-xs">
+                    You have 3 minutes to verify that your Authenticator works before the server discards the data.
+                </p>
                 <Input className="w-1/2" value={code} disabled={loading} onChange={e => {
                     set_code(e.target.value);
                 }}/>

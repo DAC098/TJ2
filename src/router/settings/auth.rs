@@ -1,3 +1,4 @@
+use axum::extract::Query;
 use axum::http::{StatusCode, HeaderMap};
 use axum::response::{Response, IntoResponse};
 use serde::{Serialize, Deserialize};
@@ -11,29 +12,51 @@ use crate::sec::otp;
 use crate::user::User;
 
 #[derive(Debug, Serialize)]
-pub struct AuthSettings {
-    totp: bool
+#[serde(tag = "type")]
+pub enum AuthSettings {
+    Totp {
+        enabled: bool
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthQuery {
+    kind: Option<AuthKind>
+}
+
+#[derive(Debug, Deserialize)]
+pub enum AuthKind {
+    Totp
 }
 
 pub async fn get(
     state: state::SharedState,
     initiator: Initiator,
+    Query(AuthQuery {
+        kind
+    }): Query<AuthQuery>,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
+
+    let Some(kind) = kind else {
+        return Ok(body::Json("okay").into_response());
+    };
 
     let conn = state.db()
         .get()
         .await
         .context("failed to retrieve database connection")?;
 
-    let totp = otp::Totp::exists(&conn, &initiator.user.id)
-        .await
-        .context("failed to check totp")?;
+    let result = match kind {
+        AuthKind::Totp => AuthSettings::Totp {
+            enabled: otp::Totp::exists(&conn, &initiator.user.id)
+                .await
+                .context("failed to check totp")?
+        }
+    };
 
-    Ok(body::Json(AuthSettings {
-        totp
-    }).into_response())
+    Ok(body::Json(result).into_response())
 }
 
 #[derive(Debug, Deserialize)]
