@@ -1,7 +1,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use serde::{Serialize, Deserialize};
-use tj2_lib::sec::pki::{PgPublicKey, PublicKey};
+use tj2_lib::sec::pki::PublicKey;
 use url::Url;
 
 use crate::db;
@@ -67,7 +67,7 @@ impl RemoteServer {
                        remote_servers.public_key \
                 from remote_servers \
                 where remote_servers.public_key = $1",
-                &[&PgPublicKey(key)]
+                &[&db::ToBytea(key)]
             ).await
         }
             .map(|result| result.map(|row| {

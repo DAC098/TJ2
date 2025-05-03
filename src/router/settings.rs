@@ -9,6 +9,7 @@ use crate::state;
 use crate::sec::authn::Initiator;
 
 mod auth;
+mod peer_client;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()

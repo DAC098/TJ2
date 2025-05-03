@@ -62,6 +62,40 @@ impl<'a> pg_types::ToSql for U8toI16<'a> {
     pg_types::to_sql_checked!();
 }
 
+#[derive(Debug)]
+pub struct ToBytea<'a, T>(pub &'a T)
+where
+    T: AsRef<[u8]> + std::fmt::Debug;
+
+impl<'a, T> pg_types::ToSql for ToBytea<'a, T>
+where
+    T: AsRef<[u8]> + std::fmt::Debug
+{
+    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+        self.0.as_ref().to_sql(ty, w)
+    }
+
+    fn accepts(ty: &pg_types::Type) -> bool {
+        <&[u8] as pg_types::ToSql>::accepts(ty)
+    }
+
+    pg_types::to_sql_checked!();
+}
+
+pub fn try_from_bytea<'a, T>(given: &'a [u8]) -> Result<T, T::Error>
+where
+    T: TryFrom<&'a [u8]>,
+{
+    given.try_into()
+}
+
+pub fn try_from_int<T>(given: i32) -> Result<T, T::Error>
+where
+    T: TryFrom<i32>
+{
+    given.try_into()
+}
+
 /// creates the postgres database connection pool
 ///
 /// the connection pool will be limited for 4

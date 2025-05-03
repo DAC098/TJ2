@@ -6,7 +6,7 @@ use axum::response::{Response, IntoResponse};
 use axum::routing::post;
 use futures::StreamExt;
 use serde::{Serialize, Deserialize};
-use tj2_lib::sec::pki::{PgPublicKey, PublicKey, PrivateKey, PrivateKeyError};
+use tj2_lib::sec::pki::{PublicKey, PrivateKey, PrivateKeyError};
 
 use crate::db;
 use crate::db::ids::{
@@ -657,7 +657,7 @@ pub async fn register_user(
         "\
         insert into remote_server_users (server_id, users_id, public_key) values \
         ($1, $2, $3)",
-        &[&server.id, &user.id, &PgPublicKey(&public_key)]
+        &[&server.id, &user.id, &db::ToBytea(&public_key)]
     ).await?;
 
     let user_dir = storage.user_dir(user.id);
@@ -690,7 +690,7 @@ pub async fn register_peer(
         insert into remote_servers (addr, port, secure, public_key) values \
         ($1, $2, $3, $4) \
         returning id",
-        &[&addr, &db::U16toI32(&port), &PgPublicKey(&public_key)]
+        &[&addr, &db::U16toI32(&port), &db::ToBytea(&public_key)]
     ).await;
 
     let record = result.map_err(|err| if let Some(kind) = db::ErrorKind::check(&err) {

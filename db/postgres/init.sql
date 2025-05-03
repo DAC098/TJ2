@@ -8,6 +8,26 @@ create table users (
     updated timestamp with time zone
 );
 
+create table user_client_keys (
+    users_id bigint not null references users (id),
+    name varchar not null,
+    public_key bytea not null unique,
+    created timestamp with time zone not null,
+    updated timestamp with time zone,
+    unique(users_id, name)
+);
+
+create table user_peer_keys (
+    users_id bigint not null references users (id),
+    name varchar not null,
+    public_key bytea not null unique,
+    peer_addr varchar not null,
+    peer_port int not null,
+    created timestamp with time zone not null,
+    updated timestamp with time zone,
+    unique (users_id, name)
+);
+
 create table user_invites (
     token varchar primary key not null,
     name varchar not null unique,
@@ -37,14 +57,14 @@ create table remote_servers (
     addr varchar unique not null,
     port int not null,
     secure boolean not null,
-    public_key bytea not null unique,
+    public_key bytea not null unique
 );
 
 create table remote_server_users (
     server_id bigint not null references remote_servers (id),
     users_id bigint not null references users (id),
     public_key bytea not null unique,
-    unique (server_id, users_id),
+    unique (server_id, users_id)
 );
 
 create table user_peers (
