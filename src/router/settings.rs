@@ -16,6 +16,9 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         .route("/", get(get_))
         .route("/auth", get(auth::get)
             .patch(auth::patch))
+        .route("/peer_client", get(peer_client::get)
+            .post(peer_client::post)
+            .delete(peer_client::delete))
 }
 
 async fn get_(
