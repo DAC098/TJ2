@@ -184,6 +184,7 @@ pub struct CustomFieldFull {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "type")]
 pub enum JournalFull {
     Local {
         id: JournalId,
