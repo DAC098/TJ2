@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { send_to_clipboard } from "@/utils";
 
 interface AuthSettings {
     password: {
@@ -423,14 +424,4 @@ function TotpEdit() {
             null
         }
     </div>;
-}
-
-async function send_to_clipboard(text: string): Promise<void> {
-    let clipboard_data = {
-        "text/plain": text
-    };
-
-    let clipboard_item = new ClipboardItem(clipboard_data);
-
-    await navigator.clipboard.write([clipboard_item]);
 }

@@ -60,7 +60,7 @@ pub async fn get(
     );
 
     Ok(body::Json(UserKeys {
-        public_key: tj2_lib::string::to_hex_str(&public_key),
+        public_key: tj2_lib::string::to_base64(&public_key),
         clients: res_clients?,
         peers: res_peers?,
     }).into_response())
@@ -77,7 +77,8 @@ pub async fn retrieve_user_clients(
                user_client_keys.created, \
                user_client_keys.updated \
         from user_client_keys \
-        where user_client_keys.users_id = $1",
+        where user_client_keys.users_id = $1 \
+        order by user_client_keys.name",
         &[users_id]
     ).await.context("failed to retrieve client keys")?;
 
@@ -93,7 +94,7 @@ pub async fn retrieve_user_clients(
 
         rtn.push(UserClient {
             name: record.get(0),
-            public_key: tj2_lib::string::to_hex_str(&key),
+            public_key: tj2_lib::string::to_base64(&key),
             created: record.get(2),
             updated: record.get(3),
         });
@@ -115,7 +116,8 @@ pub async fn retrieve_user_peers(
                user_peer_keys.created, \
                user_peer_keys.updated \
         from user_peer_keys \
-        where user_peer_keys.users_id = $1",
+        where user_peer_keys.users_id = $1 \
+        order by user_peer_keys.name",
         &[users_id]
     ).await.context("failed to retrieve peer keys")?;
 
@@ -133,7 +135,7 @@ pub async fn retrieve_user_peers(
 
         rtn.push(UserPeer {
             name: record.get(0),
-            public_key: tj2_lib::string::to_hex_str(&key),
+            public_key: tj2_lib::string::to_base64(&key),
             peer_addr: record.get(2),
             peer_port,
             created: record.get(4),
@@ -240,7 +242,7 @@ pub async fn create_client(
     let updated = None;
 
     let pub_key = {
-        let Some(bytes) = tj2_lib::string::from_hex_str(&public_key) else {
+        let Some(bytes) = tj2_lib::string::from_base64(&public_key) else {
             return Err(NewClientError::InvalidPublicKey);
         };
 
@@ -297,7 +299,7 @@ pub async fn create_peer(
     let updated = None;
 
     let pub_key = {
-        let Some(bytes) = tj2_lib::string::from_hex_str(&public_key) else {
+        let Some(bytes) = tj2_lib::string::from_base64(&public_key) else {
             return Err(NewClientError::InvalidPublicKey);
         };
 

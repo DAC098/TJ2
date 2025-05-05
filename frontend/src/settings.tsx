@@ -18,6 +18,7 @@ import {
 import { cn } from "@/utils";
 
 import { Auth } from "@/settings/auth";
+import { PeerClient } from "@/settings/peer_client";
 
 interface MenuOptionProps {
     title: string,
@@ -56,6 +57,11 @@ export function SettingsSidebar() {
                         active={location.pathname === "/settings/auth"}
                         icon={<Shield />}
                     />
+                    <MenuOption
+                        title="Peers / Clients"
+                        path="/settings/peer_client"
+                        active={location.pathname === "/settings/peer_client"}
+                    />
                 </SidebarMenu>
             </SidebarGroupContent>
         </SidebarGroup>
@@ -66,5 +72,6 @@ export function SettingsRoutes() {
     return <Routes>
         <Route index element={<span>Settings Index</span>}/>
         <Route path="/auth" element={<Auth />}/>
+        <Route path="/peer_client" element={<PeerClient />}/>
     </Routes>
 }

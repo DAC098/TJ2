@@ -1,17 +1,31 @@
-use base64::{engine, alphabet, Engine as _};
-
 pub const HEX_CHARS: [char; 16] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'];
 
 pub fn to_base32<T>(bytes: T) -> String
 where
     T: AsRef<[u8]>
 {
-    let alphabet = alphabet::Alphabet::new("ABCDEFGHIGJKLMNOPQRSTUVWXYZ234567").unwrap();
-    let config = engine::GeneralPurposeConfig::new();
+    data_encoding::BASE32.encode(bytes.as_ref())
+}
 
-    let engine = engine::GeneralPurpose::new(&alphabet, config);
+pub fn from_base32<T>(given: T) -> Option<Vec<u8>>
+where
+    T: AsRef<[u8]>
+{
+    data_encoding::BASE32.decode(given.as_ref()).ok()
+}
 
-    engine.encode(bytes)
+pub fn to_base64<T>(bytes: T) -> String
+where
+    T: AsRef<[u8]>
+{
+    data_encoding::BASE64URL.encode(bytes.as_ref())
+}
+
+pub fn from_base64<T>(given: T) -> Option<Vec<u8>>
+where
+    T: AsRef<[u8]>
+{
+    data_encoding::BASE64URL.decode(given.as_ref()).ok()
 }
 
 pub fn to_hex_str<T>(bytes: T) -> String
