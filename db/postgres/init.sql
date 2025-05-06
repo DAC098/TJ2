@@ -8,7 +8,8 @@ create table users (
     updated timestamp with time zone
 );
 
-create table user_client_keys (
+create table user_clients (
+    id bigint primary key generated always as identity,
     users_id bigint not null references users (id),
     name varchar not null,
     public_key bytea not null unique,
@@ -17,12 +18,15 @@ create table user_client_keys (
     unique(users_id, name)
 );
 
-create table user_peer_keys (
+create table user_peers (
+    id bigint primary key generated always as identity,
     users_id bigint not null references users (id),
     name varchar not null,
     public_key bytea not null unique,
-    peer_addr varchar not null,
-    peer_port int not null,
+    addr varchar not null,
+    port int not null,
+    secure boolean not null default true,
+    ssc boolean not null default false,
     created timestamp with time zone not null,
     updated timestamp with time zone,
     unique (users_id, name)
@@ -65,12 +69,6 @@ create table remote_server_users (
     users_id bigint not null references users (id),
     public_key bytea not null unique,
     unique (server_id, users_id)
-);
-
-create table user_peers (
-    users_id bigint not null references users (id),
-    peer_id bigint not null references remote_servers (id),
-    public_key bytea not null unique
 );
 
 create table authn_totp (

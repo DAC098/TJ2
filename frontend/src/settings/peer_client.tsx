@@ -5,6 +5,7 @@ import { useForm, useFormContext, FormProvider, SubmitHandler, Form } from "reac
 import { Link, useParams, useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
     Dialog,
     DialogContent,
@@ -37,6 +38,7 @@ interface UserKeys {
 }
 
 interface UserClient {
+    id: number,
     name: string,
     public_key: string,
     created: string,
@@ -44,10 +46,13 @@ interface UserClient {
 }
 
 interface UserPeer {
+    id: number,
     name: string,
     public_key: string,
-    peer_addr: string,
-    peer_port: number,
+    addr: string,
+    port: number,
+    secure: boolean,
+    ssc: boolean,
     created: string,
     updated: string,
 }
@@ -126,9 +131,9 @@ export function PeerClient() {
                     });
                 }}/>
             </div>
-            <ClientList clients={user_keys.clients} on_delete={(name) => {
+            <ClientList clients={user_keys.clients} on_delete={(id) => {
                 set_user_keys(value => {
-                    let filtered = value.clients.filter(c => c.name !== name);
+                    let filtered = value.clients.filter(c => c.id !== id);
 
                     return {
                         ...value,
@@ -159,9 +164,9 @@ export function PeerClient() {
                     });
                 }}/>
             </div>
-            <PeerList peers={user_keys.peers} on_delete={(name) => {
+            <PeerList peers={user_keys.peers} on_delete={(id) => {
                 set_user_keys(value => {
-                    let filtered = value.peers.filter(p => p.name !== name);
+                    let filtered = value.peers.filter(p => p.id !== id);
 
                     return {
                         ...value,
@@ -175,16 +180,16 @@ export function PeerClient() {
 
 interface ClientListProps {
     clients: UserClient[]
-    on_delete: (string) => void,
+    on_delete: (number) => void,
 }
 
 function ClientList({clients, on_delete}: ClientListProps) {
     return <>
         {clients.map((client) => <ClientListItem
-            key={client.name}
+            key={client.id}
             client={client}
             on_delete={() => {
-                on_delete(client.name);
+                on_delete(client.id);
             }}
         />)}
     </>;
@@ -204,7 +209,7 @@ function ClientListItem({client, on_delete}: ClientListItemProps) {
         try {
             let body = JSON.stringify({
                 type: "Client",
-                name: client.name,
+                id: client.id,
             });
             let res = await fetch("/settings/peer_client", {
                 method: "DELETE",
@@ -248,7 +253,7 @@ function ClientListItem({client, on_delete}: ClientListItemProps) {
         update_ele = <span title={update_date}>Modified: {update_distance}</span>;
     }
 
-    return <div key={client.name} className="rounded-lg border p-4 space-y-4">
+    return <div className="rounded-lg border p-4 space-y-4">
         <div className="flex flex-row items-center justify-between">
             <h3 className="text-lg grow">{client.name}</h3>
             <Button
@@ -372,16 +377,16 @@ function AddClient({on_added}: AddClientProps) {
 
 interface PeerListProps {
     peers: UserPeer[],
-    on_delete: (string) => void,
+    on_delete: (number) => void,
 }
 
 function PeerList({peers, on_delete}: PeerListProps) {
     return <>
         {peers.map((peer) => <PeerListItem
-            key={peer.name}
+            key={peer.id}
             peer={peer}
             on_delete={() => {
-                on_delete(peer.name);
+                on_delete(peer.id);
             }}
         />)}
     </>;
@@ -401,7 +406,7 @@ function PeerListItem({peer, on_delete}: PeerListItemProps) {
         try {
             let body = JSON.stringify({
                 type: "Peer",
-                name: peer.name,
+                id: peer.id,
             });
             let res = await fetch("/settings/peer_client", {
                 method: "DELETE",
@@ -450,9 +455,9 @@ function PeerListItem({peer, on_delete}: PeerListItemProps) {
             <div className="flex flex-row items-center gap-x-2 grow">
                 <h3 className="text-lg">{peer.name}</h3>
                 /
-                <span className="text-sm">{peer.peer_addr}</span>
+                <span className="text-sm">{peer.addr}</span>
                 /
-                <span className="text-sm">{peer.peer_port}</span>
+                <span className="text-sm">{peer.port}</span>
             </div>
             <Button
                 type="button"
@@ -465,6 +470,16 @@ function PeerListItem({peer, on_delete}: PeerListItemProps) {
             </Button>
         </div>
         <div className="flex flex-col gap-y-1">
+            <div className="flex flex-row gap-x-4">
+                <div className="flex flex-row gap-x-2">
+                    <Checkbox checked={peer.secure} disabled/>
+                    <span className="leading-none">Secure</span>
+                </div>
+                <div className="flex flex-row gap-x-2">
+                    <Checkbox checked={peer.ssc} disabled/>
+                    <span className="leading-none">Self-Signed Certificate</span>
+                </div>
+            </div>
             <span>Public Key: {peer.public_key}</span>
             <span title={create_date}>Created: {create_distance}</span>
             {update_ele}
@@ -475,8 +490,10 @@ function PeerListItem({peer, on_delete}: PeerListItemProps) {
 interface NewPeer {
     name: string,
     public_key: string,
-    peer_addr: string,
-    peer_port: number,
+    addr: string,
+    port: number,
+    secure: boolean,
+    ssc: boolean
 }
 
 interface AddPeerProps {
@@ -490,19 +507,21 @@ function AddPeer({on_added}: AddPeerProps) {
         defaultValues: {
             name: "",
             public_key: "",
-            peer_addr: "",
-            peer_port: 8080
+            addr: "",
+            port: 8080,
+            secure: true,
+            ssc: false,
         }
     });
 
     const on_submit: SubmitHandler<NewPeer> = async (data, event) => {
         try {
-            let peer_port = parseInt(data.peer_port, 10);
+            let port = parseInt(data.port, 10);
 
             let body = JSON.stringify({
                 type: "Peer",
                 ...data,
-                peer_port,
+                port,
             });
             let res = await fetch("/settings/peer_client", {
                 method: "POST",
@@ -561,23 +580,43 @@ function AddPeer({on_added}: AddPeerProps) {
                         </FormItem>
                     }}/>
                     <div className="flex flex-row flex-nowrap items-center gap-4">
-                        <FormField control={form.control} name="peer_addr" render={({field}) => {
+                        <FormField control={form.control} name="addr" render={({field}) => {
                             return <FormItem className="grow">
-                                <FormLabel>Peer Address</FormLabel>
+                                <FormLabel>Address</FormLabel>
                                 <FormControl>
                                     <Input type="text" {...field}/>
                                 </FormControl>
                             </FormItem>
                         }}/>
-                        <FormField control={form.control} name="peer_port" render={({field}) => {
+                        <FormField control={form.control} name="port" render={({field}) => {
                             return <FormItem className="w-1/4">
-                                <FormLabel>Peer Port</FormLabel>
+                                <FormLabel>Port</FormLabel>
                                 <FormControl>
                                     <Input type="number" {...field}/>
                                 </FormControl>
                             </FormItem>
                         }}/>
                     </div>
+                    <FormField control={form.control} name="secure" render={({field}) => {
+                        return <FormItem className="flex flex-row items-start space-x-2 space-y-0">
+                            <FormControl>
+                                <Checkbox checked={field.value} onCheckedChange={field.onChange}/>
+                            </FormControl>
+                            <div className="space-y-1 leading-none">
+                                <FormLabel>Secure Connection</FormLabel>
+                            </div>
+                        </FormItem>
+                    }}/>
+                    <FormField control={form.control} name="ssc" render={({field}) => {
+                        return <FormItem className="flex flex-row items-start space-x-2 space-y-0">
+                            <FormControl>
+                                <Checkbox checked={field.value} onCheckedChange={field.onChange}/>
+                            </FormControl>
+                            <div className="space-y-1 leading-none">
+                                <FormLabel>Self-Signed Certificate</FormLabel>
+                            </div>
+                        </FormItem>
+                    }}/>
                     <FormField control={form.control} name="public_key" render={({field}) => {
                         return <FormItem>
                             <FormLabel>Public Key</FormLabel>

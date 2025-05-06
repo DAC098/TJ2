@@ -317,6 +317,9 @@ uid_type!(InviteToken, 8);
 
 id_type!(RemoteServerId);
 
+id_type!(UserClientId);
+id_type!(UserPeerId);
+
 /// creates a list of unique ids from a given list
 ///
 /// if a current dictionary of known ids is provided then it will create a list
