@@ -8,6 +8,12 @@ export interface JournalForm {
     custom_fields: JournalCustomFieldForm[],
 }
 
+export interface JournalPeerForm {
+    user_peers_id: number,
+    name: string,
+    synced: string | null,
+}
+
 export interface JournalCustomFieldForm {
     _id: number | null,
     uid: string | null,
@@ -95,6 +101,7 @@ export function blank_journal_form(): JournalForm {
         name: "",
         description: "",
         custom_fields: [],
+        peers: [],
     };
 }
 

@@ -15,6 +15,7 @@ use crate::state::Storage;
 
 pub mod invite;
 pub mod group;
+pub mod peer;
 
 use group::Group;
 

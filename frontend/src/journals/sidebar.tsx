@@ -39,6 +39,38 @@ interface JournalOptionsProps {
 }
 
 function JournalOptions({journals_id}: JournalOptionsProps) {
+    const [syncing, set_syncing] = useState(false);
+
+    const sync_journal = async () => {
+        if (syncing) {
+            return;
+        }
+
+        set_syncing(true);
+
+        try {
+            let body = JSON.stringify({});
+            let res = await fetch(`/journals/${journals_id}/sync`, {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                    "content-length": body.length.toString(10),
+                },
+                body
+            });
+
+            if (res.status !== 202 && res.status !== 200) {
+                let json = await res.json();
+
+                console.warn("failed to sync journal", json);
+            }
+        } catch (err) {
+            console.error("error when syncing journal", err);
+        }
+
+        set_syncing(false);
+    };
+
     return <div className="absolute top-2 right-2">
         <Link to={`/journals/${journals_id}/entries/new`}>
             <Button type="button" variant="ghost" size="icon" title="New Entry">
@@ -57,12 +89,54 @@ function JournalOptions({journals_id}: JournalOptionsProps) {
                         <Pencil />Edit
                     </DropdownMenuItem>
                 </Link>
+                <DropdownMenuItem disabled={syncing} onClick={() => {
+                    sync_journal();
+                }}>
+                    <RefreshCcw/>Synchronize
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
-                    <Trash />Delete
+                    <Trash/>Delete
                 </DropdownMenuItem>
             </DropdownMenuContent>
         </DropdownMenu>
+    </div>;
+}
+
+interface JournalItemProps {
+    journal: JournalPartial,
+}
+
+function JournalItem({journal}: JournalItemProps) {
+    let created_ts = new Date(journal.created);
+    let updated_ts = journal.updated != null ? new Date(journal.updated) : null;
+    let path_prefix = `/journals/${journal.id}`;
+
+    return <div
+        className={cn(
+            "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground border-b relative",
+            {"bg-sidebar-accent text-sidebar-accent-forground": location.pathname.startsWith(path_prefix)},
+        )}
+    >
+        <Link to={`${path_prefix}/entries`}>
+            <div className="p-4 space-y-2">
+                <h2 className="text-xl w-1/2 truncate font-semibold">{journal.name}</h2>
+                <p>{journal.description}</p>
+                <div className="flex flex-row flex-nowrap">
+                    <span title={format(created_ts, "Pp")} className="pr-2">
+                        C: {format(created_ts, "yyyy/MM/dd")}
+                    </span>
+                    {updated_ts != null ?
+                        <span title={format(updated_ts, "Pp")} className="pl-2 border-l">
+                            U: {format(updated_ts, "yyyy/MM/dd")}
+                        </span>
+                        :
+                        null
+                    }
+                </div>
+            </div>
+        </Link>
+        <JournalOptions journals_id={journal.id}/>
     </div>;
 }
 
@@ -72,66 +146,43 @@ function JournalSidebar() {
     let [loading, set_loading] = useState(false);
     let [data, set_data] = useState<JournalPartial[]>([]);
 
-    useEffect(() => {
+    const search_journals = async () => {
+        if (loading) {
+            return;
+        }
+
         set_loading(true);
 
-        get_journals().then(list=> {
-            if (list == null) {
-                return;
-            }
+        try {
+            let journals = await get_journals();
 
-            set_data(list);
-        }).catch(err => {
-            console.error("failed to load journal list");
-        }).finally(() => {
-            set_loading(false);
-        });
+            set_data(journals);
+        } catch (err) {
+            console.error("failed to load journal list", err);
+        }
+
+        set_loading(false);
+    };
+
+    useEffect(() => {
+        search_journals();
     }, []);
 
-    let data_elements = data.map((journal, index) => {
-        let created_ts = new Date(journal.created);
-        let updated_ts = journal.updated != null ? new Date(journal.updated) : null;
-        let path_prefix = `/journals/${journal.id}`;
-
-        return <div
-            key={journal.id}
-            className={cn(
-                "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground border-b relative",
-                {"bg-sidebar-accent text-sidebar-accent-forground": location.pathname.startsWith(path_prefix)},
-            )}
-        >
-            <Link to={`${path_prefix}/entries`}>
-                <div className="p-4 space-y-2">
-                    <h2 className="text-xl w-1/2 truncate font-semibold">{journal.name}</h2>
-                    <p>{journal.description}</p>
-                    <div className="flex flex-row flex-nowrap">
-                        <span title={format(created_ts, "Pp")} className="pr-2">
-                            C: {format(created_ts, "yyyy/MM/dd")}
-                        </span>
-                        {updated_ts != null ?
-                            <span title={format(updated_ts, "Pp")} className="pl-2 border-l">
-                                U: {format(updated_ts, "yyyy/MM/dd")}
-                            </span>
-                            :
-                            null
-                        }
-                    </div>
-                </div>
-            </Link>
-            <JournalOptions journals_id={journal.id}/>
-        </div>;
+    let data_elements = data.map(journal => {
+        return <JournalItem key={journal.id} journal={journal}/>
     });
 
     return <>
         <SidebarHeader className="border-b">
             <div className="w-full relative">
-                <Input type="text" className="pr-10"/>
+                <Input type="text" placeholder="search journals" className="pr-10" disabled={loading}/>
                 <Button
                     type="button"
                     variant="ghost"
                     size="icon"
                     className="absolute right-0 top-0"
-                    onClick={() => {}}
+                    disabled={loading}
+                    onClick={() => search_journals()}
                 >
                     <Search />
                 </Button>

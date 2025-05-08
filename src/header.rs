@@ -65,8 +65,11 @@ pub struct Location(String);
 
 impl Location {
     /// creates the Location for a given value
-    pub fn to(location: String) -> Self {
-        Self(location)
+    pub fn to<T>(location: T) -> Self
+    where
+        T: Into<String>
+    {
+        Self(location.into())
     }
 
     /// creates a Location to the login page and will also include the given

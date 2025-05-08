@@ -204,7 +204,14 @@ export interface JournalPartial {
     name: string,
     description: string | null,
     created: string,
-    updated: string | null
+    updated: string | null,
+    has_peers: boolean,
+}
+
+export interface JournalPeer {
+    user_peers_id: number,
+    name: string,
+    synced: string | null,
 }
 
 export interface JournalCustomField {
@@ -227,6 +234,7 @@ export interface JournalFull {
     created: string,
     updated: string | null,
     custom_fields: JournalCustomField[],
+    peers: JournalPeer[],
 }
 
 export interface EntryPartial {

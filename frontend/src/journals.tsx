@@ -63,6 +63,7 @@ import {
     blank_journal_custom_field_form,
 } from "@/journals/forms";
 import { Entry, Entries } from "@/journals/entries";
+import { cn } from "@/utils";
 
 export function JournalRoutes() {
     return <Routes>
@@ -84,6 +85,7 @@ function JournalsIndex() {
 
 function journal_to_form(journal: JournalFull) {
     let custom_fields = [];
+    let peers = [];
 
     for (let field of journal.custom_fields) {
         custom_fields.push({
@@ -96,10 +98,15 @@ function journal_to_form(journal: JournalFull) {
         });
     }
 
+    for (let peer of journal.peers) {
+        peers.push(peer);
+    }
+
     return {
         name: journal.name,
         description: journal.description ?? "",
         custom_fields,
+        peers,
     };
 }
 
@@ -112,7 +119,7 @@ function JournalHeader({journals_id, on_delete}: JournalHeaderProps) {
     const navigate = useNavigate();
     const form = useFormContext<JournalForm>();
 
-    return <div className="top-0 sticky flex flex-row flex-nowrap gap-x-4">
+    return <div className="top-0 sticky flex flex-row flex-nowrap gap-x-4 bg-background border-b py-2">
         <Link to="/journals">
             <Button type="button" variant="ghost" size="icon">
                 <ArrowLeft/>
@@ -172,6 +179,7 @@ function Journal() {
 
     const create_journal = async (data: JournalForm) => {
         let custom_fields = [];
+        let peers = [];
 
         for (let field of data.custom_fields) {
             let desc = field.description.trim();
@@ -184,12 +192,17 @@ function Journal() {
             });
         }
 
+        for (let peer of data.peers) {
+            peers.push(peer.user_peers_id);
+        }
+
         let desc = data.description.trim();
 
         let res = await send_json("POST", "/journals", {
             name: data.name,
             description: desc.length === 0 ? null : desc,
             custom_fields,
+            peers,
         });
 
         switch (res.status) {
@@ -213,6 +226,7 @@ function Journal() {
 
     const update_journal = async (data: JournalForm) => {
         let custom_fields = [];
+        let peers = [];
 
         for (let field of data.custom_fields) {
             let desc = field.description.trim();
@@ -230,12 +244,17 @@ function Journal() {
             custom_fields.push(obj);
         }
 
+        for (let peer of data.peers) {
+            peers.push(peer.user_peers_id);
+        }
+
         let description = data.description.trim();
 
         let res = await send_json("PATCH", `/journals/${journals_id}`, {
             name: data.name,
             description: description.length === 0 ? null : description,
             custom_fields,
+            peers,
         });
 
         switch (res.status) {
@@ -289,7 +308,7 @@ function Journal() {
     };
 
     if (form.formState.isLoading) {
-        return <CenterPage>
+        return <CenterPage className="pt-2">
             loading journal
         </CenterPage>;
     }
@@ -306,10 +325,139 @@ function Journal() {
                         </FormControl>
                     </FormItem>
                 }}/>
+                <Separator />
+                <PeersList />
+                <Separator />
                 <CustomFieldList />
             </form>
         }/>
     </CenterPage>;
+}
+
+function PeersList() {
+    const form = useFormContext<JournalForm>();
+    const peers = useFieldArray<JournalForm, "peers">({
+        control: form.control,
+        name: "peers"
+    });
+
+    let apply_flex = peers.fields.length > 1;
+    let include_spacer = peers.fields.length % 2 !== 0;
+
+    let peer_eles = peers.fields.map((peer, index) => (
+        <div
+            key={peer.id}
+            className="flex flex-row items-center rounded-lg border p-4 basis-[45%] grow"
+        >
+            <span className="grow">{peer.name}</span>
+            <Button type="button" variant="destructive" size="icon" onClick={() => {
+                peers.remove(index);
+            }}>
+                <Trash/>
+            </Button>
+        </div>
+    ));
+
+    if (peers.fields.length % 2 !== 0) {
+        peer_eles.push(<div key="spacer" className="basis-[45%] grow"/>);
+    }
+
+    return <div className="space-y-4">
+        <div className="flex flex-row flex-nowrap gap-x-4 items-center">
+            Peers
+            <AddPeer on_added={peer => {
+                peers.append({
+                    user_peers_id: peer.id,
+                    name: peer.name,
+                    synced: null,
+                });
+            }}/>
+        </div>
+        {peers.fields.length !== 0 ?
+            <div className="flex flex-row flex-wrap gap-2">
+                {peer_eles}
+            </div>
+            :
+            null
+        }
+    </div>;
+}
+
+interface AddPeerProps {
+    on_added: (peer: UserPeerPartial) => void
+}
+
+interface UserPeerPartial {
+    id: number,
+    name: string
+}
+
+function AddPeer({on_added}: AddPeerProps) {
+    const [loading, set_loading] = useState(false);
+    const [data, set_data] = useState<UserPeerPartial[]>([]);
+
+    const columns: ColumnDef<UserPeerPartial>[] = [
+        {
+            accessorKey: "name",
+            header: "Name",
+        },
+        {
+            id: "selector",
+            cell: ({ row }) => (
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => on_added(row.original)}
+                >
+                    <Plus/>
+                </Button>
+            )
+        }
+    ];
+
+    const retrieve = async () => {
+        if (loading) {
+            return;
+        }
+
+        set_loading(true);
+
+        try {
+            let res = await fetch("/peers");
+
+            if (res.status === 200) {
+                let json = await res.json();
+
+                set_data(json);
+            }
+        } catch (err) {
+            console.error("failed to retrieve peers", err);
+        }
+
+        set_loading(false);
+    };
+
+    return <Sheet onOpenChange={value => {
+        if (value) {
+            retrieve();
+        }
+    }}>
+        <SheetTrigger asChild>
+            <Button type="button" variant="secondary">
+                <Plus/>Add Peer
+            </Button>
+        </SheetTrigger>
+        <SheetContent>
+            <SheetHeader>
+                <SheetTitle>Add Peer</SheetTitle>
+                <SheetDescription>
+                    Add remote peers synchronize the journal to.
+                </SheetDescription>
+            </SheetHeader>
+            <DataTable columns={columns} data={data}/>
+        </SheetContent>
+    </Sheet>
 }
 
 interface CustomFieldListProps {
@@ -394,21 +542,21 @@ function CustomFieldList({}: CustomFieldListProps) {
                 break;
             }
 
-            return <Fragment key={field.id}>
+            return <div key={field.id} className="rounded-lg border">
+                <div className="flex flex-row flex-nowrap gap-x-4 p-4">
+                    <FormField control={form.control} name={`custom_fields.${index}.name`} render={({field: name_field}) => {
+                        return <FormItem className="w-1/2">
+                            <FormControl>
+                                <Input type="text" placeholder="Custom Field Name" {...name_field}/>
+                            </FormControl>
+                        </FormItem>
+                    }}/>
+                    <Button type="button" variant="destructive" size="icon" onClick={() => {
+                        custom_fields.remove(index);
+                    }}><Trash/></Button>
+                </div>
                 <Separator/>
-                <div key={field.id} className="space-y-4">
-                    <div className="flex flex-row flex-nowrap gap-x-4">
-                        <FormField control={form.control} name={`custom_fields.${index}.name`} render={({field: name_field}) => {
-                            return <FormItem className="w-1/2">
-                                <FormControl>
-                                    <Input type="text" placeholder="Custom Field Name" {...name_field}/>
-                                </FormControl>
-                            </FormItem>
-                        }}/>
-                        <Button type="button" variant="destructive" size="icon" onClick={() => {
-                            custom_fields.remove(index);
-                        }}><Trash/></Button>
-                    </div>
+                <div className="p-4 space-y-4">
                     {type_desc}
                     <FormField control={form.control} name={`custom_fields.${index}.order`} render={({field: order_field}) => {
                         return <FormItem>
@@ -446,7 +594,7 @@ function CustomFieldList({}: CustomFieldListProps) {
                     }}/>
                     {type_ui}
                 </div>
-            </Fragment>;
+            </div>;
         })}
     </div>;
 }

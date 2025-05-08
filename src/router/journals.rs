@@ -17,6 +17,7 @@ use crate::db::ids::{
     CustomFieldId,
     CustomFieldUid,
     RemoteServerId,
+    UserPeerId,
 };
 use crate::error::{self, Context};
 use crate::journal::{
@@ -35,6 +36,7 @@ use crate::sec::authz::{self, Scope, Ability};
 use crate::state;
 use crate::sync;
 use crate::jobs;
+use crate::user::peer::UserPeer;
 
 mod entries;
 
@@ -67,6 +69,7 @@ pub enum JournalPartial {
         description: Option<String>,
         created: DateTime<Utc>,
         updated: Option<DateTime<Utc>>,
+        has_peers: bool,
     },
     Remote {
         id: JournalId,
@@ -119,9 +122,21 @@ async fn retrieve_journals(
                journals.created, \
                journals.updated, \
                journals.server_id, \
-               journals.kind \
+               journals.kind, \
+               count(journal_peers.user_peers_id) > 0 as has_peers \
         from journals \
+            left join journal_peers on \
+                journals.id = journal_peers.journals_id \
         where journals.users_id = $1 \
+        group by journals.id, \
+                 journals.uid, \
+                 journals.users_id, \
+                 journals.name, \
+                 journals.description, \
+                 journals.created, \
+                 journals.updated, \
+                 journals.server_id, \
+                 journals.kind \
         order by journals.name",
         params
     )
@@ -144,6 +159,7 @@ async fn retrieve_journals(
                 description: record.get(4),
                 created: record.get(5),
                 updated: record.get(6),
+                has_peers: record.get(9),
             }),
             JournalKind::Remote => found.push(JournalPartial::Remote {
                 id: record.get(0),
@@ -184,6 +200,13 @@ pub struct CustomFieldFull {
 }
 
 #[derive(Debug, Serialize)]
+pub struct JournalPeer {
+    user_peers_id: UserPeerId,
+    name: String,
+    synced: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum JournalFull {
     Local {
@@ -193,6 +216,7 @@ pub enum JournalFull {
         name: String,
         description: Option<String>,
         custom_fields: Vec<CustomFieldFull>,
+        peers: Vec<JournalPeer>,
         created: DateTime<Utc>,
         updated: Option<DateTime<Utc>>,
     },
@@ -209,8 +233,8 @@ pub enum JournalFull {
     }
 }
 
-impl From<(Journal, Vec<CustomFieldFull>)> for JournalFull {
-    fn from((journal, custom_fields): (Journal, Vec<CustomFieldFull>)) -> Self {
+impl From<(Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)> for JournalFull {
+    fn from((journal, custom_fields, peers): (Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)) -> Self {
         match journal {
             Journal::Local(local) => Self::Local {
                 id: local.id,
@@ -219,6 +243,7 @@ impl From<(Journal, Vec<CustomFieldFull>)> for JournalFull {
                 name: local.name,
                 description: local.description,
                 custom_fields,
+                peers,
                 created: local.created,
                 updated: local.updated,
             },
@@ -237,8 +262,8 @@ impl From<(Journal, Vec<CustomFieldFull>)> for JournalFull {
     }
 }
 
-impl From<(LocalJournal, Vec<CustomFieldFull>)> for JournalFull {
-    fn from((local, custom_fields): (LocalJournal, Vec<CustomFieldFull>)) -> Self {
+impl From<(LocalJournal, Vec<CustomFieldFull>, Vec<JournalPeer>)> for JournalFull {
+    fn from((local, custom_fields, peers): (LocalJournal, Vec<CustomFieldFull>, Vec<JournalPeer>)) -> Self {
         Self::Local {
             id: local.id,
             uid: local.uid,
@@ -246,6 +271,7 @@ impl From<(LocalJournal, Vec<CustomFieldFull>)> for JournalFull {
             name: local.name,
             description: local.description,
             custom_fields,
+            peers,
             created: local.created,
             updated: local.updated,
         }
@@ -290,6 +316,7 @@ async fn retrieve_journal(
     };
 
     let mut custom_fields = Vec::new();
+
     let fields = CustomField::retrieve_journal_stream(&conn, &journals_id)
         .await
         .context("failed to retrieve custom fields")?;
@@ -311,7 +338,31 @@ async fn retrieve_journal(
         });
     }
 
-    Ok(body::Json(JournalFull::from((journal, custom_fields))).into_response())
+    let peers = {
+        let mut rtn = Vec::new();
+
+        let peers = UserPeer::retrieve_many(&conn, &journals_id)
+            .await
+            .context("failed to retrieve journal peers")?;
+
+        futures::pin_mut!(peers);
+
+        while let Some(maybe) = peers.next().await {
+            let record = maybe.context("failed to retrieve journal peer record")?;
+
+            rtn.push(JournalPeer {
+                user_peers_id: record.id,
+                name: record.name,
+                synced: None,
+            });
+        }
+
+        rtn
+    };
+
+    Ok(body::Json(JournalFull::from((
+        journal, custom_fields, peers
+    ))).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,6 +378,7 @@ pub struct NewJournal {
     name: String,
     description: Option<String>,
     custom_fields: Vec<NewCustomField>,
+    peers: Vec<UserPeerId>
 }
 
 #[derive(Debug, Serialize)]
@@ -335,6 +387,9 @@ pub enum NewJournalResult {
     NameExists,
     DuplicateCustomFields {
         duplicates: Vec<String>,
+    },
+    PeersNotFound {
+        ids: Vec<UserPeerId>,
     },
     Created(JournalFull)
 }
@@ -404,6 +459,23 @@ async fn create_journal(
         ).into_response());
     }
 
+    let peers = match upsert_journal_peers(
+        &transaction, 
+        &initiator.user.id,
+        &journal.id,
+        json.peers
+    ).await? {
+        UpsertJournalPeers::Valid(valid) => valid,
+        UpsertJournalPeers::NotFound(ids) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                body::Json(NewJournalResult::PeersNotFound {
+                    ids
+                })
+            ).into_response());
+        }
+    };
+
     let journal_dir = state.storage()
         .journal_dir(journal.id);
 
@@ -445,7 +517,7 @@ async fn create_journal(
     }
 
     Ok(body::Json(NewJournalResult::Created(
-        JournalFull::from((journal, custom_fields))
+        JournalFull::from((journal, custom_fields, peers))
     )).into_response())
 }
 
@@ -469,6 +541,7 @@ pub struct UpdateJournal {
     name: String,
     description: Option<String>,
     custom_fields: Vec<UpdateCustomField>,
+    peers: Vec<UserPeerId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -481,6 +554,9 @@ pub enum UpdateJournalResult {
     },
     DuplicateCustomFields {
         duplicates: Vec<String>,
+    },
+    PeersNotFound {
+        ids: Vec<UserPeerId>,
     },
     Updated(JournalFull),
 }
@@ -578,12 +654,27 @@ async fn update_journal(
         ).into_response());
     }
 
+    let peers = match upsert_journal_peers(
+        &transaction,
+        &initiator.user.id,
+        &journal.id,
+        json.peers
+    ).await? {
+        UpsertJournalPeers::Valid(valid) => valid,
+        UpsertJournalPeers::NotFound(ids) => return Ok((
+            StatusCode::BAD_REQUEST,
+            body::Json(UpdateJournalResult::PeersNotFound {
+                ids
+            })
+        ).into_response()),
+    };
+
     transaction.commit()
         .await
         .context("failed to commit transaction")?;
 
     Ok(body::Json(UpdateJournalResult::Updated(
-        JournalFull::from((journal, valid))
+        JournalFull::from((journal, valid, peers))
     )).into_response())
 }
 
@@ -870,15 +961,108 @@ async fn insert_custom_fields(
     Ok(rtn)
 }
 
+enum UpsertJournalPeers {
+    Valid(Vec<JournalPeer>),
+    NotFound(Vec<UserPeerId>),
+}
+
+async fn upsert_journal_peers(
+    conn: &impl db::GenericClient,
+    users_id: &UserId,
+    journals_id: &JournalId,
+    list: Vec<UserPeerId>,
+) -> Result<UpsertJournalPeers, error::Error> {
+    let mut rtn = Vec::with_capacity(list.len());
+
+    if list.is_empty() {
+        return Ok(UpsertJournalPeers::Valid(rtn));
+    }
+
+    let peers: HashMap<UserPeerId, UserPeer> = {
+        let mut rtn = HashMap::new();
+        let stream = UserPeer::retrieve_many(conn, users_id)
+            .await
+            .context("failed to retrieve user peers")?;
+
+        futures::pin_mut!(stream);
+
+        while let Some(maybe) = stream.next().await {
+            let record = maybe.context("failed to retrieve record")?;
+
+            rtn.insert(record.id, record);
+        }
+
+        rtn
+    };
+
+    let mut collected: HashSet<UserPeerId> = HashSet::new();
+    let mut not_found = Vec::new();
+    let mut params: db::ParamsVec<'_> = vec![journals_id];
+    let mut query = String::from(
+        "\
+        with tmp_insert as ( \
+            insert into journal_peers (journals_id, user_peers_id) values "
+    );
+
+    for (index, id) in list.iter().enumerate() {
+        if let Some(peer) = peers.get(id) {
+            if !collected.insert(*id) {
+                continue;
+            }
+
+            rtn.push(JournalPeer {
+                user_peers_id: *id,
+                name: peer.name.clone(),
+                synced: None,
+            });
+        } else {
+            not_found.push(*id);
+
+            continue;
+        }
+
+        if index != 0 {
+            query.push_str(", ");
+        }
+
+        let s = format!("($1, ${})", db::push_param(&mut params, id));
+
+        query.push_str(&s);
+    }
+
+    if !not_found.is_empty() {
+        return Ok(UpsertJournalPeers::NotFound(not_found));
+    }
+
+    query.push_str(" \
+            on conflict (journals_id, user_peers_id) \
+                do nothing \
+            returning user_peers_id \
+        ) \
+        delete from journal_peers \
+        using tmp_insert \
+        where journal_peers.journals_id = $1 and \
+              journal_peers.user_peers_id != tmp_insert.user_peers_id");
+
+    tracing::debug!("upsert journal peers query: {query}");
+
+    conn.execute(&query, params.as_slice())
+        .await
+        .context("failed to insert journal peers")?;
+
+    Ok(UpsertJournalPeers::Valid(rtn))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SyncOptions {
-    remote_server_id: RemoteServerId,
+    remote_server_id: Option<RemoteServerId>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum SyncResult {
     Queued,
+    Noop,
     JournalNotFound,
     RemoteServerNotFound,
 
@@ -890,6 +1074,10 @@ pub enum SyncResult {
 impl IntoResponse for SyncResult {
     fn into_response(self) -> Response {
         match &self {
+            Self::Noop => (
+                StatusCode::OK,
+                body::Json(self)
+            ).into_response(),
             Self::Queued => (
                 StatusCode::ACCEPTED,
                 body::Json(self)
@@ -951,15 +1139,19 @@ async fn sync_with_remote(
         rtn
     };
 
-    let result = sync::RemoteServer::retrieve(&transaction, &json.remote_server_id)
-        .await
-        .context("failed retrieve remote server")?;
+    if let Some(remote_server_id) = json.remote_server_id {
+        let result = sync::RemoteServer::retrieve(&transaction, &remote_server_id)
+            .await
+            .context("failed retrieve remote server")?;
 
-    let Some(remote_server) = result else {
-        return Ok(SyncResult::RemoteServerNotFound);
-    };
+        let Some(remote_server) = result else {
+            return Ok(SyncResult::RemoteServerNotFound);
+        };
 
-    tokio::spawn(jobs::sync::kickoff_sync_journal(state, remote_server, journal));
+        tokio::spawn(jobs::sync::kickoff_sync_journal(state, remote_server, journal));
 
-    Ok(SyncResult::Queued)
+        Ok(SyncResult::Queued)
+    } else {
+        Ok(SyncResult::Noop)
+    }
 }

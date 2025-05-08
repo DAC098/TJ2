@@ -194,6 +194,12 @@ create table custom_field_entries (
     primary key (custom_fields_id, entries_id)
 );
 
+create table journal_peers (
+    journals_id bigint not null references journals (id),
+    user_peers_id bigint not null references user_peers (id),
+    unique (journals_id, user_peers_id)
+);
+
 create table synced_journals (
     journals_id bigint not null references journals (id),
     server_id bigint not null references remote_servers (id),
