@@ -131,7 +131,7 @@ impl<'a> pg_types::FromSql<'a> for JournalKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LocalJournal {
     /// the assigned journal id from the database
     pub id: JournalId,

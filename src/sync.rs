@@ -6,6 +6,7 @@ use url::Url;
 
 use crate::db;
 use crate::db::ids::RemoteServerId;
+use crate::user::peer::UserPeer;
 
 pub mod journal;
 
@@ -158,6 +159,53 @@ impl RemoteClient {
 
     pub fn remote(&self) -> &RemoteServer {
         &self.remote
+    }
+
+    pub fn post<P>(&self, path: P) -> reqwest::RequestBuilder
+    where
+        P: AsRef<str>
+    {
+        let mut url = self.origin.clone();
+        url.push_str(path.as_ref());
+
+        self.client.post(url)
+    }
+
+    pub fn put<P>(&self, path: P) -> reqwest::RequestBuilder
+    where
+        P: AsRef<str>
+    {
+        let mut url = self.origin.clone();
+        url.push_str(path.as_ref());
+
+        self.client.put(url)
+    }
+}
+
+#[derive(Debug)]
+pub struct PeerClient {
+    peer: UserPeer,
+    origin: String,
+    client: reqwest::Client,
+}
+
+impl PeerClient {
+    pub fn build(peer: UserPeer) -> Result<Self, reqwest::Error> {
+        let origin = if peer.secure {
+            format!("https://{}:{}", peer.addr, peer.port)
+        } else {
+            format!("http://{}:{}", peer.addr, peer.port)
+        };
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(peer.ssc)
+            .user_agent(CLIENT_USER_AGENT)
+            .build()?;
+
+        Ok(Self {
+            peer,
+            origin,
+            client,
+        })
     }
 
     pub fn post<P>(&self, path: P) -> reqwest::RequestBuilder

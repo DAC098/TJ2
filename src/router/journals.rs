@@ -1054,17 +1054,17 @@ async fn upsert_journal_peers(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SyncOptions {
-    remote_server_id: Option<RemoteServerId>,
-}
+pub struct SyncOptions {}
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum SyncResult {
-    Queued,
+    Queued {
+        successful: u32,
+        failed: u32,
+    },
     Noop,
     JournalNotFound,
-    RemoteServerNotFound,
 
     NotLocalJournal,
 
@@ -1078,15 +1078,11 @@ impl IntoResponse for SyncResult {
                 StatusCode::OK,
                 body::Json(self)
             ).into_response(),
-            Self::Queued => (
+            Self::Queued { .. } => (
                 StatusCode::ACCEPTED,
                 body::Json(self)
             ).into_response(),
             Self::JournalNotFound |
-            Self::RemoteServerNotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self)
-            ).into_response(),
             Self::NotLocalJournal => (
                 StatusCode::BAD_REQUEST,
                 body::Json(self),
@@ -1139,19 +1135,41 @@ async fn sync_with_remote(
         rtn
     };
 
-    if let Some(remote_server_id) = json.remote_server_id {
-        let result = sync::RemoteServer::retrieve(&transaction, &remote_server_id)
-            .await
-            .context("failed retrieve remote server")?;
+    let peers = UserPeer::retrieve_many(&transaction, &journal.id)
+        .await
+        .context("failed to retrieve journal attached peers")?;
 
-        let Some(remote_server) = result else {
-            return Ok(SyncResult::RemoteServerNotFound);
+    futures::pin_mut!(peers);
+
+    let mut successful = 0;
+    let mut failed = 0;
+    let mut did_queue = false;
+
+    while let Some(maybe) = peers.next().await {
+        let peer = match maybe.context("failed to retrieve peer record") {
+            Ok(peer) => peer,
+            Err(err) => {
+                error::log_prefix_error("failed to retrieve peer record", &err);
+
+                failed += 1;
+
+                continue;
+            }
         };
 
-        tokio::spawn(jobs::sync::kickoff_sync_journal(state, remote_server, journal));
+        tracing::debug!("spinning job for peer: {peer:#?}");
 
-        Ok(SyncResult::Queued)
-    } else {
+        tokio::spawn(jobs::sync::kickoff_journal_sync(state.clone(), peer, journal.clone()));
+
+        successful += 1;
+    }
+
+    if successful == 0 && failed == 0 {
         Ok(SyncResult::Noop)
+    } else {
+        Ok(SyncResult::Queued {
+            successful,
+            failed,
+        })
     }
 }

@@ -15,9 +15,23 @@ use crate::db::ids::{
 use crate::error::{self, Context};
 use crate::journal::LocalJournal;
 use crate::state;
-use crate::sync::{self, RemoteServer, RemoteClient};
+use crate::sync::{self, RemoteServer, RemoteClient, PeerClient};
+use crate::user::peer::UserPeer;
 
 const BATCH_SIZE: i64 = 50;
+
+pub async fn kickoff_journal_sync(state: state::SharedState, peer: UserPeer, journal: LocalJournal) {
+    if let Err(err) = journal_sync(state, peer, journal).await {
+        error::log_prefix_error("error when syncing journal with peer", &err);
+    }
+}
+
+async fn journal_sync(state: state::SharedState, peer: UserPeer, journal: LocalJournal) -> Result<(), error::Error> {
+    let client = PeerClient::build(peer)
+        .context("failed to create peer client")?;
+
+    Ok(())
+}
 
 pub async fn kickoff_sync_journal(state: state::SharedState, remote: RemoteServer, journal: LocalJournal) {
     if let Err(err) = sync_journal(state, remote, journal).await {

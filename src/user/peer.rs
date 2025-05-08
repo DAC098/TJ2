@@ -5,6 +5,7 @@ use tj2_lib::sec::pki::PublicKey;
 use crate::db;
 use crate::db::ids::{JournalId, UserId, UserPeerId};
 
+#[derive(Debug)]
 pub struct UserPeer {
     pub id: UserPeerId,
     pub users_id: UserId,
