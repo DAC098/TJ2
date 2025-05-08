@@ -31,6 +31,7 @@ mod verify;
 mod logout;
 mod register;
 mod settings;
+mod peers;
 
 async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -81,6 +82,7 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/logout", post(logout::post))
         .route("/register", get(register::get)
             .post(register::post))
+        .route("/peers", get(peers::get))
         .nest("/journals", journals::build(state))
         .nest("/settings", settings::build(state))
         .nest("/sync", sync::build(state))
