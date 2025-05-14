@@ -12,8 +12,10 @@ use crate::router::body;
 use crate::state;
 use crate::user;
 
+pub mod token;
 pub mod session;
-pub use session::Session;
+
+pub use session::{Session, ApiSession};
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitiatorError {
@@ -39,7 +41,28 @@ pub enum InitiatorError {
     HeaderStr(#[from] axum::http::header::ToStrError),
 
     #[error(transparent)]
-    Token(#[from] session::InvalidBase64),
+    Token(#[from] token::InvalidBase64),
+
+    #[error(transparent)]
+    DbPg(#[from] db::PgError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ApiInitiatorError {
+    #[error("missing / invalid authorization header")]
+    InvalidAuthorization,
+
+    #[error("failed to find the session from the token")]
+    NotFound,
+
+    #[error("failed to find the user for the session")]
+    UserNotFound(ApiSession),
+
+    #[error("given session is not authenticated")]
+    Unauthenticated(ApiSession),
+
+    #[error("the given session has expired")]
+    Expired(ApiSession),
 
     #[error(transparent)]
     DbPg(#[from] db::PgError),
@@ -51,13 +74,17 @@ pub struct Initiator {
     pub session: Session,
 }
 
-impl Initiator {
-    fn get_token(headers: &HeaderMap) -> Result<session::Token, InitiatorError> {
-        let Some(session_id) = session::find_session_id(headers)? else {
-            return Err(InitiatorError::SessionIdNotFound);
-        };
+#[derive(Debug)]
+pub struct ApiInitiator {
+    pub user: user::User,
+    pub session: ApiSession,
+}
 
-        Ok(session::Token::from_base64(session_id)?)
+impl Initiator {
+    fn get_token(headers: &HeaderMap) -> Result<session::SessionToken, InitiatorError> {
+        let token = Session::find_id(headers)?.ok_or(InitiatorError::SessionIdNotFound)?;
+
+        Ok(session::SessionToken::from_base64(token)?)
     }
 
     fn validate_session(session: session::Session) -> Result<session::Session, InitiatorError> {
@@ -84,20 +111,55 @@ impl Initiator {
     ) -> Result<Self, InitiatorError> {
         let token = Self::get_token(headers)?;
 
-        let Some(session) = Session::retrieve_token(conn, &token).await? else {
-            return Err(InitiatorError::SessionNotFound);
-        };
+        let session = Self::validate_session(
+            Session::retrieve_one(conn, &token)
+                .await?
+                .ok_or(InitiatorError::SessionNotFound)?
+        )?;
 
-        let session = Self::validate_session(session)?;
-
-        let Some(user) = user::User::retrieve_id(conn, session.users_id).await? else {
+        let Some(user) = user::User::retrieve(conn, &session.users_id).await? else {
             return Err(InitiatorError::UserNotFound(session));
         };
 
-        Ok(Initiator {
-            user,
-            session
-        })
+        Ok(Self { user, session })
+    }
+}
+
+impl ApiInitiator {
+    fn get_token(headers: &HeaderMap) -> Result<session::ApiSessionToken, ApiInitiatorError> {
+        ApiSession::find_token(headers)
+            .map_err(|_| ApiInitiatorError::InvalidAuthorization)?
+            .ok_or(ApiInitiatorError::InvalidAuthorization)
+    }
+
+    fn validate_session(session: ApiSession) -> Result<ApiSession, ApiInitiatorError> {
+        let now = chrono::Utc::now();
+
+        if session.expires_on < now {
+            return Err(ApiInitiatorError::Expired(session));
+        }
+
+        if !session.authenticated {
+            return Err(ApiInitiatorError::Unauthenticated(session));
+        }
+
+        Ok(session)
+    }
+
+    pub async fn from_headers(conn: &impl db::GenericClient, headers: &HeaderMap) -> Result<Self, ApiInitiatorError> {
+        let token = Self::get_token(headers)?;
+
+        let session = Self::validate_session(
+            ApiSession::retrieve_one(conn, &token)
+                .await?
+                .ok_or(ApiInitiatorError::NotFound)?
+        )?;
+
+        let Some(user) = user::User::retrieve(conn, &session.users_id).await? else {
+            return Err(ApiInitiatorError::UserNotFound(session));
+        };
+
+        Ok(Self { user, session })
     }
 }
 
@@ -194,5 +256,24 @@ impl FromRequestParts<state::SharedState> for Initiator {
                 ).into())
             }
         }
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<state::SharedState> for ApiInitiator {
+    type Rejection = error::Error;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &state::SharedState
+    ) -> Result<Self, Self::Rejection> {
+        let conn = state.db()
+            .get()
+            .await
+            .context("failed to get db connection")?;
+
+        ApiInitiator::from_headers(&conn, &parts.headers)
+            .await
+            .context("failed to retrieve initiator")
     }
 }

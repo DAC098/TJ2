@@ -32,8 +32,9 @@ mod logout;
 mod register;
 mod settings;
 mod peers;
+mod api;
 
-async fn ping() -> (StatusCode, &'static str) {
+pub async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
 }
 
@@ -87,6 +88,7 @@ pub fn build(state: &state::SharedState) -> Router {
         .nest("/settings", settings::build(state))
         .nest("/sync", sync::build(state))
         .nest("/admin", admin::build(state))
+        .nest("/api", api::build(state))
         .fallback(assets::handle)
         .layer(ServiceBuilder::new()
             .layer(layer::RIDLayer::new())

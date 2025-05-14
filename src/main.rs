@@ -18,6 +18,7 @@ mod sec;
 mod state;
 mod sync;
 mod jobs;
+mod net;
 
 mod cookie;
 mod header;
@@ -25,6 +26,7 @@ mod header;
 mod user;
 mod journal;
 
+mod api;
 mod router;
 
 use error::{Error, Context};

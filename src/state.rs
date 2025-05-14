@@ -14,6 +14,8 @@ use crate::db::ids::{UserId, JournalId, FileEntryId};
 use crate::error::{self, Context};
 use crate::journal::JournalDir;
 use crate::sec::otp::Totp;
+use crate::sec::authn::session::ApiSessionToken;
+use crate::sec::pki::Data;
 use crate::templates;
 use crate::user::UserDir;
 
@@ -150,7 +152,8 @@ impl FromRequestParts<SharedState> for Storage {
 
 #[derive(Debug)]
 pub struct Security {
-    pub vetting: Vetting
+    pub vetting: Vetting,
+    pub authn: Authn,
 }
 
 #[derive(Debug)]
@@ -158,10 +161,16 @@ pub struct Vetting {
     pub totp: moka::sync::Cache<UserId, Totp>
 }
 
+#[derive(Debug)]
+pub struct Authn {
+    pub api: moka::sync::Cache<ApiSessionToken, Data>,
+}
+
 impl Security {
     fn new() -> Self {
         Self {
             vetting: Vetting::new(),
+            authn: Authn::new(),
         }
     }
 }
@@ -174,5 +183,16 @@ impl Vetting {
             .build();
 
         Self { totp }
+    }
+}
+
+impl Authn {
+    fn new() -> Self {
+        let api = moka::sync::Cache::builder()
+            .max_capacity(1000)
+            .time_to_live(Duration::from_secs(60))
+            .build();
+
+        Self { api }
     }
 }

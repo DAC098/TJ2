@@ -28,6 +28,20 @@ where
     data_encoding::BASE64URL.decode(given.as_ref()).ok()
 }
 
+pub fn to_base64_nopad<T>(bytes: T) -> String
+where
+    T: AsRef<[u8]>
+{
+    data_encoding::BASE64URL_NOPAD.encode(bytes.as_ref())
+}
+
+pub fn from_base64_nopad<T>(given: T) -> Option<Vec<u8>>
+where
+    T: AsRef<[u8]>
+{
+    data_encoding::BASE64URL_NOPAD.decode(given.as_ref()).ok()
+}
+
 pub fn to_hex_str<T>(bytes: T) -> String
 where
     T: AsRef<[u8]>

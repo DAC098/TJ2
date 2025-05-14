@@ -10,12 +10,12 @@ use crate::db::{
 };
 use crate::db::ids::{
     EntryId,
-    RemoteServerId,
+    UserPeerId,
 };
 use crate::error::{self, Context};
 use crate::journal::LocalJournal;
 use crate::state;
-use crate::sync::{self, RemoteServer, RemoteClient, PeerClient};
+use crate::sync::{self, PeerClient};
 use crate::user::peer::UserPeer;
 
 const BATCH_SIZE: i64 = 50;
@@ -26,22 +26,9 @@ pub async fn kickoff_journal_sync(state: state::SharedState, peer: UserPeer, jou
     }
 }
 
-async fn journal_sync(state: state::SharedState, peer: UserPeer, journal: LocalJournal) -> Result<(), error::Error> {
-    let client = PeerClient::build(peer)
-        .context("failed to create peer client")?;
-
-    Ok(())
-}
-
-pub async fn kickoff_sync_journal(state: state::SharedState, remote: RemoteServer, journal: LocalJournal) {
-    if let Err(err) = sync_journal(state, remote, journal).await {
-        error::log_prefix_error("error when sync journal with remote server", &err);
-    }
-}
-
-async fn sync_journal(
+async fn journal_sync(
     state: state::SharedState,
-    remote: RemoteServer,
+    peer: UserPeer,
     journal: LocalJournal,
 ) -> Result<(), error::Error> {
     let mut conn = state.db_conn()
@@ -51,8 +38,11 @@ async fn sync_journal(
         .await
         .context("failed to create transaction")?;
 
-    let client = RemoteClient::build(remote)
-        .context("failed to create remote client")?;
+    let client = PeerClient::build(peer)
+        .context("failed to create peer client builder")?
+        .connect(state.storage())
+        .await
+        .context("failed to create peer client")?;
 
     let max_batches = 2;
     let mut batches = 0;
@@ -147,7 +137,7 @@ struct BatchResults {
 
 async fn batch_entry_sync(
     conn: &impl GenericClient,
-    client: &RemoteClient,
+    client: &PeerClient,
     journal: &LocalJournal,
     prev_entry: &EntryId,
     sync_date: &DateTime<Utc>,
@@ -155,7 +145,7 @@ async fn batch_entry_sync(
     let entries = sync::journal::EntrySync::retrieve_batch_stream(
         conn,
         &journal.id,
-        client.remote().id(),
+        &client.peer().id,
         prev_entry,
         sync_date,
         BATCH_SIZE
@@ -199,14 +189,14 @@ async fn batch_entry_sync(
     update_synced(
         conn,
         &successful,
-        client.remote().id(),
+        &client.peer().id,
         sync::journal::SyncStatus::Synced,
         sync_date
     ).await?;
     update_synced(
         conn,
         &failed,
-        client.remote().id(),
+        &client.peer().id,
         sync::journal::SyncStatus::Failed,
         sync_date
     ).await?;
@@ -222,7 +212,7 @@ async fn batch_entry_sync(
 async fn update_synced(
     conn: &impl GenericClient,
     given: &Vec<EntryId>,
-    server_id: &RemoteServerId,
+    user_peers_id: &UserPeerId,
     status: sync::journal::SyncStatus,
     updated: &DateTime<Utc>,
 ) -> Result<(), error::Error> {
@@ -230,9 +220,9 @@ async fn update_synced(
         return Ok(());
     }
 
-    let mut params: ParamsVec<'_> = vec![server_id, &status, updated];
+    let mut params: ParamsVec<'_> = vec![user_peers_id, &status, updated];
     let mut query = String::from(
-        "insert into synced_entries (entries_id, server_id, status, updated) values "
+        "insert into synced_entries (entries_id, user_peers_id, status, updated) values "
     );
 
     for (index, entries_id) in given.iter().enumerate() {
@@ -249,7 +239,7 @@ async fn update_synced(
     }
 
     query.push_str(
-        " on conflict (entries_id, server_id) do update \
+        " on conflict (entries_id, user_peers_id) do update \
         set status = excluded.status, \
             updated = excluded.updated"
     );
@@ -262,7 +252,7 @@ async fn update_synced(
 }
 
 async fn send_entry(
-    client: &RemoteClient,
+    client: &PeerClient,
     entries_id: EntryId,
     entry: sync::journal::EntrySync,
 ) -> Result<EntryId, EntryId> {

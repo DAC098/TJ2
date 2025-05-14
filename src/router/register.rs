@@ -100,7 +100,9 @@ pub async fn post(
     options.authenticated = true;
     options.verified = true;
 
-    let session = Session::create(&transaction, options).await?;
+    let session = Session::create(&transaction, options)
+        .await
+        .context("failed to create session record")?;
     let session_cookie = session.build_cookie();
 
     let user_dir = state.storage()

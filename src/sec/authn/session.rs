@@ -1,192 +1,203 @@
-use std::fmt;
-
-use axum::http::HeaderMap;
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use bytes::BytesMut;
+use axum::http::{HeaderMap, HeaderValue};
 use chrono::Duration;
 use chrono::{DateTime, Utc};
-use rand::RngCore;
-use postgres_types as pg_types;
 
-use crate::error::{self, Context, BoxDynError};
 use crate::db;
+use crate::db::ids::{UserId, UserClientId};
 use crate::cookie;
+use crate::sec::authn::token::{Token, InvalidBase64};
 
+pub const API_SESSION_ID_KEY: &str = "api_session_id";
+pub const API_SESSION_TOKEN_LEN: usize = 48;
 pub const SESSION_ID_KEY: &str = "session_id";
 pub const SESSION_TOKEN_LEN: usize = 48;
 
-#[derive(Debug, thiserror::Error)]
-#[error("invalid base64 string provided")]
-pub struct InvalidBase64;
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct Token([u8; SESSION_TOKEN_LEN]);
-
-impl Token {
-    pub fn new() -> Result<Self, rand::Error> {
-        let mut bytes = [0; SESSION_TOKEN_LEN];
-
-        rand::thread_rng().try_fill_bytes(&mut bytes)?;
-
-        Ok(Token(bytes))
-    }
-
-    pub fn from_base64(given: &str) -> Result<Self, InvalidBase64> {
-        let decoded = URL_SAFE_NO_PAD.decode(given)
-            .map_err(|_| InvalidBase64)?;
-
-        let bytes = decoded.try_into()
-            .map_err(|_| InvalidBase64)?;
-
-        Ok(Token(bytes))
-    }
-
-    pub fn as_base64(&self) -> String {
-        URL_SAFE_NO_PAD.encode(self.0)
-    }
-}
-
-impl fmt::Display for Token {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for byte in self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-
-        Ok(())
-    }
-}
-
-impl pg_types::ToSql for Token {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
-        self.0.as_slice()
-            .to_sql(ty, w)
-    }
-
-    fn accepts(ty: &pg_types::Type) -> bool {
-        <&[u8] as pg_types::ToSql>::accepts(ty)
-    }
-
-    pg_types::to_sql_checked!();
-}
-
-impl<'a> pg_types::FromSql<'a> for Token {
-    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
-        let v = <Vec<u8> as pg_types::FromSql>::from_sql(ty, raw)?;
-
-        let Ok(bytes) = v.try_into() else {
-            return Err("invalid sql value for Token. expected bytea with 48 bytes".into());
-        };
-
-        Ok(Token(bytes))
-    }
-
-    fn accepts(ty: &pg_types::Type) -> bool {
-        <&[u8] as pg_types::FromSql>::accepts(ty)
-    }
-}
+pub type ApiSessionToken = Token<API_SESSION_TOKEN_LEN>;
+pub type SessionToken = Token<SESSION_TOKEN_LEN>;
 
 #[derive(Debug, Clone)]
 pub struct Session {
-    pub token: Token,
-    pub users_id: db::ids::UserId,
+    pub token: SessionToken,
+    pub users_id: UserId,
     pub issued_on: DateTime<Utc>,
     pub expires_on: DateTime<Utc>,
     pub authenticated: bool,
     pub verified: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct ApiSession {
+    pub token: ApiSessionToken,
+    pub users_id: UserId,
+    pub user_clients_id: UserClientId,
+    pub issued_on: DateTime<Utc>,
+    pub expires_on: DateTime<Utc>,
+    pub authenticated: bool,
+}
+
+#[derive(Debug)]
 pub struct SessionOptions {
-    pub users_id: db::ids::UserId,
+    pub users_id: UserId,
     pub duration: Duration,
     pub authenticated: bool,
     pub verified: bool,
 }
 
-impl SessionOptions {
-    pub fn new<I>(users_id: I) -> Self
-    where
-        I: Into<db::ids::UserId>
-    {
-        SessionOptions {
-            users_id: users_id.into(),
-            duration: Duration::days(7),
-            authenticated: false,
-            verified: false,
-        }
-    }
+#[derive(Debug)]
+pub struct ApiSessionOptions {
+    pub users_id: UserId,
+    pub user_clients_id: UserClientId,
+    pub duration: Duration,
+    pub authenticated: bool,
+}
+
+#[derive(Debug)]
+pub enum SessionRetrieveOne<'a> {
+    Token(&'a SessionToken)
+}
+
+#[derive(Debug)]
+pub enum ApiSessionRetrieveOne<'a> {
+    Token(&'a ApiSessionToken)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    #[error("the specified token already exists")]
+    TokenExists,
+
+    #[error("the specified user was not found")]
+    UserNotFound,
+
+    #[error("the expires_on timestamp overflowed")]
+    ExpiresOnOverflow,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+
+    #[error(transparent)]
+    Rand(#[from] rand::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ApiSessionError {
+    #[error("the specified token already exists")]
+    TokenExists,
+
+    #[error("the specified user was not found")]
+    UserNotFound,
+
+    #[error("the expires_on timestamp overflowed")]
+    ExpiresOnOverflow,
+
+    #[error("the specified user client was not found")]
+    UserClientNotFound,
+
+    #[error(transparent)]
+    Header(#[from] axum::http::header::ToStrError),
+
+    #[error(transparent)]
+    Token(#[from] InvalidBase64),
+
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+
+    #[error(transparent)]
+    Rand(#[from] rand::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthHeaderError {
+    #[error("invalid authorization header scheme")]
+    InvalidScheme,
+
+    #[error("invalid authorization header format")]
+    InvalidFormat,
+
+    #[error("invalid authorization header value")]
+    InvalidValue,
+
+    #[error(transparent)]
+    Header(#[from] axum::http::header::ToStrError),
 }
 
 impl Session {
-    pub async fn create(conn: &impl db::GenericClient, options: SessionOptions) -> Result<Self, error::Error> {
-        let users_id = options.users_id;
-        let issued_on = Utc::now();
-        let expires_on = issued_on.checked_add_signed(options.duration)
-            .context("failed to add duration to expires_on")?;
-        let authenticated = options.authenticated;
-        let verified = options.verified;
-        let mut attempts = 3usize;
-        let mut token: Token;
-
-        loop {
-            attempts -= 1;
-            token = Token::new()
-                .context("failed to create token")?;
-
-            let result = conn.execute(
-                "\
-                insert into authn_sessions (token, users_id, issued_on, expires_on, authenticated, verified) values \
-                ($1, $2, $3, $4, $5, $6)",
-                &[&token, &users_id, &issued_on, &expires_on, &authenticated, &verified]
-            )
-                .await
-                .context("failed to insert session")?;
-
-            if result == 0 {
-                if attempts == 0 {
-                    return Err(error::Error::context("failed to insert session"));
-                }
-            } else {
-                break;
-            }
-        }
-
-        Ok(Self {
-            token,
-            users_id,
-            issued_on,
-            expires_on,
-            authenticated,
-            verified,
-        })
+    pub fn find_id(headers: &HeaderMap) -> Result<Option<&str>, axum::http::header::ToStrError> {
+        crate::net::cookie::find_cookie_value(headers, SESSION_ID_KEY)
     }
 
-    pub async fn retrieve_token(conn: &impl db::GenericClient, token: &Token) -> Result<Option<Self>, db::PgError> {
-        let maybe = conn.query_opt(
-            "\
-            select token, \
-                   users_id, \
-                   issued_on, \
-                   expires_on, \
-                   authenticated, \
-                   verified \
-            from authn_sessions \
-            where token = $1",
-            &[token]
-        ).await?;
+    pub async fn create(
+        conn: &impl db::GenericClient,
+        SessionOptions {
+            users_id,
+            duration,
+            authenticated,
+            verified,
+        }: SessionOptions
+    ) -> Result<Self, SessionError> {
+        let token = SessionToken::new()?;
+        let issued_on = Utc::now();
+        let expires_on = issued_on.checked_add_signed(duration)
+            .ok_or(SessionError::ExpiresOnOverflow)?;
 
-        if let Some(row) = maybe {
-            Ok(Some(Self {
-                token: row.get(0),
-                users_id: row.get(1),
-                issued_on: row.get(2),
-                expires_on: row.get(3),
-                authenticated: row.get(4),
-                verified: row.get(5),
-            }))
-        } else {
-            Ok(None)
+        let result = conn.execute(
+            "\
+            insert into authn_sessions (token, users_id, issued_on, expires_on, authenticated, verified) values \
+            ($1, $2, $3, $4, $5, $6)",
+            &[&token, &users_id, &issued_on, &expires_on, &authenticated, &verified]
+        ).await;
+
+        match result {
+            Ok(_) => Ok(Self {
+                token,
+                users_id,
+                issued_on,
+                expires_on,
+                authenticated,
+                verified,
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "authn_sessions_pkey" => Err(SessionError::TokenExists),
+                        _ => Err(SessionError::Db(err))
+                    }
+                    db::ErrorKind::ForeignKey(constraint) => match constraint {
+                        "authn_sessions_users_id_fkey" => Err(SessionError::UserNotFound),
+                        _ => Err(SessionError::Db(err))
+                    }
+                }
+            } else {
+                Err(SessionError::Db(err))
+            }
         }
+    }
+
+    pub async fn retrieve_one<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<SessionRetrieveOne<'a>>
+    {
+        Ok(match given.into() {
+            SessionRetrieveOne::Token(token) => conn.query_opt(
+                "\
+                select token, \
+                       users_id, \
+                       issued_on, \
+                       expires_on, \
+                       authenticated, \
+                       verified \
+                from authn_sessions \
+                where token = $1",
+                &[token]
+            ).await?
+        }.map(|row| Self {
+            token: row.get(0),
+            users_id: row.get(1),
+            issued_on: row.get(2),
+            expires_on: row.get(3),
+            authenticated: row.get(4),
+            verified: row.get(5),
+        }))
     }
 
     pub async fn update(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
@@ -230,20 +241,171 @@ impl Session {
     }
 }
 
-pub fn find_session_id(headers: &HeaderMap) -> Result<Option<&str>, axum::http::header::ToStrError> {
-    for cookie in headers.get_all("cookie") {
-        let cookie_str = cookie.to_str()?;
+impl ApiSession {
+    pub fn authorization_value(token: &ApiSessionToken) -> HeaderValue {
+        let value = format!("tj2-token {}", token.as_base64());
 
-        for sub_cookie in cookie_str.split("; ") {
-            let Some((key, value)) = sub_cookie.split_once('=') else {
-                continue;
-            };
+        let mut rtn = HeaderValue::from_str(&value).unwrap();
+        rtn.set_sensitive(true);
 
-            if key == SESSION_ID_KEY {
-                return Ok(Some(value))
+        rtn
+    }
+
+    pub fn find_token(headers: &HeaderMap) -> Result<Option<ApiSessionToken>, AuthHeaderError> {
+        let Some(auth_header) = headers.get("Authorization") else {
+            return Ok(None);
+        };
+
+        let auth_str = auth_header.to_str()?;
+
+        let (scheme, value) = auth_str.split_once(' ')
+            .ok_or(AuthHeaderError::InvalidFormat)?;
+
+        if scheme != "tj2-token" {
+            return Err(AuthHeaderError::InvalidScheme);
+        }
+
+        let token = ApiSessionToken::from_base64(value)
+            .map_err(|_| AuthHeaderError::InvalidValue)?;
+
+        Ok(Some(token))
+    }
+
+    pub async fn create(
+        conn: &impl db::GenericClient,
+        ApiSessionOptions {
+            users_id,
+            user_clients_id,
+            duration,
+            authenticated,
+        }: ApiSessionOptions
+    ) -> Result<Self, ApiSessionError> {
+        let token = SessionToken::new()?;
+        let issued_on = Utc::now();
+        let expires_on = issued_on.checked_add_signed(duration)
+            .ok_or(ApiSessionError::ExpiresOnOverflow)?;
+
+        let result = conn.execute(
+            "\
+            insert into authn_api_sessions (token, users_id, user_clients_id, issued_on, expires_on, authenticated) values \
+            ($1, $2, $3, $4, $5, $6)",
+            &[&token, &users_id, &user_clients_id, &issued_on, &expires_on, &authenticated]
+        ).await;
+
+        match result {
+            Ok(_) => Ok(Self {
+                token,
+                users_id,
+                user_clients_id,
+                issued_on,
+                expires_on,
+                authenticated,
+            }),
+            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
+                match kind {
+                    db::ErrorKind::Unique(constraint) => match constraint {
+                        "authn_api_sessions_pkey" => Err(ApiSessionError::TokenExists),
+                        _ => Err(ApiSessionError::Db(err))
+                    }
+                    db::ErrorKind::ForeignKey(constraint) => match constraint {
+                        "authn_api_sessions_users_id_fkey" => Err(ApiSessionError::UserNotFound),
+                        "authn_api_sessions_user_clients_id_fkey" => Err(ApiSessionError::UserClientNotFound),
+                        _ => Err(ApiSessionError::Db(err))
+                    }
+                }
+            } else {
+                Err(ApiSessionError::Db(err))
             }
         }
     }
 
-    Ok(None)
+    pub async fn retrieve_one<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<ApiSessionRetrieveOne<'a>>
+    {
+        Ok(match given.into() {
+            ApiSessionRetrieveOne::Token(token) => conn.query_opt(
+                "\
+                select token, \
+                       users_id, \
+                       user_clients_id, \
+                       issued_on, \
+                       expires_on, \
+                       authenticated \
+                from authn_api_sessions \
+                where token = $1",
+                &[token]
+            ).await?
+        }.map(|row| Self {
+            token: row.get(0),
+            users_id: row.get(1),
+            user_clients_id: row.get(2),
+            issued_on: row.get(3),
+            expires_on: row.get(4),
+            authenticated: row.get(5),
+        }))
+    }
+
+    pub async fn update(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+        let result = conn.execute(
+            "\
+            update authn_api_sessions \
+            set expires_on = $2, \
+                authenticated = $3 \
+            where token = $1",
+            &[&self.token, &self.expires_on, &self.authenticated]
+        ).await?;
+
+        Ok(result == 1)
+    }
+
+    pub async fn delete(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
+        let result = conn.execute(
+            "delete from authn_api_sessions where token = $1",
+            &[&self.token]
+        ).await?;
+
+        Ok(result == 1)
+    }
+}
+
+impl SessionOptions {
+    pub fn new<I>(users_id: I) -> Self
+    where
+        I: Into<UserId>
+    {
+        Self {
+            users_id: users_id.into(),
+            duration: Duration::days(7),
+            authenticated: false,
+            verified: false,
+        }
+    }
+}
+
+impl ApiSessionOptions {
+    pub fn new<I, C>(users_id: I, user_clients_id: C) -> Self
+    where
+        I: Into<UserId>,
+        C: Into<UserClientId>,
+    {
+        Self {
+            users_id: users_id.into(),
+            user_clients_id: user_clients_id.into(),
+            duration: Duration::days(7),
+            authenticated: false,
+        }
+    }
+}
+
+impl<'a> From<&'a SessionToken> for SessionRetrieveOne<'a> {
+    fn from(token: &'a SessionToken) -> Self {
+        Self::Token(token)
+    }
+}
+
+impl<'a> From<&'a ApiSessionToken> for ApiSessionRetrieveOne<'a> {
+    fn from(token: &'a ApiSessionToken) -> Self {
+        Self::Token(token)
+    }
 }

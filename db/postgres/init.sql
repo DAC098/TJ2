@@ -64,13 +64,6 @@ create table remote_servers (
     public_key bytea not null unique
 );
 
-create table remote_server_users (
-    server_id bigint not null references remote_servers (id),
-    users_id bigint not null references users (id),
-    public_key bytea not null unique,
-    unique (server_id, users_id)
-);
-
 create table authn_totp (
     users_id bigint primary key not null references users (id),
     algo int not null,
@@ -86,6 +79,15 @@ create table authn_sessions (
     expires_on timestamp with time zone not null,
     authenticated boolean not null default false,
     verified boolean not null default false
+);
+
+create table authn_api_sessions (
+    token bytea primary key not null,
+    users_id bigint not null references users (id),
+    user_clients_id bigint not null references user_clients (id),
+    issued_on timestamp with time zone not null,
+    expires_on timestamp with time zone not null,
+    authenticated boolean not null default false
 );
 
 create table authz_roles (
@@ -202,22 +204,22 @@ create table journal_peers (
 
 create table synced_journals (
     journals_id bigint not null references journals (id),
-    server_id bigint not null references remote_servers (id),
+    user_peers_id bigint not null references user_peers (id),
     updated timestamp with time zone,
-    primary key (journals_id, server_id)
+    primary key (journals_id, user_peers_id)
 );
 
 create table synced_entries (
     entries_id bigint not null references entries (id),
-    server_id bigint not null references remote_servers (id),
+    user_peers_id bigint not null references user_peers (id),
     status smallint not null,
     updated timestamp with time zone,
-    primary key (entries_id, server_id)
+    primary key (entries_id, user_peers_id)
 );
 
 create table synced_file_entries (
     file_entries_id bigint not null references file_entries (id),
-    server_id bigint not null references remote_servers (id),
+    user_peers_id bigint not null references user_peers (id),
     updated timestamp with time zone,
-    primary key (file_entries_id, server_id)
+    primary key (file_entries_id, user_peers_id)
 );

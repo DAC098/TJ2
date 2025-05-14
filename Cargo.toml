@@ -19,13 +19,14 @@ path = "./lib"
 
 [workspace.dependencies.serde]
 version = "1"
-features = ["derive"]
+features = ["derive", "alloc"]
 
 [workspace.dependencies.serde_repr]
 version = "0.1"
 
 [workspace.dependencies.serde_json]
 version = "1"
+features = ["alloc"]
 
 [workspace.dependencies.toml]
 version = "0.8"
@@ -36,6 +37,10 @@ version = "0.0"
 [workspace.dependencies.bincode]
 version = "2"
 features = ["serde"]
+
+[workspace.dependencies.serdect]
+version = "0"
+features = ["alloc"]
 
 # -----------------------------------------------------------------------------
 # utility
@@ -149,7 +154,7 @@ version = "0.7"
 
 [workspace.dependencies.reqwest]
 version = "0.12"
-features = ["json"]
+features = ["json", "rustls-tls"]
 
 # -----------------------------------------------------------------------------
 # logging
@@ -192,6 +197,7 @@ serde_repr = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 serde_yml = { workspace = true }
+serdect = { workspace = true }
 
 # utility
 

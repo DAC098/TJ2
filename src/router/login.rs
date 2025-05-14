@@ -9,7 +9,7 @@ use crate::header::{Location, is_accepting_html};
 use crate::router::body;
 use crate::sec;
 use crate::sec::authn::{Session, Initiator, InitiatorError};
-use crate::sec::authn::session::SessionOptions;
+use crate::sec::authn::session::{SessionOptions, SessionError};
 use crate::sec::otp;
 use crate::state;
 use crate::user;
@@ -221,7 +221,9 @@ pub async fn post(
         LoginResult::Success
     };
 
-    let session = Session::create(&transaction, options).await?;
+    let session = Session::create(&transaction, options)
+        .await
+        .context("failed to create session record")?;
     let session_cookie = session.build_cookie();
 
     transaction.commit().await?;

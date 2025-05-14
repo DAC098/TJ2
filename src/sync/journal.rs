@@ -18,7 +18,7 @@ use crate::db::ids::{
     CustomFieldUid,
     FileEntryUid,
     UserUid,
-    RemoteServerId,
+    UserPeerId,
 };
 use crate::error::{self, BoxDynError, Context};
 use crate::journal::{FileStatus, custom_field};
@@ -178,12 +178,12 @@ impl EntrySync {
     pub async fn retrieve_batch_stream(
         conn: &impl GenericClient,
         journals_id: &JournalId,
-        server_id: &RemoteServerId,
+        user_peers_id: &UserPeerId,
         prev_entry: &EntryId,
         sync_date: &DateTime<Utc>,
         batch_size: i64,
     ) -> Result<impl Stream<Item = Result<(EntryId, Self), error::Error>>, error::Error> {
-        let params: ParamsArray<5> = [journals_id, server_id, prev_entry, sync_date, &batch_size];
+        let params: ParamsArray<5> = [journals_id, user_peers_id, prev_entry, sync_date, &batch_size];
         let query = "\
             select entries.id, \
                    entries.uid, \
@@ -201,7 +201,7 @@ impl EntrySync {
                     entries.journals_id = journals.id \
                 left join synced_entries on \
                     entries.id = synced_entries.entries_id and \
-                    synced_entries.server_id = $2 \
+                    synced_entries.user_peers_id = $2 \
             where entries.journals_id = $1 and \
                   entries.id > $3 and ( \
                       synced_entries.status is null or ( \
