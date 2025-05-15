@@ -30,9 +30,13 @@ pub mod custom_field;
 /// the potential errors when creating a journal
 #[derive(Debug, thiserror::Error)]
 pub enum JournalCreateError {
-    /// the given jounrla name already exists for this user
+    /// the given jounral name already exists for this user
     #[error("the given journal name already exists for this user")]
     NameExists,
+
+    /// the given journal uid already exists
+    #[error("the given journal uid already exists")]
+    UidExists,
 
     /// the specified user does not exist
     #[error("the specified user does not exist")]
@@ -68,16 +72,22 @@ pub struct JournalCreateOptions {
 
     /// an optional description of the journal
     description: Option<String>,
+
+    /// an optional uid value to assign
+    uid: Option<JournalUid>,
 }
 
 impl JournalCreateOptions {
     /// assigns a description to the journal
-    pub fn description<T>(mut self, value: T) -> Self
+    pub fn description<T>(&mut self, value: T)
     where
         T: Into<String>
     {
         self.description = Some(value.into());
-        self
+    }
+
+    pub fn uid(&mut self, value: JournalUid) {
+        self.uid = Some(value);
     }
 }
 
@@ -314,14 +324,15 @@ impl LocalJournal {
         JournalCreateOptions {
             users_id,
             name: name.into(),
-            description: None
+            description: None,
+            uid: None,
         }
     }
 
     /// attempts to create a new [`Journal`] with the given options
     pub async fn create(conn: &impl GenericClient, options: JournalCreateOptions) -> Result<Self, JournalCreateError> {
         let kind = JournalKind::Local;
-        let uid = JournalUid::gen();
+        let uid = options.uid.unwrap_or(JournalUid::gen());
         let created = Utc::now();
         let users_id = options.users_id;
         let name = options.name;
@@ -356,6 +367,7 @@ impl LocalJournal {
                 match kind {
                     db::ErrorKind::Unique(constraint) => match constraint {
                         "journals_users_id_name_key" => Err(JournalCreateError::NameExists),
+                        "journals_uid_key" => Err(JournalCreateError::UidExists),
                         _ => Err(JournalCreateError::Db(err))
                     }
                     db::ErrorKind::ForeignKey(constraint) => match constraint {
@@ -1114,6 +1126,7 @@ pub struct CreateCustomFieldOptions {
     pub order: i32,
     pub config: custom_field::Type,
     pub description: Option<String>,
+    pub uid: Option<CustomFieldUid>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1159,6 +1172,7 @@ impl CustomField {
             order: 0,
             config,
             description: None,
+            uid: None,
         }
     }
 
@@ -1166,15 +1180,16 @@ impl CustomField {
         conn: &impl GenericClient,
         options: CreateCustomFieldOptions
     ) -> Result<Self, CreateCustomFieldError> {
-        let uid = CustomFieldUid::gen();
-        let created = Utc::now();
         let CreateCustomFieldOptions {
             journals_id,
             name,
             order,
             config,
-            description
+            description,
+            uid,
         } = options;
+        let uid = uid.unwrap_or(CustomFieldUid::gen());
+        let created = Utc::now();
 
         let result = conn.query_one(
             "\

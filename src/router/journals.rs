@@ -422,7 +422,7 @@ async fn create_journal(
     let mut options = LocalJournal::create_options(initiator.user.id, json.name);
 
     if let Some(description) = json.description {
-        options = options.description(description);
+        options.description(description);
     }
 
     let result = LocalJournal::create(&transaction, options).await;
@@ -434,6 +434,9 @@ async fn create_journal(
                 StatusCode::BAD_REQUEST,
                 body::Json(NewJournalResult::NameExists)
             ).into_response()),
+            JournalCreateError::UidExists => return Err(
+                error::Error::context("uid already exists")
+            ),
             JournalCreateError::UserNotFound => return Err(
                 error::Error::context("specified user does not exist")
             ),
@@ -1159,7 +1162,7 @@ async fn sync_with_remote(
 
         tracing::debug!("spinning job for peer: {peer:#?}");
 
-        tokio::spawn(jobs::sync::kickoff_journal_sync(state.clone(), peer, journal.clone()));
+        tokio::spawn(jobs::sync::kickoff_send_journal(state.clone(), peer, journal.clone()));
 
         successful += 1;
     }

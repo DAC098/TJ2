@@ -13,20 +13,29 @@ use crate::db::ids::{
     UserPeerId,
 };
 use crate::error::{self, Context};
-use crate::journal::LocalJournal;
+use crate::journal::{LocalJournal, CustomField};
 use crate::state;
 use crate::sync::{self, PeerClient};
+use crate::sync::journal::{
+    JournalSync,
+    CustomFieldSync,
+    EntrySync,
+    EntryTagSync,
+    EntryCFSync,
+    EntryFileSync,
+    SyncStatus,
+};
 use crate::user::peer::UserPeer;
 
 const BATCH_SIZE: i64 = 50;
 
-pub async fn kickoff_journal_sync(state: state::SharedState, peer: UserPeer, journal: LocalJournal) {
-    if let Err(err) = journal_sync(state, peer, journal).await {
+pub async fn kickoff_send_journal(state: state::SharedState, peer: UserPeer, journal: LocalJournal) {
+    if let Err(err) = send_journal(state, peer, journal).await {
         error::log_prefix_error("error when syncing journal with peer", &err);
     }
 }
 
-async fn journal_sync(
+async fn send_journal(
     state: state::SharedState,
     peer: UserPeer,
     journal: LocalJournal,
@@ -43,6 +52,8 @@ async fn journal_sync(
         .connect(state.storage())
         .await
         .context("failed to create peer client")?;
+
+    journal_sync(&transaction, &client, &journal).await?;
 
     let max_batches = 2;
     let mut batches = 0;
@@ -127,6 +138,51 @@ async fn journal_sync(
     Ok(())
 }
 
+async fn journal_sync(
+    conn: &impl GenericClient,
+    client: &PeerClient,
+    journal: &LocalJournal
+) -> Result<(), error::Error> {
+    let custom_fields_stream = CustomField::retrieve_journal_stream(conn, &journal.id)
+        .await
+        .context("failed to retrieve journal custom fields")?;
+
+    futures::pin_mut!(custom_fields_stream);
+
+    let mut custom_fields = Vec::new();
+
+    while let Some(result) = custom_fields_stream.next().await {
+        let record = result.context("failed to retrieve custom field record")?;
+
+        custom_fields.push(CustomFieldSync {
+            uid: record.uid,
+            name: record.name,
+            order: record.order,
+            config: record.config,
+            description: record.description,
+        });
+    }
+
+    let journal_json = JournalSync {
+        uid: journal.uid.clone(),
+        name: journal.name.clone(),
+        description: journal.description.clone(),
+        custom_fields,
+    };
+
+    let res = client.post("/sync/journal")
+        .json(&journal_json)
+        .send()
+        .await
+        .context("failed to send journal")?;
+
+    if res.status() != StatusCode::CREATED {
+        // do something
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 struct BatchResults {
     last_id: EntryId,
@@ -142,7 +198,7 @@ async fn batch_entry_sync(
     prev_entry: &EntryId,
     sync_date: &DateTime<Utc>,
 ) -> Result<BatchResults, error::Error> {
-    let entries = sync::journal::EntrySync::retrieve_batch_stream(
+    let entries = EntrySync::retrieve_batch_stream(
         conn,
         &journal.id,
         &client.peer().id,
@@ -161,9 +217,9 @@ async fn batch_entry_sync(
         let (entries_id, mut entry) = try_record?;
 
         let (tags_res, custom_fields_res, files_res) = tokio::join!(
-            sync::journal::EntryTagSync::retrieve(conn, &entries_id),
-            sync::journal::EntryCFSync::retrieve(conn, &entries_id),
-            sync::journal::EntryFileSync::retrieve(conn, &entries_id),
+            EntryTagSync::retrieve(conn, &entries_id),
+            EntryCFSync::retrieve(conn, &entries_id),
+            EntryFileSync::retrieve(conn, &entries_id),
         );
 
         entry.tags = tags_res?;
@@ -190,14 +246,14 @@ async fn batch_entry_sync(
         conn,
         &successful,
         &client.peer().id,
-        sync::journal::SyncStatus::Synced,
+        SyncStatus::Synced,
         sync_date
     ).await?;
     update_synced(
         conn,
         &failed,
         &client.peer().id,
-        sync::journal::SyncStatus::Failed,
+        SyncStatus::Failed,
         sync_date
     ).await?;
 
@@ -213,7 +269,7 @@ async fn update_synced(
     conn: &impl GenericClient,
     given: &Vec<EntryId>,
     user_peers_id: &UserPeerId,
-    status: sync::journal::SyncStatus,
+    status: SyncStatus,
     updated: &DateTime<Utc>,
 ) -> Result<(), error::Error> {
     if given.is_empty() {
@@ -265,7 +321,13 @@ async fn send_entry(
         return Err(entries_id);
     };
 
-    match res.status() {
+    let status = res.status();
+
+    if let Ok(json) = res.json::<serde_json::Value>().await {
+        tracing::debug!("json response? {json:#?}");
+    }
+
+    match status {
         StatusCode::CREATED => Ok(entries_id),
         StatusCode::INTERNAL_SERVER_ERROR => Err(entries_id),
         _ => Err(entries_id),

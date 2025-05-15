@@ -199,13 +199,7 @@ create table custom_field_entries (
 create table journal_peers (
     journals_id bigint not null references journals (id),
     user_peers_id bigint not null references user_peers (id),
-    unique (journals_id, user_peers_id)
-);
-
-create table synced_journals (
-    journals_id bigint not null references journals (id),
-    user_peers_id bigint not null references user_peers (id),
-    updated timestamp with time zone,
+    synced timestamp with time zone,
     primary key (journals_id, user_peers_id)
 );
 

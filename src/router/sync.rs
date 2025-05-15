@@ -4,6 +4,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use axum::response::{Response, IntoResponse};
 use axum::routing::post;
+use chrono::Utc;
 use futures::StreamExt;
 use serde::{Serialize, Deserialize};
 use tj2_lib::sec::pki::{PublicKey, PrivateKey, PrivateKeyError};
@@ -21,8 +22,9 @@ use crate::db::ids::{
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
 use crate::router::body;
-use crate::journal::{self, FileStatus, FileEntry};
+use crate::journal::{self, Journal, LocalJournal, FileStatus, FileEntry, CustomField};
 use crate::sec;
+use crate::sec::authn::ApiInitiator;
 use crate::state::{self, Storage};
 use crate::sync::{self, RemoteServer, PeerAddr};
 use crate::sync::journal::{
@@ -36,10 +38,75 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
         .route("/register", post(register_peer_user))
         .route("/entries", post(receive_entry))
+        .route("/journal", post(receive_journal))
+}
+
+async fn receive_journal(
+    state: state::SharedState,
+    initiator: ApiInitiator,
+    body::Json(json): body::Json<sync::journal::JournalSync>
+) -> Result<StatusCode, error::Error> {
+    let mut conn = state.db_conn().await?;
+    let transaction = conn.transaction()
+        .await
+        .context("failed to create transaction")?;
+
+    let now = Utc::now();
+
+    let journal = if let Some(exists) = Journal::retrieve(&transaction, &json.uid)
+        .await
+        .context("failed to retrieve journal")?
+    {
+        if *exists.users_id() != initiator.user.id {
+            return Ok(StatusCode::BAD_REQUEST);
+        }
+
+        let mut journal = exists.into_local().unwrap();
+        journal.updated = Some(now);
+        journal.name = json.name;
+        journal.description = json.description;
+
+        journal.update(&transaction)
+            .await
+            .context("failed to update journal")?;
+
+        journal
+    } else {
+        let mut options = LocalJournal::create_options(initiator.user.id, json.name);
+        options.uid(json.uid);
+
+        if let Some(desc) = json.description {
+            options.description(desc);
+        }
+
+        let journal = LocalJournal::create(&transaction, options)
+            .await
+            .context("failed to create journal")?;
+
+        journal
+    };
+
+    for cf in json.custom_fields {
+        let mut options = CustomField::create_options(journal.id, cf.name, cf.config);
+        options.uid = Some(cf.uid);
+        options.order = cf.order;
+        options.description = cf.description;
+
+        CustomField::create(&transaction, options)
+            .await
+            .context("failed to create custom field")?;
+    }
+
+    transaction.commit()
+        .await
+        .context("failed to commit transaction")?;
+
+    Ok(StatusCode::CREATED)
 }
 
 async fn receive_entry(
     state: state::SharedState,
+    initiator: ApiInitiator,
     body::Json(json): body::Json<sync::journal::EntrySync>,
 ) -> Result<SyncEntryResult, error::Error> {
     let mut conn = state.db_conn().await?;
@@ -49,30 +116,21 @@ async fn receive_entry(
 
     tracing::debug!("received entry from server: {} {json:#?}", json.uid);
 
-    let (journal_res, user_res) = tokio::join!(
-        journal::Journal::retrieve(&transaction, &json.journals_uid),
-        user::User::retrieve(&transaction, &json.users_uid),
-    );
-
     let journal = {
-        let Some(journal) = journal_res.context("failed to retrieve journal")? else {
+        let Some(result) = journal::Journal::retrieve(&transaction, &json.journals_uid)
+            .await
+            .context("failed to retrieve journal")? else {
             tracing::debug!("failed to retrieve journal: {}", json.journals_uid);
 
             return Ok(SyncEntryResult::JournalNotFound);
         };
 
-        let Ok(rtn) = journal.into_remote() else {
-            return Ok(SyncEntryResult::NotRemoteJournal);
-        };
-
-        rtn
+        result.into_local().unwrap()
     };
 
-    let Some(user) = user_res.context("failed to retrieve_user")? else {
-        tracing::debug!("failed to retrieve user: {}", json.users_uid);
-
-        return Ok(SyncEntryResult::UserNotFound);
-    };
+    if journal.users_id != initiator.user.id {
+        return Ok(SyncEntryResult::JournalNotFound);
+    }
 
     let result = transaction.query_one(
         "\
@@ -84,7 +142,7 @@ async fn receive_entry(
                 contents = excluded.contents, \
                 updated = excluded.updated \
         returning id",
-        &[&json.uid, &journal.id, &user.id, &json.date, &json.title, &json.contents, &json.created, &json.updated]
+        &[&json.uid, &journal.id, &initiator.user.id, &json.date, &json.title, &json.contents, &json.created, &json.updated]
     )
         .await
         .context("failed to upsert entry")?;

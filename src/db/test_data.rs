@@ -87,8 +87,8 @@ pub async fn create_journal(
     rng: &mut ThreadRng,
     users_id: ids::UserId
 ) -> Result<(), Error> {
-    let options = LocalJournal::create_options(users_id, "default")
-        .description("the default journal");
+    let mut options = LocalJournal::create_options(users_id, "default");
+    options.description("the default journal");
     let journal = LocalJournal::create(conn, options)
         .await
         .context("failed to create journal for test user")?;

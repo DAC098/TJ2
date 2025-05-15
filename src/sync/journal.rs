@@ -66,7 +66,6 @@ impl IntoResponse for SyncEntryResult {
     }
 }
 
-/*
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SyncJournalResult {
@@ -88,7 +87,6 @@ impl IntoResponse for SyncJournalResult {
         }
     }
 }
-*/
 
 #[derive(Debug)]
 pub enum SyncStatus {
@@ -147,17 +145,22 @@ impl pg_types::ToSql for SyncStatus {
     pg_types::to_sql_checked!();
 }
 
-/*
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JournalSync {
     pub uid: JournalUid,
-    pub users_uid: UserUid,
     pub name: String,
     pub description: Option<String>,
-    pub created: DateTime<Utc>,
-    pub updated: Option<DateTime<Utc>>,
+    pub custom_fields: Vec<CustomFieldSync>,
 }
-*/
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CustomFieldSync {
+    pub uid: CustomFieldUid,
+    pub name: String,
+    pub order: i32,
+    pub config: custom_field::Type,
+    pub description: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EntrySync {
