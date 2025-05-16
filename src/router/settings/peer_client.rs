@@ -422,6 +422,11 @@ pub async fn delete(
 
     match record {
         DeleteRecord::Client { id } => {
+            transaction.execute(
+                "delete from authn_api_sessions where user_clients_id = $1",
+                &[&id]
+            ).await?;
+
             let result = transaction.execute(
                 "delete from user_clients where users_id = $1 and id = $2",
                 &[&initiator.user.id, &id]
@@ -435,6 +440,27 @@ pub async fn delete(
             }
         }
         DeleteRecord::Peer { id } => {
+            let params: db::ParamsArray<'_, 1> = [&id];
+
+            let (synced_entries, synced_file_entries, journal_peers) = tokio::join!(
+                transaction.execute(
+                    "delete from synced_entries where user_peers_id = $1",
+                    &params
+                ),
+                transaction.execute(
+                    "delete from synced_file_entries where user_peers_id = $1",
+                    &params
+                ),
+                transaction.execute(
+                    "delete from journal_peers where user_peers_id = $1",
+                    &params
+                ),
+            );
+
+            synced_entries?;
+            synced_file_entries?;
+            journal_peers?;
+
             let result = transaction.execute(
                 "delete from user_peers where users_id = $1 and id = $2",
                 &[&initiator.user.id, &id]
