@@ -56,14 +56,6 @@ create table group_users (
     primary key (users_id, groups_id)
 );
 
-create table remote_servers (
-    id bigint primary key generated always as identity,
-    addr varchar unique not null,
-    port int not null,
-    secure boolean not null,
-    public_key bytea not null unique
-);
-
 create table authn_totp (
     users_id bigint primary key not null references users (id),
     algo int not null,

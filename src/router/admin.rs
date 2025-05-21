@@ -11,7 +11,6 @@ mod users;
 mod groups;
 mod roles;
 mod invites;
-mod servers;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
@@ -40,11 +39,6 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         .route("/invites/:token", get(invites::retrieve_invite)
             .patch(invites::update_invite)
             .delete(invites::delete_invite))
-        .route("/servers", get(servers::search_servers)
-            .post(servers::create_server))
-        .route("/servers/:server_id", get(servers::retrieve_server)
-            .patch(servers::update_server)
-            .delete(servers::delete_server))
 }
 
 async fn retrieve_admin(

@@ -36,7 +36,6 @@ pub struct UserBuilder {
     username: String,
     password: String,
     version: i64,
-    uid: Option<UserUid>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -199,7 +198,6 @@ impl UserBuilder {
             username,
             password: hash,
             version,
-            uid: None,
         }
     }
 
@@ -211,19 +209,14 @@ impl UserBuilder {
             username,
             password: hash,
             version: 0,
-            uid: None
         })
-    }
-
-    pub fn with_uid(&mut self, uid: UserUid) {
-        self.uid = Some(uid);
     }
 
     pub async fn build(self, conn: &impl db::GenericClient) -> Result<User, UserBuilderError> {
         let username = self.username;
         let password = self.password;
         let version = self.version;
-        let uid = self.uid.unwrap_or(UserUid::gen());
+        let uid = UserUid::gen();
         let created = Utc::now();
 
         let result = conn.query_one(
