@@ -353,30 +353,16 @@ export interface ReceivedFile {
     updated: string | null
 }
 
-export interface RemoteFile {
-    type: "remote",
-    _id: number,
-    uid: string,
-    name: string,
-    mime_type: string,
-    mime_subtype: string,
-    mime_param: string | null,
-    created: string,
-    updated: string | null
-}
-
 export type EntryFileForm =
     RequestedFile |
-    ReceivedFile |
-    RemoteFile;
+    ReceivedFile;
 
 export type UIEntryFileForm =
     InMemoryFile |
     LocalFile |
     FailedFile |
     RequestedFile |
-    ReceivedFile |
-    RemoteFile;
+    ReceivedFile;
 
 export interface EntryFormBase {
     id: number | null,
