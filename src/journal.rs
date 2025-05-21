@@ -667,7 +667,6 @@ pub struct EntryTag {
 pub enum FileStatus {
     Requested = 0,
     Received = 1,
-    Remote = 2,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -681,7 +680,6 @@ impl TryFrom<i16> for FileStatus {
         match value {
             0 => Ok(Self::Requested),
             1 => Ok(Self::Received),
-            2 => Ok(Self::Remote),
             _ => Err(InvalidFileStatus),
         }
     }
@@ -718,7 +716,6 @@ impl<'a> pg_types::FromSql<'a> for FileStatus {
 pub enum FileEntry {
     Requested(RequestedFile),
     Received(ReceivedFile),
-    Remote(RemoteFile),
 }
 
 #[derive(Debug, Serialize)]
@@ -736,22 +733,6 @@ pub struct ReceivedFile {
     pub id: FileEntryId,
     pub uid: FileEntryUid,
     pub entries_id: EntryId,
-    pub name: Option<String>,
-    pub mime_type: String,
-    pub mime_subtype: String,
-    pub mime_param: Option<String>,
-    pub size: i64,
-    pub hash: Hash,
-    pub created: DateTime<Utc>,
-    pub updated: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RemoteFile {
-    pub id: FileEntryId,
-    pub uid: FileEntryUid,
-    pub entries_id: EntryId,
-    pub server_id: RemoteServerId,
     pub name: Option<String>,
     pub mime_type: String,
     pub mime_subtype: String,
@@ -798,7 +779,6 @@ impl FileEntry {
                    file_entries.mime_param, \
                    file_entries.size, \
                    file_entries.hash, \
-                   file_entries.server_id, \
                    file_entries.created, \
                    file_entries.updated \
             from file_entries \
@@ -825,23 +805,9 @@ impl FileEntry {
                     mime_param: record.get(7),
                     size: record.get(8),
                     hash: record.get(9),
-                    created: record.get(11),
-                    updated: record.get(12),
+                    created: record.get(10),
+                    updated: record.get(11),
                 }),
-                FileStatus::Remote => Self::Remote(RemoteFile {
-                    id: record.get(0),
-                    uid: record.get(1),
-                    entries_id: record.get(2),
-                    server_id: record.get(10),
-                    name: record.get(4),
-                    mime_type: record.get(5),
-                    mime_subtype: record.get(6),
-                    mime_param: record.get(7),
-                    size: record.get(8),
-                    hash: record.get(9),
-                    created: record.get(11),
-                    updated: record.get(12),
-                })
             })))
     }
 
@@ -864,8 +830,7 @@ impl FileEntry {
                    file_entries.size, \
                    file_entries.hash, \
                    file_entries.created, \
-                   file_entries.updated, \
-                   file_entries.server_id \
+                   file_entries.updated \
             from file_entries";
 
         let result = match given.into() {
@@ -907,20 +872,6 @@ impl FileEntry {
                 created: record.get(10),
                 updated: record.get(11),
             }),
-            FileStatus::Remote => Self::Remote(RemoteFile {
-                id: record.get(0),
-                uid: record.get(1),
-                entries_id: record.get(2),
-                server_id: record.get(12),
-                name: record.get(4),
-                mime_type: record.get(5),
-                mime_subtype: record.get(6),
-                mime_param: record.get(7),
-                size: record.get(8),
-                hash: record.get(9),
-                created: record.get(10),
-                updated: record.get(11),
-            })
         }))
     }
 
@@ -974,7 +925,6 @@ impl FileEntry {
         match self {
             Self::Requested(req) => &req.uid,
             Self::Received(rec) => &rec.uid,
-            Self::Remote(rmt) => &rmt.uid,
         }
     }
 
@@ -1074,37 +1024,6 @@ impl ReceivedFile {
 
         mime::Mime::from_str(&parse)
             .expect("failed to parse MIME from database")
-    }
-}
-
-impl RemoteFile {
-    pub async fn promote(self, conn: &impl GenericClient) -> Result<ReceivedFile, (Self, PgError)> {
-        let status = FileStatus::Received;
-
-        let result = conn.execute(
-            "\
-            update file_entries
-            set status = $2 \
-            where file_entries.id = $1",
-            &[&self.id, &status]
-        ).await;
-
-        match result {
-            Ok(_) =>Ok(ReceivedFile {
-                id: self.id,
-                uid: self.uid,
-                entries_id: self.entries_id,
-                name: self.name,
-                mime_type: self.mime_type,
-                mime_subtype: self.mime_subtype,
-                mime_param: self.mime_param,
-                size: self.size,
-                hash: self.hash,
-                created: self.created,
-                updated: self.updated,
-            }),
-            Err(err) => Err((self, err))
-        }
     }
 }
 

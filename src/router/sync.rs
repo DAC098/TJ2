@@ -373,7 +373,7 @@ async fn upsert_files(
     files: Vec<sync::journal::EntryFileSync>,
     removed_files: &mut RemovedFiles,
 ) -> Result<UpsertFiles, error::Error> {
-    let status = FileStatus::Remote;
+    let status = FileStatus::Requested;
     let rtn = UpsertFiles::default();
 
     if !files.is_empty() {
@@ -387,7 +387,6 @@ async fn upsert_files(
             insert into file_entries ( \
                 entries_id, \
                 status, \
-                server_id, \
                 uid, \
                 name, \
                 mime_type, \
@@ -430,10 +429,6 @@ async fn upsert_files(
                         FileEntry::Received(rec) => if rec.entries_id != *entries_id {
                             // the given uid exists but is not attached to the
                             // entry we are currently working on
-                            continue;
-                        },
-                        FileEntry::Remote(rmt) => if rmt.entries_id != *entries_id {
-                            // same as received
                             continue;
                         },
                         FileEntry::Requested(_) => {
@@ -521,9 +516,6 @@ async fn upsert_files(
                         .context("failed to remove received journal file")?;
 
                     ids.push(rec.id);
-                }
-                FileEntry::Remote(rmt) => {
-                    ids.push(rmt.id);
                 }
                 FileEntry::Requested(_) => {
                     return Err(error::Error::context(
