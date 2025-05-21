@@ -13,7 +13,7 @@ use crate::db::ids::{
     UserPeerId,
 };
 use crate::error::{self, Context};
-use crate::journal::{LocalJournal, CustomField};
+use crate::journal::{Journal, CustomField};
 use crate::state;
 use crate::sync::{self, PeerClient};
 use crate::sync::journal::{
@@ -29,7 +29,7 @@ use crate::user::peer::UserPeer;
 
 const BATCH_SIZE: i64 = 50;
 
-pub async fn kickoff_send_journal(state: state::SharedState, peer: UserPeer, journal: LocalJournal) {
+pub async fn kickoff_send_journal(state: state::SharedState, peer: UserPeer, journal: Journal) {
     if let Err(err) = send_journal(state, peer, journal).await {
         error::log_prefix_error("error when syncing journal with peer", &err);
     }
@@ -38,7 +38,7 @@ pub async fn kickoff_send_journal(state: state::SharedState, peer: UserPeer, jou
 async fn send_journal(
     state: state::SharedState,
     peer: UserPeer,
-    journal: LocalJournal,
+    journal: Journal,
 ) -> Result<(), error::Error> {
     let mut conn = state.db_conn()
         .await
@@ -141,7 +141,7 @@ async fn send_journal(
 async fn journal_sync(
     conn: &impl GenericClient,
     client: &PeerClient,
-    journal: &LocalJournal
+    journal: &Journal
 ) -> Result<(), error::Error> {
     let custom_fields_stream = CustomField::retrieve_journal_stream(conn, &journal.id)
         .await
@@ -194,7 +194,7 @@ struct BatchResults {
 async fn batch_entry_sync(
     conn: &impl GenericClient,
     client: &PeerClient,
-    journal: &LocalJournal,
+    journal: &Journal,
     prev_entry: &EntryId,
     sync_date: &DateTime<Utc>,
 ) -> Result<BatchResults, error::Error> {

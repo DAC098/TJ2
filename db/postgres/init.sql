@@ -126,12 +126,10 @@ create table journals (
     id bigint primary key generated always as identity,
     uid varchar not null unique,
     users_id bigint not null references users (id),
-    kind smallint not null default 0,
     name varchar not null,
     description varchar,
     created timestamp with time zone not null,
     updated timestamp with time zone,
-    server_id bigint references remote_servers (id),
     unique (users_id, name)
 );
 

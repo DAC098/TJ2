@@ -22,7 +22,7 @@ use crate::db::ids::{
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
 use crate::router::body;
-use crate::journal::{self, Journal, LocalJournal, FileStatus, FileEntry, CustomField};
+use crate::journal::{self, Journal, FileStatus, FileEntry, CustomField};
 use crate::sec;
 use crate::sec::authn::ApiInitiator;
 use crate::state::{self, Storage};
@@ -53,33 +53,32 @@ async fn receive_journal(
 
     let now = Utc::now();
 
-    let journal = if let Some(exists) = Journal::retrieve(&transaction, &json.uid)
+    let journal = if let Some(mut exists) = Journal::retrieve(&transaction, &json.uid)
         .await
         .context("failed to retrieve journal")?
     {
-        if *exists.users_id() != initiator.user.id {
+        if exists.users_id != initiator.user.id {
             return Ok(StatusCode::BAD_REQUEST);
         }
 
-        let mut journal = exists.into_local().unwrap();
-        journal.updated = Some(now);
-        journal.name = json.name;
-        journal.description = json.description;
+        exists.updated = Some(now);
+        exists.name = json.name;
+        exists.description = json.description;
 
-        journal.update(&transaction)
+        exists.update(&transaction)
             .await
             .context("failed to update journal")?;
 
-        journal
+        exists
     } else {
-        let mut options = LocalJournal::create_options(initiator.user.id, json.name);
+        let mut options = Journal::create_options(initiator.user.id, json.name);
         options.uid(json.uid);
 
         if let Some(desc) = json.description {
             options.description(desc);
         }
 
-        let journal = LocalJournal::create(&transaction, options)
+        let journal = Journal::create(&transaction, options)
             .await
             .context("failed to create journal")?;
 
@@ -125,7 +124,7 @@ async fn receive_entry(
             return Ok(SyncEntryResult::JournalNotFound);
         };
 
-        result.into_local().unwrap()
+        result
     };
 
     if journal.users_id != initiator.user.id {

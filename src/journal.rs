@@ -20,7 +20,6 @@ use crate::db::ids::{
     UserId,
     CustomFieldId,
     CustomFieldUid,
-    RemoteServerId,
 };
 use crate::error::BoxDynError;
 use crate::sec::Hash;
@@ -91,58 +90,8 @@ impl JournalCreateOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize_repr)]
-#[repr(i16)]
-pub enum JournalKind {
-    Local = 0,
-    Remote = 1,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("the given value is an invalid JournalKind")]
-pub struct InvalidJournalKind;
-
-impl TryFrom<i16> for JournalKind {
-    type Error = InvalidJournalKind;
-
-    fn try_from(value: i16) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Local),
-            1 => Ok(Self::Remote),
-            _ => Err(InvalidJournalKind),
-        }
-    }
-}
-
-impl pg_types::ToSql for JournalKind {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
-        (*self as i16).to_sql(ty, w)
-    }
-
-    fn accepts(ty: &pg_types::Type) -> bool {
-        <i16 as pg_types::ToSql>::accepts(ty)
-    }
-
-    pg_types::to_sql_checked!();
-}
-
-impl<'a> pg_types::FromSql<'a> for JournalKind {
-    fn from_sql(ty: &pg_types::Type, raw: &'a [u8]) -> Result<Self, BoxDynError> {
-        let value = <i16 as pg_types::FromSql>::from_sql(ty, raw)?;
-
-        match value.try_into() {
-            Ok(rep) => Ok(rep),
-            Err(_err) => Err("invalid sql value for JournalKind. expected smallint with valid status".into())
-        }
-    }
-
-    fn accepts(ty: &pg_types::Type) -> bool {
-        <i16 as pg_types::FromSql>::accepts(ty)
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct LocalJournal {
+pub struct Journal {
     /// the assigned journal id from the database
     pub id: JournalId,
 
@@ -163,40 +112,6 @@ pub struct LocalJournal {
 
     /// timestamp of when the journal was updated
     pub updated: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug)]
-pub struct RemoteJournal {
-    /// the assigned journal id from the database
-    pub id: JournalId,
-
-    /// the generated journal uid from the server
-    pub uid: JournalUid,
-
-    /// the assigned owner of the journal
-    pub users_id: UserId,
-
-    /// the remote server that the journal comes from
-    pub server_id: RemoteServerId,
-
-    /// the name of the journal
-    pub name: String,
-
-    /// the optional description of the journal
-    pub description: Option<String>,
-
-    /// timestamp of when the journal was created
-    pub created: DateTime<Utc>,
-
-    /// timestamp of when the journal was updated
-    pub updated: Option<DateTime<Utc>>,
-}
-
-/// the database representation of a journal
-#[derive(Debug)]
-pub enum Journal {
-    Local(LocalJournal),
-    Remote(RemoteJournal),
 }
 
 pub enum RetrieveQuery<'a> {
@@ -229,9 +144,7 @@ impl Journal {
                    journals.name, \
                    journals.description, \
                    journals.created, \
-                   journals.updated, \
-                   journals.kind, \
-                   journals.server_id \
+                   journals.updated \
             from journals";
 
         match given.into() {
@@ -253,26 +166,14 @@ impl Journal {
                 conn.query_opt(&query, &[journals_uid]).await
             }
         }
-            .map(|maybe| maybe.map(|row| match row.get::<usize, JournalKind>(7) {
-                JournalKind::Local => Self::Local(LocalJournal {
-                    id: row.get(0),
-                    uid: row.get(1),
-                    users_id: row.get(2),
-                    name: row.get(3),
-                    description: row.get(4),
-                    created: row.get(5),
-                    updated: row.get(6),
-                }),
-                JournalKind::Remote => Self::Remote(RemoteJournal {
-                    id: row.get(0),
-                    uid: row.get(1),
-                    users_id: row.get(2),
-                    server_id: row.get(8),
-                    name: row.get(3),
-                    description: row.get(4),
-                    created: row.get(5),
-                    updated: row.get(6),
-                })
+            .map(|maybe| maybe.map(|row| Self {
+                id: row.get(0),
+                uid: row.get(1),
+                users_id: row.get(2),
+                name: row.get(3),
+                description: row.get(4),
+                created: row.get(5),
+                updated: row.get(6),
             }))
     }
 
@@ -286,36 +187,6 @@ impl Journal {
         Self::retrieve(conn, (journals_id, users_id)).await
     }
 
-    pub fn id(&self) -> &JournalId {
-        match self {
-            Self::Local(local) => &local.id,
-            Self::Remote(rmt) => &rmt.id,
-        }
-    }
-
-    pub fn users_id(&self) -> &UserId {
-        match self {
-            Self::Local(local) => &local.users_id,
-            Self::Remote(rmt) => &rmt.users_id,
-        }
-    }
-
-    pub fn into_local(self) -> Result<LocalJournal, Self> {
-        match self {
-            Self::Local(local) => Ok(local),
-            _ => Err(self)
-        }
-    }
-
-    pub fn into_remote(self) -> Result<RemoteJournal, Self> {
-        match self {
-            Self::Remote(rmt) => Ok(rmt),
-            _ => Err(self)
-        }
-    }
-}
-
-impl LocalJournal {
     /// creates the [`JournalCreateOptions`] with the given [`UserId`] and name
     pub fn create_options<N>(users_id: UserId, name: N) -> JournalCreateOptions
     where
@@ -331,7 +202,6 @@ impl LocalJournal {
 
     /// attempts to create a new [`Journal`] with the given options
     pub async fn create(conn: &impl GenericClient, options: JournalCreateOptions) -> Result<Self, JournalCreateError> {
-        let kind = JournalKind::Local;
         let uid = options.uid.unwrap_or(JournalUid::gen());
         let created = Utc::now();
         let users_id = options.users_id;
@@ -340,13 +210,12 @@ impl LocalJournal {
 
         let result = conn.query_one(
             "\
-            insert into journals (uid, users_id, kind, name, description, created) values \
-            ($1, $2, $3, $4, $5, $6) \
+            insert into journals (uid, users_id, name, description, created) values \
+            ($1, $2, $3, $4, $5) \
             returning id",
             &[
                 &uid,
                 &users_id,
-                &kind,
                 &name,
                 &description,
                 &created
@@ -416,14 +285,6 @@ impl LocalJournal {
                 Err(JournalUpdateError::Db(err))
             }
         }
-    }
-
-    pub fn id(&self) -> &JournalId {
-        &self.id
-    }
-
-    pub fn users_id(&self) -> &UserId {
-        &self.users_id
     }
 }
 

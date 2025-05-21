@@ -1,6 +1,6 @@
 macro_rules! perm_check {
     ($conn:expr, $initiator:expr, $journal:expr, $scope:expr, $ability:expr) => {
-        let perm_check = if *$journal.users_id() == $initiator.user.id {
+        let perm_check = if $journal.users_id == $initiator.user.id {
             crate::sec::authz::has_permission(
                 $conn,
                 $initiator.user.id,
@@ -15,7 +15,7 @@ macro_rules! perm_check {
                 $initiator.user.id,
                 $scope,
                 $ability,
-                $journal.id()
+                $journal.id
             )
                 .await
                 .context("failed to retrieve permissions for user")?

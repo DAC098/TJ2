@@ -655,7 +655,7 @@ pub async fn retrieve_entry(
     auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
 
     if let Some(entries_id) = entries_id {
-        let result = EntryForm::retrieve_entry(&conn, journal.id(), &entries_id)
+        let result = EntryForm::retrieve_entry(&conn, &journal.id, &entries_id)
             .await
             .context("failed to retrieve journal entry for date")?;
 
@@ -667,7 +667,7 @@ pub async fn retrieve_entry(
 
         Ok(body::Json(entry).into_response())
     } else {
-        let blank = EntryForm::blank(&conn, journal.id()).await?;
+        let blank = EntryForm::blank(&conn, &journal.id).await?;
 
         Ok(body::Json(blank).into_response())
     }
@@ -768,7 +768,6 @@ fn opt_non_empty_str(given: Option<String>) -> Option<String> {
 pub enum CreateEntryResult {
     DateExists,
     JournalNotFound,
-    NotLocalJournal,
     CustomFieldMismatch {
         mismatched: Vec<CustomFieldEntry>,
     },
@@ -809,14 +808,7 @@ pub async fn create_entry(
             ).into_response());
         };
 
-        let Ok(rtn) = journal.into_local() else {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                body::Json(CreateEntryResult::NotLocalJournal)
-            ).into_response());
-        };
-
-        rtn
+        journal
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Create);
@@ -950,7 +942,6 @@ pub async fn create_entry(
 #[serde(tag = "type")]
 pub enum UpdateEntryResult {
     JournalNotFound,
-    NotLocalJournal,
     CustomFieldMismatch {
         mismatched: Vec<CustomFieldEntry>,
     },
@@ -991,14 +982,7 @@ pub async fn update_entry(
             ).into_response());
         };
 
-        let Ok(rtn) = journal.into_local() else {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                body::Json(UpdateEntryResult::NotLocalJournal),
-            ).into_response());
-        };
-
-        rtn
+        journal
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
@@ -1203,11 +1187,7 @@ pub async fn delete_entry(
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
 
-        let Ok(rtn) = journal.into_local() else {
-            return Ok(StatusCode::BAD_REQUEST.into_response());
-        };
-
-        rtn
+        journal
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Delete);

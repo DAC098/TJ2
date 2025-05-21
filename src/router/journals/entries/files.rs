@@ -18,7 +18,6 @@ use crate::error::{self, Context};
 use crate::fs::FileCreater;
 use crate::journal::{
     Journal,
-    LocalJournal,
     FileEntry,
     PromoteOptions,
     RequestedFile,
@@ -82,7 +81,7 @@ pub async fn retrieve_file(
     };
 
     let file_path = state.storage()
-        .journal_file_entry(*journal.id(), received_file.id);
+        .journal_file_entry(journal.id, received_file.id);
     let file = tokio::fs::OpenOptions::new()
         .read(true)
         .open(&file_path)
@@ -115,7 +114,6 @@ pub async fn retrieve_file(
 enum UploadResult {
     Successful(EntryFileForm),
     JournalNotFound,
-    NotLocalJournal,
     FileNotFound,
     NotRequestedFile,
 }
@@ -132,7 +130,6 @@ impl IntoResponse for UploadResult {
                 StatusCode::NOT_FOUND,
                 body::Json(self)
             ).into_response(),
-            Self::NotLocalJournal |
             Self::NotRequestedFile => (
                 StatusCode::BAD_REQUEST,
                 body::Json(self)
@@ -166,11 +163,7 @@ pub async fn upload_file(
             return Ok(UploadResult::JournalNotFound.into_response());
         };
 
-        let Ok(rtn) = journal.into_local() else {
-            return Ok(UploadResult::NotLocalJournal.into_response());
-        };
-
-        rtn
+        journal
     };
 
     auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
@@ -209,7 +202,7 @@ pub async fn upload_file(
 async fn create_file(
     storage: &Storage,
     conn: db::Transaction<'_>,
-    journal: LocalJournal,
+    journal: Journal,
     requested: RequestedFile,
     mime: mime::Mime,
     hash_check: HashCheck,

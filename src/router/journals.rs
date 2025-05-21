@@ -16,7 +16,6 @@ use crate::db::ids::{
     UserId,
     CustomFieldId,
     CustomFieldUid,
-    RemoteServerId,
     UserPeerId,
 };
 use crate::error::{self, Context};
@@ -25,16 +24,13 @@ use crate::journal::{
     Journal,
     JournalCreateError,
     JournalUpdateError,
-    LocalJournal,
     CustomField,
-    JournalKind,
 };
 use crate::router::body;
 use crate::router::macros;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Scope, Ability};
 use crate::state;
-use crate::sync;
 use crate::jobs;
 use crate::user::peer::UserPeer;
 
@@ -60,27 +56,15 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
-pub enum JournalPartial {
-    Local {
-        id: JournalId,
-        uid: JournalUid,
-        users_id: UserId,
-        name: String,
-        description: Option<String>,
-        created: DateTime<Utc>,
-        updated: Option<DateTime<Utc>>,
-        has_peers: bool,
-    },
-    Remote {
-        id: JournalId,
-        uid: JournalUid,
-        users_id: UserId,
-        name: String,
-        description: Option<String>,
-        created: DateTime<Utc>,
-        updated: Option<DateTime<Utc>>,
-        server_id: RemoteServerId,
-    }
+pub struct JournalPartial {
+    id: JournalId,
+    uid: JournalUid,
+    users_id: UserId,
+    name: String,
+    description: Option<String>,
+    created: DateTime<Utc>,
+    updated: Option<DateTime<Utc>>,
+    has_peers: bool,
 }
 
 async fn retrieve_journals(
@@ -121,8 +105,6 @@ async fn retrieve_journals(
                journals.description, \
                journals.created, \
                journals.updated, \
-               journals.server_id, \
-               journals.kind, \
                count(journal_peers.user_peers_id) > 0 as has_peers \
         from journals \
             left join journal_peers on \
@@ -134,9 +116,7 @@ async fn retrieve_journals(
                  journals.name, \
                  journals.description, \
                  journals.created, \
-                 journals.updated, \
-                 journals.server_id, \
-                 journals.kind \
+                 journals.updated \
         order by journals.name",
         params
     )
@@ -150,28 +130,16 @@ async fn retrieve_journals(
     while let Some(try_record) = journals.next().await {
         let record = try_record.context("failed to retrieve journal")?;
 
-        match record.get::<usize, JournalKind>(8) {
-            JournalKind::Local => found.push(JournalPartial::Local {
-                id: record.get(0),
-                uid: record.get(1),
-                users_id: record.get(2),
-                name: record.get(3),
-                description: record.get(4),
-                created: record.get(5),
-                updated: record.get(6),
-                has_peers: record.get(9),
-            }),
-            JournalKind::Remote => found.push(JournalPartial::Remote {
-                id: record.get(0),
-                uid: record.get(1),
-                users_id: record.get(2),
-                server_id: record.get(7),
-                name: record.get(3),
-                description: record.get(4),
-                created: record.get(5),
-                updated: record.get(6),
-            })
-        }
+        found.push(JournalPartial {
+            id: record.get(0),
+            uid: record.get(1),
+            users_id: record.get(2),
+            name: record.get(3),
+            description: record.get(4),
+            created: record.get(5),
+            updated: record.get(6),
+            has_peers: record.get(7),
+        });
     }
 
     Ok(body::Json(found).into_response())
@@ -208,63 +176,21 @@ pub struct JournalPeer {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
-pub enum JournalFull {
-    Local {
-        id: JournalId,
-        uid: JournalUid,
-        users_id: UserId,
-        name: String,
-        description: Option<String>,
-        custom_fields: Vec<CustomFieldFull>,
-        peers: Vec<JournalPeer>,
-        created: DateTime<Utc>,
-        updated: Option<DateTime<Utc>>,
-    },
-    Remote {
-        id: JournalId,
-        uid: JournalUid,
-        users_id: UserId,
-        server_id: RemoteServerId,
-        name: String,
-        description: Option<String>,
-        custom_fields: Vec<CustomFieldFull>,
-        created: DateTime<Utc>,
-        updated: Option<DateTime<Utc>>,
-    }
+pub struct JournalFull {
+    id: JournalId,
+    uid: JournalUid,
+    users_id: UserId,
+    name: String,
+    description: Option<String>,
+    custom_fields: Vec<CustomFieldFull>,
+    peers: Vec<JournalPeer>,
+    created: DateTime<Utc>,
+    updated: Option<DateTime<Utc>>,
 }
 
 impl From<(Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)> for JournalFull {
-    fn from((journal, custom_fields, peers): (Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)) -> Self {
-        match journal {
-            Journal::Local(local) => Self::Local {
-                id: local.id,
-                uid: local.uid,
-                users_id: local.users_id,
-                name: local.name,
-                description: local.description,
-                custom_fields,
-                peers,
-                created: local.created,
-                updated: local.updated,
-            },
-            Journal::Remote(rmt) => Self::Remote {
-                id: rmt.id,
-                uid: rmt.uid,
-                users_id: rmt.users_id,
-                server_id: rmt.server_id,
-                name: rmt.name,
-                description: rmt.description,
-                custom_fields,
-                created: rmt.created,
-                updated: rmt.updated,
-            }
-        }
-    }
-}
-
-impl From<(LocalJournal, Vec<CustomFieldFull>, Vec<JournalPeer>)> for JournalFull {
-    fn from((local, custom_fields, peers): (LocalJournal, Vec<CustomFieldFull>, Vec<JournalPeer>)) -> Self {
-        Self::Local {
+    fn from((local, custom_fields, peers): (Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)) -> Self {
+        Self {
             id: local.id,
             uid: local.uid,
             users_id: local.users_id,
@@ -419,13 +345,13 @@ async fn create_journal(
         return Ok(StatusCode::UNAUTHORIZED.into_response());
     }
 
-    let mut options = LocalJournal::create_options(initiator.user.id, json.name);
+    let mut options = Journal::create_options(initiator.user.id, json.name);
 
     if let Some(description) = json.description {
         options.description(description);
     }
 
-    let result = LocalJournal::create(&transaction, options).await;
+    let result = Journal::create(&transaction, options).await;
 
     let journal = match result {
         Ok(journal) => journal,
@@ -551,7 +477,6 @@ pub struct UpdateJournal {
 #[serde(tag = "type")]
 pub enum UpdateJournalResult {
     NameExists,
-    NotLocalJournal,
     CustomFieldNotFound {
         ids: Vec<CustomFieldId>,
     },
@@ -599,14 +524,7 @@ async fn update_journal(
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
 
-        let Ok(rtn) = journal.into_local() else {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                body::Json(UpdateJournalResult::NotLocalJournal)
-            ).into_response());
-        };
-
-        rtn
+        journal
     };
 
     journal.name = json.name;
@@ -683,7 +601,7 @@ async fn update_journal(
 
 async fn create_custom_fields(
     conn: &impl db::GenericClient,
-    journal: &LocalJournal,
+    journal: &Journal,
     new_fields: Vec<NewCustomField>
 ) -> Result<(Vec<CustomFieldFull>, Vec<String>), error::Error> {
     if new_fields.is_empty() {
@@ -737,7 +655,7 @@ struct UpdateResults {
 
 async fn update_custom_fields(
     conn: &impl db::GenericClient,
-    journal: &LocalJournal,
+    journal: &Journal,
     update_fields: Vec<UpdateCustomField>,
 ) -> Result<UpdateResults, error::Error> {
     let mut existing: HashMap<CustomFieldId, CustomField> = HashMap::new();
@@ -1069,8 +987,6 @@ pub enum SyncResult {
     Noop,
     JournalNotFound,
 
-    NotLocalJournal,
-
     PermissionDenied,
 }
 
@@ -1085,8 +1001,7 @@ impl IntoResponse for SyncResult {
                 StatusCode::ACCEPTED,
                 body::Json(self)
             ).into_response(),
-            Self::JournalNotFound |
-            Self::NotLocalJournal => (
+            Self::JournalNotFound => (
                 StatusCode::BAD_REQUEST,
                 body::Json(self),
             ).into_response(),
@@ -1102,7 +1017,7 @@ async fn sync_with_remote(
     state: state::SharedState,
     initiator: Initiator,
     Path(JournalPath { journals_id }): Path<JournalPath>,
-    body::Json(json): body::Json<SyncOptions>,
+    body::Json(_json): body::Json<SyncOptions>,
 ) -> Result<SyncResult, error::Error> {
     let mut conn = state.db_conn().await?;
     let transaction = conn.transaction()
@@ -1131,11 +1046,7 @@ async fn sync_with_remote(
             return Ok(SyncResult::JournalNotFound);
         };
 
-        let Ok(rtn) = journal.into_local() else {
-            return Ok(SyncResult::NotLocalJournal);
-        };
-
-        rtn
+        journal
     };
 
     let peers = UserPeer::retrieve_many(&transaction, &journal.id)
@@ -1146,7 +1057,6 @@ async fn sync_with_remote(
 
     let mut successful = 0;
     let mut failed = 0;
-    let mut did_queue = false;
 
     while let Some(maybe) = peers.next().await {
         let peer = match maybe.context("failed to retrieve peer record") {
