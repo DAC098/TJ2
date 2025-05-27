@@ -344,7 +344,7 @@ impl EntryCFSync {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ReceivedFile {
+pub struct EntryFileSync {
     pub uid: FileEntryUid,
     pub name: Option<String>,
     pub mime_type: String,
@@ -354,11 +354,6 @@ pub struct ReceivedFile {
     pub hash: Hash,
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum EntryFileSync {
-    Received(ReceivedFile)
 }
 
 impl EntryFileSync {
@@ -394,7 +389,7 @@ impl EntryFileSync {
         while let Some(try_record) = stream.next().await {
             let record = try_record.context("failed to retrieve entry file record")?;
 
-            rtn.push(Self::Received(ReceivedFile {
+            rtn.push(Self {
                 uid: record.get(0),
                 name: record.get(1),
                 mime_type: record.get(2),
@@ -404,15 +399,9 @@ impl EntryFileSync {
                 hash: record.get(6),
                 created: record.get(7),
                 updated: record.get(8),
-            }));
+            });
         }
 
         Ok(rtn)
-    }
-
-    pub fn uid(&self) -> &FileEntryUid {
-        match self {
-            Self::Received(rec) => &rec.uid
-        }
     }
 }

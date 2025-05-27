@@ -653,8 +653,8 @@ impl FileEntry {
                     uid: record.get(1),
                     entries_id: record.get(2),
                     name: record.get(4),
-                    created: record.get(11),
-                    updated: record.get(12),
+                    created: record.get(10),
+                    updated: record.get(11),
                 }),
                 FileStatus::Received => Self::Received(ReceivedFile {
                     id: record.get(0),
@@ -782,10 +782,24 @@ impl FileEntry {
         Ok(rtn)
     }
 
+    pub fn id_ref(&self) -> &FileEntryId {
+        match self {
+            Self::Requested(req) => &req.id,
+            Self::Received(rec) => &rec.id,
+        }
+    }
+
     pub fn uid(&self) -> &FileEntryUid {
         match self {
             Self::Requested(req) => &req.uid,
             Self::Received(rec) => &rec.uid,
+        }
+    }
+
+    pub fn entries_id(&self) -> EntryId {
+        match self {
+            Self::Requested(req) => req.entries_id,
+            Self::Received(rec) => rec.entries_id,
         }
     }
 

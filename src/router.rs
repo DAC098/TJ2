@@ -24,7 +24,6 @@ pub mod macros;
 pub mod body;
 
 mod journals;
-mod sync;
 mod admin;
 mod login;
 mod verify;
@@ -86,7 +85,6 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/peers", get(peers::get))
         .nest("/journals", journals::build(state))
         .nest("/settings", settings::build(state))
-        .nest("/sync", sync::build(state))
         .nest("/admin", admin::build(state))
         .nest("/api", api::build(state))
         .fallback(assets::handle)

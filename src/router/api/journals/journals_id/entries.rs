@@ -1,8 +1,7 @@
+use std::collections::HashSet;
 use std::default::Default;
+use std::fmt::Write;
 
-use axum::Router;
-use axum::http::StatusCode;
-use axum::routing::post;
 use chrono::Utc;
 use futures::StreamExt;
 
@@ -16,7 +15,7 @@ use crate::db::ids::{
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
 use crate::router::body;
-use crate::journal::{self, Journal, FileStatus, FileEntry, CustomField};
+use crate::journal::{self, FileStatus, FileEntry};
 use crate::sec::authn::ApiInitiator;
 use crate::state;
 use crate::sync;
@@ -25,75 +24,7 @@ use crate::sync::journal::{
     EntryFileSync,
 };
 
-pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
-    Router::new()
-        .route("/entries", post(receive_entry))
-        .route("/journal", post(receive_journal))
-}
-
-async fn receive_journal(
-    state: state::SharedState,
-    initiator: ApiInitiator,
-    body::Json(json): body::Json<sync::journal::JournalSync>
-) -> Result<StatusCode, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
-        .await
-        .context("failed to create transaction")?;
-
-    let now = Utc::now();
-
-    let journal = if let Some(mut exists) = Journal::retrieve(&transaction, &json.uid)
-        .await
-        .context("failed to retrieve journal")?
-    {
-        if exists.users_id != initiator.user.id {
-            return Ok(StatusCode::BAD_REQUEST);
-        }
-
-        exists.updated = Some(now);
-        exists.name = json.name;
-        exists.description = json.description;
-
-        exists.update(&transaction)
-            .await
-            .context("failed to update journal")?;
-
-        exists
-    } else {
-        let mut options = Journal::create_options(initiator.user.id, json.name);
-        options.uid(json.uid);
-
-        if let Some(desc) = json.description {
-            options.description(desc);
-        }
-
-        let journal = Journal::create(&transaction, options)
-            .await
-            .context("failed to create journal")?;
-
-        journal
-    };
-
-    for cf in json.custom_fields {
-        let mut options = CustomField::create_options(journal.id, cf.name, cf.config);
-        options.uid = Some(cf.uid);
-        options.order = cf.order;
-        options.description = cf.description;
-
-        CustomField::create(&transaction, options)
-            .await
-            .context("failed to create custom field")?;
-    }
-
-    transaction.commit()
-        .await
-        .context("failed to commit transaction")?;
-
-    Ok(StatusCode::CREATED)
-}
-
-async fn receive_entry(
+pub async fn post(
     state: state::SharedState,
     initiator: ApiInitiator,
     body::Json(json): body::Json<sync::journal::EntrySync>,
@@ -366,121 +297,120 @@ async fn upsert_files(
         let mut known = FileEntry::retrieve_uid_map(conn, entries_id)
             .await
             .context("failed to retrieve known file entries")?;
-        let mut counted = 0;
-        let mut params: db::ParamsVec<'_> = vec![entries_id, &status];
-        let mut query = String::from(
+
+        let created = Utc::now();
+
+        let mut insert_id = HashSet::new();
+        let mut ins_params: db::ParamsVec<'_> = vec![entries_id, &status, &created];
+        let mut ins_query = String::from(
             "\
             insert into file_entries ( \
                 entries_id, \
                 status, \
+                created, \
                 uid, \
                 name, \
                 mime_type, \
                 mime_subtype, \
-                mime_param, \
-                size, \
-                hash, \
-                created, \
-                updated \
+                hash \
             ) \
             values "
         );
 
+        let mut update_id = HashSet::new();
+        let mut upd_params: db::ParamsVec<'_> = vec![&created];
+        let mut upd_query = String::from(
+            "\
+            update file_entries \
+            set name = tmp_update.name, \
+                updated = $1 \
+            from (values "
+        );
+
         for (index, file) in files.iter().enumerate() {
-            if let Some(exists) = known.remove(file.uid()) {
+            if let Some(exists) = known.get(&file.uid) {
+                if !update_id.insert(exists.uid().clone()) {
+                    // duplicate existing id
+                    continue;
+                }
+
                 // we know that the file exists for this entry so we will not 
                 // need to check the entry id
-                match exists {
-                    FileEntry::Requested(_) => {
-                        // the journal should not have these as the peer should
-                        // only send received files and the local server should
-                        // not be modifying the journal
-                        return Err(error::Error::context(
-                            "encountered requested file when removing local files"
-                        ));
-                    }
-                    // skip the other entries as we do not need to worry about
-                    // them
-                    _ => {}
+                if update_id.len() > 1 {
+                    upd_query.push_str(", ");
                 }
+
+                write!(
+                    &mut upd_query,
+                    "(${}, ${})",
+                    db::push_param(&mut upd_params, exists.id_ref()),
+                    db::push_param(&mut upd_params, &file.name),
+                ).unwrap();
             } else {
                 // do a lookup to make sure that the uid exists for a different
                 // entry
-                let lookup_result = FileEntry::retrieve(conn, file.uid())
+                let lookup_result = FileEntry::retrieve(conn, &file.uid)
                     .await
-                    .context("failed to lookup file uid")?;
+                    .context("failed to lookup file uid")?
+                    .is_some_and(|v| v.entries_id() == *entries_id);
 
-                if let Some(found) = lookup_result {
-                    match found {
-                        FileEntry::Received(rec) => if rec.entries_id != *entries_id {
-                            // the given uid exists but is not attached to the
-                            // entry we are currently working on
-                            continue;
-                        },
-                        FileEntry::Requested(_) => {
-                            return Err(error::Error::context(
-                                "encountered requested file when removing local files"
-                            ));
-                        }
-                    }
+                if lookup_result {
+                    // the given uid exists but is not attached to the
+                    // entry we are currently working on
+                    continue;
                 }
-            }
-            if index != 0 {
-                query.push_str(", ");
-            }
 
-            match file {
-                EntryFileSync::Received(rec) => {
-                    let statement = format!(
-                        "($1, $2, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                        db::push_param(&mut params, &rec.uid),
-                        db::push_param(&mut params, &rec.name),
-                        db::push_param(&mut params, &rec.mime_type),
-                        db::push_param(&mut params, &rec.mime_subtype),
-                        db::push_param(&mut params, &rec.mime_param),
-                        db::push_param(&mut params, &rec.size),
-                        db::push_param(&mut params, &rec.hash),
-                        db::push_param(&mut params, &rec.created),
-                        db::push_param(&mut params, &rec.updated),
-                    );
-
-                    query.push_str(&statement);
+                if !insert_id.insert(file.uid.clone()) {
+                    // duplicate inserting uid
+                    continue;
                 }
-            }
 
-            counted += 1;
+                if insert_id.len() > 1 {
+                    ins_query.push_str(", ");
+                }
+
+                write!(
+                    &mut ins_query,
+                    "($1, $2, $3, ${}, ${}, '', '', '')",
+                    db::push_param(&mut ins_params, &file.uid),
+                    db::push_param(&mut ins_params, &file.name),
+                ).unwrap();
+            }
         }
 
-        if !known.is_empty() {
-            // we will delete the entries that were not found in order to
-            // prevent the posibility that a new record or an updated one has
-            // a similar name
-            let uids = known.into_keys()
-                .collect::<Vec<FileEntryUid>>();
+        let to_drop: Vec<FileEntryUid> = known.keys()
+            .filter(|v| !update_id.contains(v))
+            .map(|v| v.clone())
+            .collect();
 
-            tracing::debug!("deleting file entries: {}", uids.len());
+        if !to_drop.is_empty() {
+            // we will delete the entries that were not found in order to
+            // prevent the possibility that a new record or an updated one has
+            // a similar name
+            tracing::debug!("deleting file entries: {}", to_drop.len());
 
             conn.execute(
                 "delete from file_entries where uid = any($1)",
-                &[&uids]
+                &[&to_drop]
             )
                 .await
                 .context("failed to delete from file entries")?;
         }
 
-        if counted > 0 {
-            query.push_str(" on conflict (uid) do update \
-                set name = excluded.name, \
-                    updated = excluded.updated \
-                returning id, \
-                          entries_id"
-            );
+        if !insert_id.is_empty() {
+            tracing::debug!("inserting file entries: {} {ins_query}", insert_id.len());
 
-            tracing::debug!("upserting file entries: {counted} {query}");
-
-            conn.execute(&query, params.as_slice())
+            conn.execute(&ins_query, ins_params.as_slice())
                 .await
-                .context("failed to upsert files")?;
+                .context("failed to insert files")?;
+        }
+
+        if !update_id.is_empty() {
+            tracing::debug!("updating file entries: {} {upd_query}", update_id.len());
+
+            conn.execute(&upd_query, upd_params.as_slice())
+                .await
+                .context("failed to update files")?;
         }
     } else {
         // delete all files that are local to the manchine and just remove the
@@ -503,11 +433,7 @@ async fn upsert_files(
 
                     ids.push(rec.id);
                 }
-                FileEntry::Requested(_) => {
-                    return Err(error::Error::context(
-                        "encountered requested file when removing local files"
-                    ));
-                }
+                FileEntry::Requested(_) => {}
             }
         }
 

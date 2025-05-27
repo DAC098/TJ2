@@ -11,6 +11,7 @@ use crate::db::{
 use crate::db::ids::{
     EntryId,
     UserPeerId,
+    JournalUid,
 };
 use crate::error::{self, Context};
 use crate::journal::{Journal, CustomField};
@@ -170,7 +171,7 @@ async fn journal_sync(
         custom_fields,
     };
 
-    let res = client.post("/sync/journal")
+    let res = client.post("/api/journals")
         .json(&journal_json)
         .send()
         .await
@@ -226,7 +227,7 @@ async fn batch_entry_sync(
         entry.custom_fields = custom_fields_res?;
         entry.files = files_res?;
 
-        futs.push(send_entry(client, entries_id, entry));
+        futs.push(send_entry(client, &journal.uid, entries_id, entry));
 
         last_id = entries_id;
         counted += 1;
@@ -309,10 +310,11 @@ async fn update_synced(
 
 async fn send_entry(
     client: &PeerClient,
+    journals_uid: &JournalUid,
     entries_id: EntryId,
     entry: sync::journal::EntrySync,
 ) -> Result<EntryId, EntryId> {
-    let result = client.post("/sync/entries")
+    let result = client.post(format!("/api/journals/{journals_uid}/entries"))
         .json(&entry)
         .send()
         .await;
