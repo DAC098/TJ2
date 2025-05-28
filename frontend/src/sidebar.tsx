@@ -37,11 +37,13 @@ import {
     SidebarMenu,
     SidebarMenuItem,
     SidebarMenuButton,
+    SidebarMenuLink,
     useSidebar,
 } from "@/components/ui/sidebar";
+
 import { JournalSidebar } from "@/journals/sidebar";
 import { AdminSidebar } from "@/admin";
-import { SettingsSidebar } from "@/settings";
+import { SettingsSidebar } from "@/pages/settings";
 
 async function send_logout() {
     let res = await fetch("/logout", {
@@ -53,35 +55,12 @@ async function send_logout() {
     }
 }
 
-interface MenuOptionProps {
-    title: string,
-    path: string,
-    active?: boolean,
-    icon?: ReactElement,
-}
-
-function MenuOption({title, path, icon, active = false}: MenuOptionProps) {
-    return <SidebarMenuItem>
-        <SidebarMenuButton
-            asChild
-            tooltip={{children: title, hidden: false}}
-            isActive={active}
-            className="px-2.5 md:px-2"
-        >
-            <Link to={path}>
-                {icon}
-                <span>{title}</span>
-            </Link>
-        </SidebarMenuButton>
-    </SidebarMenuItem>
-}
-
 function JournalGroup() {
     return <SidebarGroup>
         <SidebarGroupLabel>Journals</SidebarGroupLabel>
         <SidebarGroupContent>
             <SidebarMenu>
-                <MenuOption title="All Journals" path="/journals"/>
+                <SidebarMenuLink title="All Journals" path="/journals"/>
             </SidebarMenu>
         </SidebarGroupContent>
     </SidebarGroup>
@@ -92,9 +71,9 @@ function AdministrativeGroup() {
         <SidebarGroupLabel>Administrative</SidebarGroupLabel>
         <SidebarGroupContent>
             <SidebarMenu>
-                <MenuOption title="Users" path="/users"/>
-                <MenuOption title="Groups" path="/groups"/>
-                <MenuOption title="Roles" path="/roles"/>
+                <SidebarMenuLink title="Users" path="/users"/>
+                <SidebarMenuLink title="Groups" path="/groups"/>
+                <SidebarMenuLink title="Roles" path="/roles"/>
             </SidebarMenu>
         </SidebarGroupContent>
     </SidebarGroup>
@@ -194,19 +173,19 @@ function NavSidebar({name, email, avatar}: NavSidebarProps) {
             <SidebarGroup>
                 <SidebarGroupContent className="px-1.5 md:px-0">
                     <SidebarMenu>
-                        <MenuOption
+                        <SidebarMenuLink
                             title="Journals"
                             path="/journals"
                             active={location.pathname.startsWith("/journals")}
                             icon={<Notebook />}
                         />
-                        <MenuOption
+                        <SidebarMenuLink
                             title="Administrative"
                             path="/admin"
                             active={location.pathname.startsWith("/admin")}
                             icon={<EarthLock />}
                         />
-                        <MenuOption
+                        <SidebarMenuLink
                             title="Settings"
                             path="/settings"
                             active={location.pathname.startsWith("/settings")}

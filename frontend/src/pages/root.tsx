@@ -9,7 +9,7 @@ import { AppSidebar } from "@/sidebar";
 
 import { JournalRoutes } from "@/journals";
 import { AdminRoutes } from "@/admin";
-import { SettingsRoutes } from "@/settings";
+import { SettingsRoutes } from "@/pages/settings";
 
 export function Root() {
     return <div className="flex flex-row flex-nowrap w-full h-full">

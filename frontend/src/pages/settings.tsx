@@ -17,8 +17,8 @@ import {
 } from "@/components/ui/sidebar";
 import { cn } from "@/utils";
 
-import { Auth } from "@/settings/auth";
-import { PeerClient } from "@/settings/peer_client";
+import { Auth } from "@/pages/settings/auth";
+import { PeerClient } from "@/pages/settings/peer_client";
 
 interface MenuOptionProps {
     title: string,
