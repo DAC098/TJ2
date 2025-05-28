@@ -1,10 +1,6 @@
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
 
-import { App } from "@/App";
-import { Login } from "@/Login";
-import { Register } from "@/register";
-import { Verify } from "@/verify";
+import { MainRouter } from "@/pages";
 
 import "@/media";
 
@@ -30,14 +26,5 @@ document.addEventListener("DOMContentLoaded", () => {
     const root = document.getElementById("root");
     const renderer = createRoot(root);
 
-    renderer.render(
-        <BrowserRouter basename="/">
-            <Routes>
-                <Route path="/login" element={<Login/>}/>
-                <Route path="/verify" element={<Verify />}/>
-                <Route path="/register" element={<Register />}/>
-                <Route path="*" element={<App/>}/>
-            </Routes>
-        </BrowserRouter>
-    );
+    renderer.render(<MainRouter/>);
 });

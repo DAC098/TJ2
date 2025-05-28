@@ -6,11 +6,12 @@ import {
 } from "@/components/ui/sidebar";
 
 import { AppSidebar } from "@/sidebar";
+
 import { JournalRoutes } from "@/journals";
 import { AdminRoutes } from "@/admin";
 import { SettingsRoutes } from "@/settings";
 
-export function App() {
+export function Root() {
     return <div className="flex flex-row flex-nowrap w-full h-full">
         <SidebarProvider style={{"--sidebar-width": "350px"}}>
             <AppSidebar/>
