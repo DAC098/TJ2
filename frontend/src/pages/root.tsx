@@ -8,7 +8,7 @@ import {
 import { AppSidebar } from "@/sidebar";
 
 import { JournalRoutes } from "@/journals";
-import { AdminRoutes } from "@/admin";
+import { AdminRoutes } from "@/pages/admin";
 import { SettingsRoutes } from "@/pages/settings";
 
 export function Root() {

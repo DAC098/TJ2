@@ -42,8 +42,8 @@ import {
 } from "@/components/ui/sidebar";
 
 import { JournalSidebar } from "@/journals/sidebar";
-import { AdminSidebar } from "@/admin";
-import { SettingsSidebar } from "@/pages/settings";
+import { AdminSidebar } from "@/sidebar/admin";
+import { SettingsSidebar } from "@/sidebar/settings";
 
 async function send_logout() {
     let res = await fetch("/logout", {
