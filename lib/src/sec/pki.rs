@@ -4,14 +4,14 @@ use chrono::{DateTime, Utc};
 use crypto_box::{SecretKey, KEY_SIZE};
 use rand::RngCore;
 use tokio::fs::OpenOptions;
-use tokio::io::{AsyncWriteExt, AsyncReadExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub use crypto_box::PublicKey;
 
 #[derive(Debug)]
 pub struct PrivateKey {
     created: DateTime<Utc>,
-    secret: crypto_box::SecretKey
+    secret: crypto_box::SecretKey,
 }
 
 type BinaryFormat = (i64, [u8; KEY_SIZE]);
@@ -46,31 +46,25 @@ impl PrivateKey {
 
         Ok(Self {
             created,
-            secret: SecretKey::from_bytes(bytes)
+            secret: SecretKey::from_bytes(bytes),
         })
     }
 
     pub fn from_bytes(given: &[u8]) -> Result<Self, PrivateKeyError> {
-        let ((ts, bytes), _): (BinaryFormat, _) = bincode::decode_from_slice(given, Self::binary_config())?;
+        let ((ts, bytes), _): (BinaryFormat, _) =
+            bincode::decode_from_slice(given, Self::binary_config())?;
 
-        let created = DateTime::from_timestamp(ts, 0)
-            .ok_or(PrivateKeyError::InvalidTimestamp)?;
+        let created = DateTime::from_timestamp(ts, 0).ok_or(PrivateKeyError::InvalidTimestamp)?;
         let secret = SecretKey::from_bytes(bytes);
 
-        Ok(Self {
-            created,
-            secret,
-        })
+        Ok(Self { created, secret })
     }
 
     pub async fn load<P>(path: P) -> Result<Self, PrivateKeyError>
     where
-        P: AsRef<Path>
+        P: AsRef<Path>,
     {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .await?;
+        let mut file = OpenOptions::new().read(true).open(path).await?;
         let mut contents = Vec::new();
 
         file.read_to_end(&mut contents).await?;
@@ -99,7 +93,7 @@ impl PrivateKey {
 
     pub async fn save<P>(&self, path: P, overwrite: bool) -> Result<(), PrivateKeyError>
     where
-        P: AsRef<Path>
+        P: AsRef<Path>,
     {
         let mut options = OpenOptions::new();
         options.write(true);

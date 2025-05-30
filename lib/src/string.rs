@@ -1,50 +1,52 @@
-pub const HEX_CHARS: [char; 16] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'];
+pub const HEX_CHARS: [char; 16] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
+];
 
 pub fn to_base32<T>(bytes: T) -> String
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     data_encoding::BASE32.encode(bytes.as_ref())
 }
 
 pub fn from_base32<T>(given: T) -> Option<Vec<u8>>
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     data_encoding::BASE32.decode(given.as_ref()).ok()
 }
 
 pub fn to_base64<T>(bytes: T) -> String
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     data_encoding::BASE64URL.encode(bytes.as_ref())
 }
 
 pub fn from_base64<T>(given: T) -> Option<Vec<u8>>
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     data_encoding::BASE64URL.decode(given.as_ref()).ok()
 }
 
 pub fn to_base64_nopad<T>(bytes: T) -> String
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     data_encoding::BASE64URL_NOPAD.encode(bytes.as_ref())
 }
 
 pub fn from_base64_nopad<T>(given: T) -> Option<Vec<u8>>
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     data_encoding::BASE64URL_NOPAD.decode(given.as_ref()).ok()
 }
 
 pub fn to_hex_str<T>(bytes: T) -> String
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     let slice = bytes.as_ref();
     let mut rtn = String::with_capacity(slice.len() * 2);
@@ -78,7 +80,7 @@ pub fn from_hex_char(ch: char) -> Option<u8> {
         'd' | 'D' => Some(13),
         'e' | 'E' => Some(14),
         'f' | 'F' => Some(15),
-        _ => None
+        _ => None,
     }
 }
 
@@ -114,7 +116,9 @@ mod test {
 
     #[test]
     fn to_hex() {
-        let bytes = vec![0x01, 0x09, 0x0a, 0x0f, 0x10, 0x90, 0xa0, 0xf0, 0x11, 0x99, 0xaa, 0xff];
+        let bytes = vec![
+            0x01, 0x09, 0x0a, 0x0f, 0x10, 0x90, 0xa0, 0xf0, 0x11, 0x99, 0xaa, 0xff,
+        ];
         let expected = String::from("01090A0F1090A0F01199AAFF");
 
         let result = to_hex_str(&bytes);
@@ -125,7 +129,9 @@ mod test {
     #[test]
     fn from_hex() {
         let hex = String::from("01090A0F1090A0F01199AAFF");
-        let expected = Some(vec![0x01, 0x09, 0x0a, 0x0f, 0x10, 0x90, 0xa0, 0xf0, 0x11, 0x99, 0xaa, 0xff]);
+        let expected = Some(vec![
+            0x01, 0x09, 0x0a, 0x0f, 0x10, 0x90, 0xa0, 0xf0, 0x11, 0x99, 0xaa, 0xff,
+        ]);
 
         let result = from_hex_str(&hex);
 
