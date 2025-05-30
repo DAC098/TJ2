@@ -62,26 +62,7 @@ import {
     blank_journal_form,
     blank_journal_custom_field_form,
 } from "@/journals/forms";
-import { Entry, Entries } from "@/journals/entries";
 import { cn } from "@/utils";
-
-export function JournalRoutes() {
-    return <Routes>
-        <Route index element={<JournalsIndex />}/>
-        <Route path="/:journals_id" element={<Journal />}/>
-        <Route path="/:journals_id/entries" element={<Entries />}/>
-        <Route path="/:journals_id/entries/:entries_id" element={<Entry />}/>
-    </Routes>;
-}
-
-function JournalsIndex() {
-    return <CenterPage className="flex items-center justify-center h-full">
-        <div className="w-1/2 flex flex-col flex-nowrap items-center">
-            <h2 className="text-2xl">Nothing to see here</h2>
-            <p>Select a journal on the sidebar to view its entries</p>
-        </div>
-    </CenterPage>;
-}
 
 function journal_to_form(journal: JournalFull) {
     let custom_fields = [];
@@ -153,7 +134,7 @@ function JournalHeader({journals_id, on_delete}: JournalHeaderProps) {
     </div>;
 }
 
-function Journal() {
+export function Journal() {
     const { journals_id } = useParams();
     const navigate = useNavigate();
 

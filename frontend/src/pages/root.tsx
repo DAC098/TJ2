@@ -1,13 +1,10 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
-import {
-    SidebarProvider,
-    SidebarTrigger,
-} from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/components/ui/sidebar";
 
 import { AppSidebar } from "@/sidebar";
 
-import { JournalRoutes } from "@/journals";
+import { JournalRoutes } from "@/pages/journals";
 import { AdminRoutes } from "@/pages/admin";
 import { SettingsRoutes } from "@/pages/settings";
 

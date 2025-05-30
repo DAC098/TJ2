@@ -3,7 +3,7 @@ import { Plus, CalendarIcon } from "lucide-react";
 import { useFieldArray, useFormContext } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
+import { Calendar, TimePicker } from "@/components/ui/calendar";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
     FormControl,
@@ -529,28 +529,6 @@ export function TimeRangeConfig({config, index}: TimeRangeConfigProps) {
     }}/>;
 }
 
-const hours_list = [
-                      23,22,21,20,
-    19,18,17,16,15,14,13,12,11,10,
-     9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
-];
-const minutes_list = [
-    59,58,57,56,55,54,53,52,51,50,
-    49,48,47,46,45,44,43,42,41,40,
-    39,38,37,36,35,34,33,32,31,30,
-    29,28,27,26,25,24,23,22,21,20,
-    19,18,17,16,15,14,13,12,11,10,
-     9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
-];
-const seconds_list = [
-    59,58,57,56,55,54,53,52,51,50,
-    49,48,47,46,45,44,43,42,41,40,
-    39,38,37,36,35,34,33,32,31,30,
-    29,28,27,26,25,24,23,22,21,20,
-    19,18,17,16,15,14,13,12,11,10,
-     9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
-];
-
 export interface TimeRangeValueProps {
     index: number,
     config: custom_field.TimeRangeType,
@@ -596,83 +574,7 @@ export function TimeRangeValue({index, config}: TimeRangeValueProps) {
                                     return date > new Date() || date < new Date("1900-01-01");
                                 }}
                             />
-                            <div className="flex flex-col sm:flex-row sm:h-[300px] divide-y sm:divide-y-0 sm:divide-x">
-                                <ScrollArea className="w-64 sm:w-auto">
-                                    <div className="flex sm:flex-col p-2">
-                                        {hours_list.map((hour) => {
-                                            return <Button
-                                                key={hour}
-                                                size="icon"
-                                                variant={date_value.getHours() === hour ? "default" : "ghost"}
-                                                className="sm:w-full shrink-0 aspect-square"
-                                                onClick={() => {
-                                                    let new_value = new Date(date_value);
-
-                                                    new_value.setHours(hour);
-
-                                                    low_field.onChange(new_value);
-                                                }}
-                                            >
-                                                {hour}
-                                            </Button>
-                                        })}
-                                    </div>
-                                    <ScrollBar
-                                        orientation="horizontal"
-                                        className="sm:hidden"
-                                    />
-                                </ScrollArea>
-                                <ScrollArea className="w-64 sm:w-auto">
-                                    <div className="flex sm:flex-col p-2">
-                                        {minutes_list.map((minute) => {
-                                            return <Button
-                                                key={minute}
-                                                size="icon"
-                                                variant={date_value.getMinutes() === minute? "default" : "ghost"}
-                                                className="sm:w-full shrink-0 aspect-square"
-                                                onClick={() => {
-                                                    let new_value = new Date(date_value);
-
-                                                    new_value.setMinutes(minute);
-
-                                                    low_field.onChange(new_value);
-                                                }}
-                                            >
-                                                {minute}
-                                            </Button>
-                                        })}
-                                    </div>
-                                    <ScrollBar
-                                        orientation="horizontal"
-                                        className="sm:hidden"
-                                    />
-                                </ScrollArea>
-                                <ScrollArea className="w-64 sm:w-auto">
-                                    <div className="flex sm:flex-col p-2">
-                                        {seconds_list.map((second) => {
-                                            return <Button
-                                                key={second}
-                                                size="icon"
-                                                variant={date_value.getSeconds() === second? "default" : "ghost"}
-                                                className="sm:w-full shrink-0 aspect-square"
-                                                onClick={() => {
-                                                    let new_value = new Date(date_value);
-
-                                                    new_value.setSeconds(second);
-
-                                                    low_field.onChange(new_value);
-                                                }}
-                                            >
-                                                {second}
-                                            </Button>
-                                        })}
-                                    </div>
-                                    <ScrollBar
-                                        orientation="horizontal"
-                                        className="sm:hidden"
-                                    />
-                                </ScrollArea>
-                            </div>
+                            <TimePicker value={date_value} on_change={low_field.onChange} />
                         </div>
                     </PopoverContent>
                 </Popover>
@@ -713,83 +615,7 @@ export function TimeRangeValue({index, config}: TimeRangeValueProps) {
                                     return date > new Date() || date < new Date("1900-01-01");
                                 }}
                             />
-                            <div className="flex flex-col sm:flex-row sm:h-[300px] divide-y sm:divide-y-0 sm:divide-x">
-                                <ScrollArea className="w-64 sm:w-auto">
-                                    <div className="flex sm:flex-col p-2">
-                                        {hours_list.map((hour) => {
-                                            return <Button
-                                                key={hour}
-                                                size="icon"
-                                                variant={date_value.getHours() === hour ? "default" : "ghost"}
-                                                className="sm:w-full shrink-0 aspect-square"
-                                                onClick={() => {
-                                                    let new_value = new Date(date_value);
-
-                                                    new_value.setHours(hour);
-
-                                                    high_field.onChange(new_value);
-                                                }}
-                                            >
-                                                {hour}
-                                            </Button>
-                                        })}
-                                    </div>
-                                    <ScrollBar
-                                        orientation="horizontal"
-                                        className="sm:hidden"
-                                    />
-                                </ScrollArea>
-                                <ScrollArea className="w-64 sm:w-auto">
-                                    <div className="flex sm:flex-col p-2">
-                                        {minutes_list.map((minute) => {
-                                            return <Button
-                                                key={minute}
-                                                size="icon"
-                                                variant={date_value.getMinutes() === minute? "default" : "ghost"}
-                                                className="sm:w-full shrink-0 aspect-square"
-                                                onClick={() => {
-                                                    let new_value = new Date(date_value);
-
-                                                    new_value.setMinutes(minute);
-
-                                                    high_field.onChange(new_value);
-                                                }}
-                                            >
-                                                {minute}
-                                            </Button>
-                                        })}
-                                    </div>
-                                    <ScrollBar
-                                        orientation="horizontal"
-                                        className="sm:hidden"
-                                    />
-                                </ScrollArea>
-                                <ScrollArea className="w-64 sm:w-auto">
-                                    <div className="flex sm:flex-col p-2">
-                                        {seconds_list.map((second) => {
-                                            return <Button
-                                                key={second}
-                                                size="icon"
-                                                variant={date_value.getSeconds() === second? "default" : "ghost"}
-                                                className="sm:w-full shrink-0 aspect-square"
-                                                onClick={() => {
-                                                    let new_value = new Date(date_value);
-
-                                                    new_value.setSeconds(second);
-
-                                                    high_field.onChange(new_value);
-                                                }}
-                                            >
-                                                {second}
-                                            </Button>
-                                        })}
-                                    </div>
-                                    <ScrollBar
-                                        orientation="horizontal"
-                                        className="sm:hidden"
-                                    />
-                                </ScrollArea>
-                            </div>
+                            <TimePicker value={date_value} on_change={high_field.onChange}/>
                         </div>
                     </PopoverContent>
                 </Popover>

@@ -41,7 +41,7 @@ import {
     useSidebar,
 } from "@/components/ui/sidebar";
 
-import { JournalSidebar } from "@/journals/sidebar";
+import { JournalSidebar } from "@/sidebar/journals";
 import { AdminSidebar } from "@/sidebar/admin";
 import { SettingsSidebar } from "@/sidebar/settings";
 
