@@ -1,31 +1,17 @@
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use reqwest::StatusCode;
 
-use crate::db::{
-    ParamsVec,
-    GenericClient,
-    push_param,
-};
-use crate::db::ids::{
-    EntryId,
-    UserPeerId,
-    JournalUid,
-};
+use crate::db::ids::{EntryId, JournalUid, UserPeerId};
+use crate::db::{push_param, GenericClient, ParamsVec};
 use crate::error::{self, Context};
-use crate::journal::{Journal, CustomField};
+use crate::journal::{CustomField, Journal};
 use crate::state;
-use crate::sync::{self, PeerClient};
 use crate::sync::journal::{
-    JournalSync,
-    CustomFieldSync,
-    EntrySync,
-    EntryTagSync,
-    EntryCFSync,
-    EntryFileSync,
-    SyncStatus,
+    CustomFieldSync, EntryCFSync, EntryFileSync, EntrySync, EntryTagSync, JournalSync, SyncStatus,
 };
+use crate::sync::{self, PeerClient};
 use crate::user::peer::UserPeer;
 
 const BATCH_SIZE: i64 = 50;
@@ -41,10 +27,12 @@ async fn send_journal(
     peer: UserPeer,
     journal: Journal,
 ) -> Result<(), error::Error> {
-    let mut conn = state.db_conn()
+    let mut conn = state
+        .db_conn()
         .await
         .context("failed to get database connection")?;
-    let mut transaction = conn.transaction()
+    let mut transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -66,19 +54,14 @@ async fn send_journal(
     loop {
         let Some(checkpoint) = error::prefix_try_result(
             "failed to create savepoint ofr journal sync",
-            transaction.transaction().await
+            transaction.transaction().await,
         ) else {
             break;
         };
 
         let result = {
-            let batch_result = batch_entry_sync(
-                &checkpoint,
-                &client,
-                &journal,
-                &prev_entry,
-                &sync_date
-            ).await;
+            let batch_result =
+                batch_entry_sync(&checkpoint, &client, &journal, &prev_entry, &sync_date).await;
 
             match batch_result {
                 Ok(rtn) => {
@@ -132,7 +115,8 @@ async fn send_journal(
     // table and we want to try and avoid send data that we have already
     // sent to the remote server
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit top transaction for sync journal")?;
 
@@ -142,7 +126,7 @@ async fn send_journal(
 async fn journal_sync(
     conn: &impl GenericClient,
     client: &PeerClient,
-    journal: &Journal
+    journal: &Journal,
 ) -> Result<(), error::Error> {
     let custom_fields_stream = CustomField::retrieve_journal_stream(conn, &journal.id)
         .await
@@ -171,7 +155,8 @@ async fn journal_sync(
         custom_fields,
     };
 
-    let res = client.post("/api/journals")
+    let res = client
+        .post("/api/journals")
         .json(&journal_json)
         .send()
         .await
@@ -205,8 +190,9 @@ async fn batch_entry_sync(
         &client.peer().id,
         prev_entry,
         sync_date,
-        BATCH_SIZE
-    ).await?;
+        BATCH_SIZE,
+    )
+    .await?;
 
     futures::pin_mut!(entries);
 
@@ -248,15 +234,17 @@ async fn batch_entry_sync(
         &successful,
         &client.peer().id,
         SyncStatus::Synced,
-        sync_date
-    ).await?;
+        sync_date,
+    )
+    .await?;
     update_synced(
         conn,
         &failed,
         &client.peer().id,
         SyncStatus::Failed,
-        sync_date
-    ).await?;
+        sync_date,
+    )
+    .await?;
 
     Ok(BatchResults {
         last_id,
@@ -279,7 +267,7 @@ async fn update_synced(
 
     let mut params: ParamsVec<'_> = vec![user_peers_id, &status, updated];
     let mut query = String::from(
-        "insert into synced_entries (entries_id, user_peers_id, status, updated) values "
+        "insert into synced_entries (entries_id, user_peers_id, status, updated) values ",
     );
 
     for (index, entries_id) in given.iter().enumerate() {
@@ -287,10 +275,7 @@ async fn update_synced(
             query.push_str(", ");
         }
 
-        let statement = format!(
-            "(${}, $1, $2, $3)",
-            push_param(&mut params, entries_id)
-        );
+        let statement = format!("(${}, $1, $2, $3)", push_param(&mut params, entries_id));
 
         query.push_str(&statement);
     }
@@ -298,7 +283,7 @@ async fn update_synced(
     query.push_str(
         " on conflict (entries_id, user_peers_id) do update \
         set status = excluded.status, \
-            updated = excluded.updated"
+            updated = excluded.updated",
     );
 
     conn.execute(&query, params.as_slice())
@@ -314,12 +299,14 @@ async fn send_entry(
     entries_id: EntryId,
     entry: sync::journal::EntrySync,
 ) -> Result<EntryId, EntryId> {
-    let result = client.post(format!("/api/journals/{journals_uid}/entries"))
+    let result = client
+        .post(format!("/api/journals/{journals_uid}/entries"))
         .json(&entry)
         .send()
         .await;
 
-    let Some(res) = error::prefix_try_result("failed to send entry to remote server", result) else {
+    let Some(res) = error::prefix_try_result("failed to send entry to remote server", result)
+    else {
         return Err(entries_id);
     };
 

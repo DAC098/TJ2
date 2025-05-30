@@ -7,16 +7,16 @@ use serde::Serialize;
 use tj2_lib::sec::pki::{PrivateKey, PrivateKeyError};
 
 use crate::db;
-use crate::db::ids::{UserId, UserUid, GroupId, RoleId};
+use crate::db::ids::{GroupId, RoleId, UserId, UserUid};
 use crate::error::{self, Context};
 use crate::sec;
 use crate::sec::authz::Role;
 use crate::state::Storage;
 
-pub mod invite;
-pub mod group;
-pub mod peer;
 pub mod client;
+pub mod group;
+pub mod invite;
+pub mod peer;
 
 use group::Group;
 
@@ -50,7 +50,7 @@ pub enum UserBuilderError {
     Argon(#[from] sec::password::HashError),
 
     #[error(transparent)]
-    Db(#[from] db::PgError)
+    Db(#[from] db::PgError),
 }
 
 pub enum RetrieveUserQuery<'a> {
@@ -84,13 +84,17 @@ impl<'a> From<&'a UserUid> for RetrieveUserQuery<'a> {
 }
 
 impl User {
-    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    pub async fn retrieve<'a, T>(
+        conn: &impl db::GenericClient,
+        given: T,
+    ) -> Result<Option<Self>, db::PgError>
     where
-        T: Into<RetrieveUserQuery<'a>>
+        T: Into<RetrieveUserQuery<'a>>,
     {
         match given.into() {
-            RetrieveUserQuery::Username(username) => conn.query_opt(
-                "\
+            RetrieveUserQuery::Username(username) => {
+                conn.query_opt(
+                    "\
                 select id, \
                        uid, \
                        username, \
@@ -100,10 +104,13 @@ impl User {
                        updated \
                 from users \
                 where username = $1",
-                &[&username]
-            ).await,
-            RetrieveUserQuery::Id(id) => conn.query_opt(
-                "\
+                    &[&username],
+                )
+                .await
+            }
+            RetrieveUserQuery::Id(id) => {
+                conn.query_opt(
+                    "\
                 select id, \
                        uid, \
                        username, \
@@ -113,10 +120,13 @@ impl User {
                        updated \
                 from users \
                 where id = $1",
-                &[id]
-            ).await,
-            RetrieveUserQuery::Uid(uid) => conn.query_opt(
-                "\
+                    &[id],
+                )
+                .await
+            }
+            RetrieveUserQuery::Uid(uid) => {
+                conn.query_opt(
+                    "\
                 select id, \
                        uid, \
                        username, \
@@ -126,10 +136,13 @@ impl User {
                        updated \
                 from users \
                 where uid = $1",
-                &[uid]
-            ).await
+                    &[uid],
+                )
+                .await
+            }
         }
-            .map(|maybe| maybe.map(|row| Self {
+        .map(|maybe| {
+            maybe.map(|row| Self {
                 id: row.get(0),
                 uid: row.get(1),
                 username: row.get(2),
@@ -137,14 +150,21 @@ impl User {
                 version: row.get(4),
                 created: row.get(5),
                 updated: row.get(6),
-            }))
+            })
+        })
     }
 
-    pub async fn retrieve_username(conn: &impl db::GenericClient, username: &str) -> Result<Option<Self>, db::PgError> {
+    pub async fn retrieve_username(
+        conn: &impl db::GenericClient,
+        username: &str,
+    ) -> Result<Option<Self>, db::PgError> {
         Self::retrieve(conn, RetrieveUserQuery::Username(username)).await
     }
 
-    pub async fn retrieve_id(conn: &impl db::GenericClient, id: UserId) -> Result<Option<Self>, db::PgError> {
+    pub async fn retrieve_id(
+        conn: &impl db::GenericClient,
+        id: UserId,
+    ) -> Result<Option<Self>, db::PgError> {
         Self::retrieve(conn, RetrieveUserQuery::Id(&id)).await
     }
 
@@ -162,30 +182,42 @@ impl User {
     pub async fn update(&mut self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
         self.updated = Some(Utc::now());
 
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             update users \
             set username = $2, \
                 password = $3, \
                 version = $4, \
                 updated = $5 \
             where id = $1",
-            &[&self.id, &self.username, &self.password, &self.version, &self.updated]
-        ).await;
+                &[
+                    &self.id,
+                    &self.username,
+                    &self.password,
+                    &self.version,
+                    &self.updated,
+                ],
+            )
+            .await;
 
         match result {
             Ok(result) => Ok(result == 1),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => if constraint == "users_username_key" {
-                        Ok(false)
-                    } else {
-                        Err(err)
-                    },
-                    _ => Err(err)
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => {
+                            if constraint == "users_username_key" {
+                                Ok(false)
+                            } else {
+                                Err(err)
+                            }
+                        }
+                        _ => Err(err),
+                    }
+                } else {
+                    Err(err)
                 }
-            } else {
-                Err(err)
             }
         }
     }
@@ -219,13 +251,15 @@ impl UserBuilder {
         let uid = UserUid::gen();
         let created = Utc::now();
 
-        let result = conn.query_one(
-            "\
+        let result = conn
+            .query_one(
+                "\
             insert into users (uid, username, password, version, created) \
             values ($1, $2, $3, $4, $5) \
             returning id",
-            &[&uid, &username, &password, &version, &created]
-        ).await;
+                &[&uid, &username, &password, &version, &created],
+            )
+            .await;
 
         match result {
             Ok(row) => Ok(User {
@@ -237,17 +271,19 @@ impl UserBuilder {
                 created,
                 updated: None,
             }),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "users_username_key" => Err(UserBuilderError::UsernameExists),
-                        "users_uid_key" => Err(UserBuilderError::UidExists),
-                        _ => Err(err.into())
-                    },
-                    _ => Err(err.into())
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "users_username_key" => Err(UserBuilderError::UsernameExists),
+                            "users_uid_key" => Err(UserBuilderError::UidExists),
+                            _ => Err(err.into()),
+                        },
+                        _ => Err(err.into()),
+                    }
+                } else {
+                    Err(err.into())
                 }
-            } else {
-                Err(err.into())
             }
         }
     }
@@ -268,12 +304,13 @@ pub enum UserGenerateError {
 pub async fn generate_user(
     conn: &impl db::GenericClient,
     storage: &Storage,
-    builder: UserBuilder
+    builder: UserBuilder,
 ) -> Result<(User, PrivateKey), UserGenerateError> {
     let user = builder.build(conn).await?;
     let user_dir = storage.user_dir(user.id);
 
-    user_dir.create()
+    user_dir
+        .create()
         .await
         .map_err(|err| UserGenerateError::Dir(err))?;
 
@@ -313,10 +350,10 @@ pub struct AttachedUser {
 impl AttachedUser {
     pub async fn retrieve_stream<'a, I>(
         conn: &impl db::GenericClient,
-        id: I
+        id: I,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError>
     where
-        I: Into<UserRefId<'a>>
+        I: Into<UserRefId<'a>>,
     {
         let stream = match id.into() {
             UserRefId::Group(groups_id) => {
@@ -331,8 +368,9 @@ impl AttachedUser {
                         left join users on \
                             group_users.users_id = users.id \
                     where group_users.groups_id = $1",
-                    params
-                ).await?
+                    params,
+                )
+                .await?
             }
             UserRefId::Role(role_id) => {
                 let params: db::ParamsArray<'_, 1> = [role_id];
@@ -346,24 +384,27 @@ impl AttachedUser {
                         left join users on \
                             user_roles.users_id = users.id \
                     where user_roles.role_id = $1",
-                    params
-                ).await?
+                    params,
+                )
+                .await?
             }
         };
 
-        Ok(stream.map(|result| result.map(|row| Self {
-            users_id: row.get(0),
-            username: row.get(1),
-            added: row.get(2),
-        })))
+        Ok(stream.map(|result| {
+            result.map(|row| Self {
+                users_id: row.get(0),
+                username: row.get(1),
+                added: row.get(2),
+            })
+        }))
     }
 
     pub async fn retrieve<'a, I>(
         conn: &impl db::GenericClient,
-        id: I
+        id: I,
     ) -> Result<Vec<Self>, error::Error>
     where
-        I: Into<UserRefId<'a>>
+        I: Into<UserRefId<'a>>,
     {
         let stream = Self::retrieve_stream(conn, id)
             .await
@@ -386,10 +427,10 @@ impl AttachedUser {
 pub async fn create_attached_users<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
-    users: Vec<UserId>
+    users: Vec<UserId>,
 ) -> Result<(Vec<AttachedUser>, Vec<UserId>), error::Error>
 where
-    I: Into<UserRefId<'a>>
+    I: Into<UserRefId<'a>>,
 {
     if users.is_empty() {
         return Ok((Vec::new(), Vec::new()));
@@ -419,10 +460,10 @@ where
                 from tmp_insert \
                     left join users on \
                         tmp_insert.users_id = users.id",
-                params
+                params,
             )
-                .await
-                .context("failed to add users to group")?
+            .await
+            .context("failed to add users to group")?
         }
         UserRefId::Role(role_id) => {
             let params: db::ParamsArray<'_, 3> = [role_id, &added, &users];
@@ -444,10 +485,10 @@ where
                 from tmp_insert \
                     left join users on \
                         tmp_insert.users_id = users.id",
-                params
+                params,
             )
-                .await
-                .context("failed to add users to role")?
+            .await
+            .context("failed to add users to role")?
         }
     };
 
@@ -476,18 +517,15 @@ where
 pub async fn update_attached_users<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
-    users: Option<Vec<UserId>>
+    users: Option<Vec<UserId>>,
 ) -> Result<(Vec<AttachedUser>, Vec<UserId>), error::Error>
 where
-    I: Into<UserRefId<'a>>
+    I: Into<UserRefId<'a>>,
 {
     let id = id.into();
 
     let Some(users) = users else {
-        return Ok((
-            AttachedUser::retrieve(conn, id).await?,
-            Vec::new()
-        ));
+        return Ok((AttachedUser::retrieve(conn, id).await?, Vec::new()));
     };
 
     let added = Utc::now();
@@ -535,10 +573,10 @@ where
                     from tmp_insert \
                         left join users on \
                             tmp_insert.users_id = users.id",
-                    params
+                    params,
                 )
-                    .await
-                    .context("failed to add users to group")?
+                .await
+                .context("failed to add users to group")?
             }
             UserRefId::Role(role_id) => {
                 let params: db::ParamsArray<'_, 3> = [role_id, &added, &users];
@@ -561,10 +599,10 @@ where
                     from tmp_insert \
                         left join users on \
                             tmp_insert.users_id = users.id",
-                    params
+                    params,
                 )
-                    .await
-                    .context("failed to add users to role")?
+                .await
+                .context("failed to add users to role")?
             }
         };
 
@@ -583,7 +621,7 @@ where
             rtn.push(AttachedUser {
                 users_id,
                 username: record.get(1),
-                added: record.get(2)
+                added: record.get(2),
             });
         }
     }
@@ -595,18 +633,18 @@ where
             UserRefId::Group(groups_id) => {
                 conn.execute(
                     "delete from group_users where groups_id = $1 and users_id = any($2)",
-                    &[groups_id, &to_delete]
+                    &[groups_id, &to_delete],
                 )
-                    .await
-                    .context("failed to delete from group users")?;
+                .await
+                .context("failed to delete from group users")?;
             }
             UserRefId::Role(role_id) => {
                 conn.execute(
                     "delete from user_roles where role_id = $1 and users_id = any($2)",
-                    &[role_id, &to_delete]
+                    &[role_id, &to_delete],
                 )
-                    .await
-                    .context("failed to delete from user roles")?;
+                .await
+                .context("failed to delete from user roles")?;
             }
         }
     }
@@ -616,18 +654,18 @@ where
 
 #[derive(Debug)]
 pub struct UserDir {
-    root: PathBuf
+    root: PathBuf,
 }
 
 impl UserDir {
     pub fn new<P>(root: P, users_id: UserId) -> Self
     where
-        P: AsRef<Path>
+        P: AsRef<Path>,
     {
         let path = format!("users/{users_id}");
 
         Self {
-            root: root.as_ref().join(path)
+            root: root.as_ref().join(path),
         }
     }
 

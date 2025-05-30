@@ -1,22 +1,22 @@
 use axum::extract::Query;
-use axum::http::{StatusCode, HeaderMap};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::error::{self, Context};
-use crate::header::{Location, is_accepting_html};
+use crate::header::{is_accepting_html, Location};
 use crate::router::body;
 use crate::sec;
-use crate::sec::authn::{Session, Initiator, InitiatorError};
-use crate::sec::authn::session::{SessionOptions, SessionError};
+use crate::sec::authn::session::{SessionError, SessionOptions};
+use crate::sec::authn::{Initiator, InitiatorError, Session};
 use crate::sec::otp;
 use crate::state;
 use crate::user;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginQuery {
-    prev: Option<String>
+    prev: Option<String>,
 }
 
 impl LoginQuery {
@@ -39,12 +39,12 @@ impl LoginQuery {
 #[derive(Debug, Serialize)]
 pub enum LoginStatus {
     Active,
-    Inactive
+    Inactive,
 }
 
 #[derive(Debug, Serialize)]
 pub struct LoginCheck {
-    status: LoginStatus
+    status: LoginStatus,
 }
 
 pub async fn get(
@@ -52,7 +52,8 @@ pub async fn get(
     Query(query): Query<LoginQuery>,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    let conn = state.db()
+    let conn = state
+        .db()
         .get()
         .await
         .context("failed to retrieve database connection")?;
@@ -62,48 +63,44 @@ pub async fn get(
     let Ok(is_html) = is_accepting_html(&headers) else {
         return Ok((
             StatusCode::BAD_REQUEST,
-            "invalid characters in accept header"
-        ).into_response());
+            "invalid characters in accept header",
+        )
+            .into_response());
     };
 
     if is_html {
         if let Err(err) = result {
-            error::log_prefix_error(
-                "error when retrieving session id",
-                &err
-            );
+            error::log_prefix_error("error when retrieving session id", &err);
 
             Ok((
                 Session::clear_cookie(),
-                body::SpaPage::new(state.templates())?
-            ).into_response())
+                body::SpaPage::new(state.templates())?,
+            )
+                .into_response())
         } else {
-            Ok(Location::to(
-                query.get_prev().unwrap_or("/".to_owned())
-            ).into_response())
+            Ok(Location::to(query.get_prev().unwrap_or("/".to_owned())).into_response())
         }
     } else {
         if let Err(err) = result {
             match err {
                 InitiatorError::DbPg(err) => Err(error::Error::context_source(
                     "database error when retrieving session",
-                    err
+                    err,
                 )),
                 err => {
-                    error::log_prefix_error(
-                        "error when retrieving session id",
-                        &err
-                    );
+                    error::log_prefix_error("error when retrieving session id", &err);
 
                     Ok(body::Json(LoginCheck {
-                        status: LoginStatus::Inactive
-                    }).into_response())
+                        status: LoginStatus::Inactive,
+                    })
+                    .into_response())
                 }
             }
         } else {
             Ok(body::Json(LoginCheck {
-                status: LoginStatus::Active
-            }).into_response())
+                status: LoginStatus::Active,
+            })
+            .into_response())
         }
     }
 }
@@ -118,7 +115,7 @@ pub struct LoginRequest {
 #[serde(tag = "type", content = "value")]
 pub enum LoginResult {
     Success,
-    Verify
+    Verify,
 }
 
 #[derive(Debug, Serialize, thiserror::Error)]
@@ -159,18 +156,11 @@ impl IntoResponse for LoginError {
         error::log_prefix_error("response error", &self);
 
         match self {
-            Self::AlreadyAuthenticated => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self)
-            ).into_response(),
-            Self::UsernameNotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self)
-            ).into_response(),
-            Self::InvalidPassword => (
-                StatusCode::FORBIDDEN,
-                body::Json(self)
-            ).into_response(),
+            Self::AlreadyAuthenticated => {
+                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
+            }
+            Self::UsernameNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::InvalidPassword => (StatusCode::FORBIDDEN, body::Json(self)).into_response(),
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
@@ -197,7 +187,7 @@ pub async fn post(
             }
             InitiatorError::DbPg(err) => return Err(LoginError::Db(err)),
             _ => return Err(LoginError::InvalidSession),
-        }
+        },
     }
 
     let user = user::User::retrieve(&transaction, &login.username)
@@ -228,8 +218,5 @@ pub async fn post(
 
     transaction.commit().await?;
 
-    Ok((
-        session_cookie,
-        body::Json(result)
-    ).into_response())
+    Ok((session_cookie, body::Json(result)).into_response())
 }

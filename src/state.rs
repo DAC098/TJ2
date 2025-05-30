@@ -10,11 +10,11 @@ use axum::http::request::Parts;
 
 use crate::config;
 use crate::db;
-use crate::db::ids::{UserId, JournalId, FileEntryId};
+use crate::db::ids::{FileEntryId, JournalId, UserId};
 use crate::error::{self, Context};
 use crate::journal::JournalDir;
-use crate::sec::otp::Totp;
 use crate::sec::authn::session::ApiSessionToken;
+use crate::sec::otp::Totp;
 use crate::sec::pki::Data;
 use crate::templates;
 use crate::user::UserDir;
@@ -63,7 +63,9 @@ impl SharedState {
     }
 
     pub async fn db_conn(&self) -> Result<db::Object, error::Error> {
-        self.0.db_pool.get()
+        self.0
+            .db_pool
+            .get()
             .await
             .context("failed to retrieve database connection")
     }
@@ -73,7 +75,10 @@ impl SharedState {
 impl FromRequestParts<SharedState> for SharedState {
     type Rejection = Infallible;
 
-    async fn from_request_parts(_: &mut Parts, state: &SharedState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        _: &mut Parts,
+        state: &SharedState,
+    ) -> Result<Self, Self::Rejection> {
         Ok(state.clone())
     }
 }
@@ -117,7 +122,7 @@ impl Assets {
 
 #[derive(Debug, Clone)]
 pub struct Storage {
-    path: PathBuf
+    path: PathBuf,
 }
 
 impl Storage {
@@ -132,9 +137,10 @@ impl Storage {
     pub fn journal_file_entry(
         &self,
         journals_id: JournalId,
-        file_entry_id: FileEntryId
+        file_entry_id: FileEntryId,
     ) -> PathBuf {
-        self.path.join(format!("journals/{journals_id}/files/{file_entry_id}.file"))
+        self.path
+            .join(format!("journals/{journals_id}/files/{file_entry_id}.file"))
     }
 }
 
@@ -144,7 +150,7 @@ impl FromRequestParts<SharedState> for Storage {
 
     async fn from_request_parts(
         _: &mut Parts,
-        state: &SharedState
+        state: &SharedState,
     ) -> Result<Self, Self::Rejection> {
         Ok(state.0.storage.clone())
     }
@@ -158,7 +164,7 @@ pub struct Security {
 
 #[derive(Debug)]
 pub struct Vetting {
-    pub totp: moka::sync::Cache<UserId, Totp>
+    pub totp: moka::sync::Cache<UserId, Totp>,
 }
 
 #[derive(Debug)]

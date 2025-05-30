@@ -2,7 +2,7 @@ use std::fmt;
 
 use bytes::BytesMut;
 use postgres_types as pg_types;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::error::BoxDynError;
 use crate::sec::sized_rand_bytes;
@@ -21,11 +21,9 @@ impl<const N: usize> Token<N> {
     }
 
     pub fn from_base64(given: &str) -> Result<Self, InvalidBase64> {
-        let decoded = tj2_lib::string::from_base64_nopad(given)
-            .ok_or(InvalidBase64)?;
+        let decoded = tj2_lib::string::from_base64_nopad(given).ok_or(InvalidBase64)?;
 
-        let bytes = decoded.try_into()
-            .map_err(|_| InvalidBase64)?;
+        let bytes = decoded.try_into().map_err(|_| InvalidBase64)?;
 
         Ok(Self(bytes))
     }
@@ -60,9 +58,12 @@ impl<const N: usize> fmt::Display for Token<N> {
 }
 
 impl<const N: usize> pg_types::ToSql for Token<N> {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
-        self.0.as_slice()
-            .to_sql(ty, w)
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
+        self.0.as_slice().to_sql(ty, w)
     }
 
     fn accepts(ty: &pg_types::Type) -> bool {
@@ -87,5 +88,3 @@ impl<'a, const N: usize> pg_types::FromSql<'a> for Token<N> {
         <&[u8] as pg_types::FromSql>::accepts(ty)
     }
 }
-
-

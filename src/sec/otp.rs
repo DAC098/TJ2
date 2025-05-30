@@ -1,8 +1,8 @@
 use bytes::BytesMut;
 use postgres_types as pg_types;
 use rand::RngCore;
-use serde::{Serialize, Deserialize};
-use serde_repr::{Serialize_repr, Deserialize_repr};
+use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 
 use crate::db;
 use crate::db::ids::UserId;
@@ -82,9 +82,13 @@ impl Totp {
         })
     }
 
-    pub async fn retrieve(conn: &impl db::GenericClient, users_id: &UserId) -> Result<Option<Self>, db::PgError> {
-        Ok(conn.query_opt(
-            "\
+    pub async fn retrieve(
+        conn: &impl db::GenericClient,
+        users_id: &UserId,
+    ) -> Result<Option<Self>, db::PgError> {
+        Ok(conn
+            .query_opt(
+                "\
             select authn_totp.users_id, \
                    authn_totp.algo, \
                    authn_totp.step, \
@@ -92,51 +96,67 @@ impl Totp {
                    authn_totp.secret \
             from authn_totp \
             where authn_totp.users_id = $1",
-            &[users_id]
-        ).await?.map(|record| {
-            let digits = Self::try_get_digits(record.get(3)).expect(
-                "invalid number of totp digits from database"
-            );
+                &[users_id],
+            )
+            .await?
+            .map(|record| {
+                let digits = Self::try_get_digits(record.get(3))
+                    .expect("invalid number of totp digits from database");
 
-            Self {
-                users_id: record.get(0),
-                algo: record.get(1),
-                step: record.get(2),
-                digits,
-                secret: record.get(4),
-            }
-        }))
+                Self {
+                    users_id: record.get(0),
+                    algo: record.get(1),
+                    step: record.get(2),
+                    digits,
+                    secret: record.get(4),
+                }
+            }))
     }
 
-    pub async fn exists(conn: &impl db::GenericClient, users_id: &UserId) -> Result<bool, db::PgError> {
-        let result = conn.execute(
-            "select authn_totp.users_id from authn_totp where users_id = $1",
-            &[users_id]
-        ).await?;
+    pub async fn exists(
+        conn: &impl db::GenericClient,
+        users_id: &UserId,
+    ) -> Result<bool, db::PgError> {
+        let result = conn
+            .execute(
+                "select authn_totp.users_id from authn_totp where users_id = $1",
+                &[users_id],
+            )
+            .await?;
 
         Ok(result == 1)
     }
 
     pub async fn save(&self, conn: &impl db::GenericClient) -> Result<(), TotpError> {
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             insert into authn_totp (users_id, algo, step, digits, secret) values \
             ($1, $2, $3, $4, $5)",
-            &[&self.users_id, &self.algo, &self.step, &db::U8toI16(&self.digits), &self.secret]
-        ).await;
+                &[
+                    &self.users_id,
+                    &self.algo,
+                    &self.step,
+                    &db::U8toI16(&self.digits),
+                    &self.secret,
+                ],
+            )
+            .await;
 
         match result {
             Ok(_count) => Ok(()),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "authn_totp_pkey" => Err(TotpError::AlreadyExists),
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "authn_totp_pkey" => Err(TotpError::AlreadyExists),
+                            _ => Err(TotpError::Db(err)),
+                        },
                         _ => Err(TotpError::Db(err)),
-                    },
-                    _ => Err(TotpError::Db(err)),
+                    }
+                } else {
+                    Err(TotpError::Db(err))
                 }
-            } else {
-                Err(TotpError::Db(err))
             }
         }
     }
@@ -144,15 +164,16 @@ impl Totp {
     pub async fn delete(&self, conn: &impl db::GenericClient) -> Result<(), db::PgError> {
         conn.execute(
             "delete from authn_totp where users_id = $1",
-            &[&self.users_id]
-        ).await?;
+            &[&self.users_id],
+        )
+        .await?;
 
         Ok(())
     }
 
     pub fn verify<T>(&self, given: T) -> Result<bool, UnixTimestampError>
     where
-        T: AsRef<str>
+        T: AsRef<str>,
     {
         let settings = rust_otp::TotpSettings {
             algo: (&self.algo).into(),
@@ -196,13 +217,17 @@ impl TryFrom<i32> for Step {
             15 => Ok(Self::Small),
             30 => Ok(Self::Medium),
             45 => Ok(Self::Large),
-            _ => Err(InvalidStep)
+            _ => Err(InvalidStep),
         }
     }
 }
 
 impl pg_types::ToSql for Step {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let num: i32 = self.into();
 
         num.to_sql(ty, w)
@@ -251,7 +276,7 @@ impl TryFrom<i32> for Algo {
             0 => Ok(Self::Sha1),
             1 => Ok(Self::Sha256),
             2 => Ok(Self::Sha512),
-            _ => Err(InvalidAlgo)
+            _ => Err(InvalidAlgo),
         }
     }
 }
@@ -267,7 +292,11 @@ impl From<&Algo> for rust_otp::Algo {
 }
 
 impl pg_types::ToSql for Algo {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let num: i32 = self.into();
 
         num.to_sql(ty, w)
@@ -313,9 +342,12 @@ impl AsRef<[u8]> for Secret {
 }
 
 impl pg_types::ToSql for Secret {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
-        self.0.as_slice()
-            .to_sql(ty, w)
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
+        self.0.as_slice().to_sql(ty, w)
     }
 
     fn accepts(ty: &pg_types::Type) -> bool {

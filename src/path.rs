@@ -1,35 +1,35 @@
-use std::ffi::{OsString, OsStr};
+use std::ffi::{OsStr, OsString};
 use std::fs::Metadata;
 use std::io::ErrorKind;
-use std::path::{PathBuf, Path, Component};
+use std::path::{Component, Path, PathBuf};
 
 pub fn metadata<P>(path: P) -> Result<Option<Metadata>, std::io::Error>
 where
-    P: AsRef<Path>
+    P: AsRef<Path>,
 {
     match path.as_ref().metadata() {
         Ok(m) => Ok(Some(m)),
         Err(err) => match err.kind() {
             ErrorKind::NotFound => Ok(None),
-            _ => Err(err)
-        }
+            _ => Err(err),
+        },
     }
 }
 
 pub async fn tokio_metadata<P>(path: P) -> Result<Option<Metadata>, std::io::Error>
 where
-    P: AsRef<Path>
+    P: AsRef<Path>,
 {
     match tokio::fs::metadata(path).await {
         Ok(m) => Ok(Some(m)),
         Err(err) => match err.kind() {
             ErrorKind::NotFound => Ok(None),
-            _ => Err(err)
-        }
+            _ => Err(err),
+        },
     }
 }
 
-pub fn normalize_from<R,P>(root: R, path: P) -> PathBuf
+pub fn normalize_from<R, P>(root: R, path: P) -> PathBuf
 where
     R: AsRef<Path>,
     P: AsRef<Path>,
@@ -84,7 +84,7 @@ where
 
 pub fn add_extension<E>(path: &PathBuf, ext: E) -> Option<PathBuf>
 where
-    E: AsRef<OsStr>
+    E: AsRef<OsStr>,
 {
     add_ext(path, ext.as_ref())
 }
@@ -92,7 +92,7 @@ where
 pub fn add_ext(path: &PathBuf, ext: &OsStr) -> Option<PathBuf> {
     let file_name = match path.file_name() {
         None => return None,
-        Some(value) => value
+        Some(value) => value,
     };
 
     let mut new_name = OsString::with_capacity(file_name.len() + ext.len() + 1);

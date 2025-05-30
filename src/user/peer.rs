@@ -20,7 +20,7 @@ pub struct UserPeer {
 }
 
 pub enum RetrieveOne<'a> {
-    Id(&'a UserPeerId)
+    Id(&'a UserPeerId),
 }
 
 impl<'a> From<&'a UserPeerId> for RetrieveOne<'a> {
@@ -49,14 +49,15 @@ impl<'a> From<&'a JournalId> for RetrieveMany<'a> {
 impl UserPeer {
     pub async fn retrieve<'a, T>(
         conn: &impl db::GenericClient,
-        given: T
+        given: T,
     ) -> Result<Option<Self>, db::PgError>
     where
         T: Into<RetrieveOne<'a>>,
     {
         let result = match given.into() {
-            RetrieveOne::Id(id) => conn.query_opt(
-                "\
+            RetrieveOne::Id(id) => {
+                conn.query_opt(
+                    "\
                 select user_peers.id, \
                        user_peers.users_id, \
                        user_peers.name, \
@@ -69,15 +70,16 @@ impl UserPeer {
                        user_peers.updated \
                 from user_peers \
                 where user_peers.id = $1",
-                &[id]
-            ).await?
+                    &[id],
+                )
+                .await?
+            }
         };
 
         Ok(result.map(|record| {
-            let port: u16 = db::try_from_int(record.get(5))
-                .expect("invalid peer port from db");
-            let public_key: PublicKey = db::try_from_bytea(record.get(3))
-                .expect("invalid public key data from db");
+            let port: u16 = db::try_from_int(record.get(5)).expect("invalid peer port from db");
+            let public_key: PublicKey =
+                db::try_from_bytea(record.get(3)).expect("invalid public key data from db");
 
             Self {
                 id: record.get(0),
@@ -96,10 +98,10 @@ impl UserPeer {
 
     pub async fn retrieve_many<'a, T>(
         conn: &impl db::GenericClient,
-        given: T
+        given: T,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError>
     where
-        T: Into<RetrieveMany<'a>>
+        T: Into<RetrieveMany<'a>>,
     {
         Ok(match given.into() {
             RetrieveMany::UserId(users_id) => {
@@ -120,9 +122,10 @@ impl UserPeer {
                     from user_peers \
                     where user_peers.users_id = $1 \
                     order by user_peers.name",
-                    params
-                ).await?
-            },
+                    params,
+                )
+                .await?
+            }
             RetrieveMany::JournalId(journals_id) => {
                 let params: db::ParamsArray<'a, 1> = [journals_id];
 
@@ -143,27 +146,30 @@ impl UserPeer {
                             user_peers.id = journal_peers.user_peers_id \
                     where journal_peers.journals_id = $1 \
                     order by user_peers.name",
-                    params
-                ).await?
+                    params,
+                )
+                .await?
             }
-        }.map(|maybe| maybe.map(|record| {
-            let port: u16 = db::try_from_int(record.get(5))
-                .expect("invalid peer port from db");
-            let public_key: PublicKey = db::try_from_bytea(record.get(3))
-                .expect("invalid public key data from db");
+        }
+        .map(|maybe| {
+            maybe.map(|record| {
+                let port: u16 = db::try_from_int(record.get(5)).expect("invalid peer port from db");
+                let public_key: PublicKey =
+                    db::try_from_bytea(record.get(3)).expect("invalid public key data from db");
 
-            Self {
-                id: record.get(0),
-                users_id: record.get(1),
-                name: record.get(2),
-                public_key,
-                addr: record.get(4),
-                port,
-                secure: record.get(6),
-                ssc: record.get(7),
-                created: record.get(8),
-                updated: record.get(9),
-            }
-        })))
+                Self {
+                    id: record.get(0),
+                    users_id: record.get(1),
+                    name: record.get(2),
+                    public_key,
+                    addr: record.get(4),
+                    port,
+                    secure: record.get(6),
+                    ssc: record.get(7),
+                    created: record.get(8),
+                    updated: record.get(9),
+                }
+            })
+        }))
     }
 }

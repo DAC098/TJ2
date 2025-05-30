@@ -1,13 +1,8 @@
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{StatusCode, HeaderMap, HeaderValue, header::InvalidHeaderValue};
-use axum::response::{
-    Response,
-    ResponseParts,
-    IntoResponse,
-    IntoResponseParts
-};
+use axum::http::{header::InvalidHeaderValue, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 use chrono::{DateTime, Utc};
 
 use crate::error::{self, Context};
@@ -16,7 +11,7 @@ use crate::error::{self, Context};
 pub enum SameSite {
     Strict,
     Lax,
-    None
+    None,
 }
 
 impl SameSite {
@@ -25,7 +20,7 @@ impl SameSite {
         match self {
             SameSite::Strict => "Strict",
             SameSite::Lax => "Lax",
-            SameSite::None => "None"
+            SameSite::None => "None",
         }
     }
 }
@@ -41,7 +36,7 @@ pub struct SetCookie {
     pub path: Option<String>,
     pub secure: bool,
     pub http_only: bool,
-    pub same_site: Option<SameSite>
+    pub same_site: Option<SameSite>,
 }
 
 impl SetCookie {
@@ -49,10 +44,10 @@ impl SetCookie {
     ///
     /// all options are left unspecified with "secure" and "http_only" being
     /// set to false.
-    pub fn new<K,V>(key: K, value: V) -> SetCookie
+    pub fn new<K, V>(key: K, value: V) -> SetCookie
     where
         K: Into<String>,
-        V: Into<String>
+        V: Into<String>,
     {
         SetCookie {
             key: key.into(),
@@ -63,7 +58,7 @@ impl SetCookie {
             path: None,
             secure: false,
             http_only: false,
-            same_site: None
+            same_site: None,
         }
     }
 
@@ -139,7 +134,7 @@ impl SetCookie {
     /// sets the current value of "domain"
     pub fn set_domain<D>(&mut self, domain: D) -> &mut Self
     where
-        D: Into<String>
+        D: Into<String>,
     {
         self.domain = Some(domain.into());
         self
@@ -148,7 +143,7 @@ impl SetCookie {
     /// attaches a new value to "domain"
     pub fn with_domain<D>(mut self, domain: D) -> Self
     where
-        D: Into<String>
+        D: Into<String>,
     {
         self.domain = Some(domain.into());
         self
@@ -157,7 +152,7 @@ impl SetCookie {
     /// sets the current value of "path"
     pub fn set_path<P>(&mut self, path: P) -> &mut Self
     where
-        P: Into<String>
+        P: Into<String>,
     {
         self.path = Some(path.into());
         self
@@ -166,7 +161,7 @@ impl SetCookie {
     /// attaches a new value to "path"
     pub fn with_path<P>(mut self, path: P) -> Self
     where
-        P: Into<String>
+        P: Into<String>,
     {
         self.path = Some(path.into());
         self
@@ -263,7 +258,8 @@ impl IntoResponseParts for SetCookie {
     type Error = error::Error;
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
-        let value = self.into_header_value()
+        let value = self
+            .into_header_value()
             .context("failed to change SetCookie into HeaderValue")?;
 
         res.headers_mut().insert("set-cookie", value);
@@ -284,7 +280,7 @@ impl IntoResponse for SetCookie {
 
 pub fn find_cookie_value<'a>(
     headers: &'a HeaderMap,
-    name: &str
+    name: &str,
 ) -> Result<Option<&'a str>, axum::http::header::ToStrError> {
     for cookie in headers.get_all("cookie") {
         let cookie_str = cookie.to_str()?;
@@ -295,7 +291,7 @@ pub fn find_cookie_value<'a>(
             };
 
             if key == name {
-                return Ok(Some(value))
+                return Ok(Some(value));
             }
         }
     }

@@ -1,56 +1,48 @@
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 
-use axum::Router;
 use axum::extract::Path;
-use axum::http::{StatusCode, Uri, HeaderMap};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use chrono::{Utc, DateTime};
+use axum::Router;
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{
-    JournalId,
-    JournalUid,
-    UserId,
-    CustomFieldId,
-    CustomFieldUid,
-    UserPeerId,
-};
+use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserId, UserPeerId};
 use crate::error::{self, Context};
-use crate::journal::{
-    custom_field,
-    Journal,
-    JournalCreateError,
-    JournalUpdateError,
-    CustomField,
-};
+use crate::jobs;
+use crate::journal::{custom_field, CustomField, Journal, JournalCreateError, JournalUpdateError};
 use crate::router::body;
 use crate::router::macros;
 use crate::sec::authn::Initiator;
-use crate::sec::authz::{self, Scope, Ability};
+use crate::sec::authz::{self, Ability, Scope};
 use crate::state;
-use crate::jobs;
 use crate::user::peer::UserPeer;
 
 mod entries;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
-        .route("/", get(retrieve_journals)
-            .post(create_journal))
+        .route("/", get(retrieve_journals).post(create_journal))
         .route("/new", get(retrieve_journal))
-        .route("/:journals_id", get(retrieve_journal)
-            .patch(update_journal))
-        .route("/:journals_id/entries", get(entries::retrieve_entries)
-            .post(entries::create_entry))
+        .route("/:journals_id", get(retrieve_journal).patch(update_journal))
+        .route(
+            "/:journals_id/entries",
+            get(entries::retrieve_entries).post(entries::create_entry),
+        )
         .route("/:journals_id/entries/new", get(entries::retrieve_entry))
-        .route("/:journals_id/entries/:entries_id", get(entries::retrieve_entry)
-            .patch(entries::update_entry)
-            .delete(entries::delete_entry))
-        .route("/:journals_id/entries/:entries_id/:file_entry_id", get(entries::files::retrieve_file)
-            .put(entries::files::upload_file))
+        .route(
+            "/:journals_id/entries/:entries_id",
+            get(entries::retrieve_entry)
+                .patch(entries::update_entry)
+                .delete(entries::delete_entry),
+        )
+        .route(
+            "/:journals_id/entries/:entries_id/:file_entry_id",
+            get(entries::files::retrieve_file).put(entries::files::upload_file),
+        )
         .route("/:journals_id/sync", post(sync_with_remote))
 }
 
@@ -74,30 +66,23 @@ async fn retrieve_journals(
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator!(
-        &conn,
-        &headers,
-        Some(uri.clone())
-    );
+    let initiator = macros::require_initiator!(&conn, &headers, Some(uri.clone()));
 
     macros::res_if_html!(state.templates(), &headers);
 
-    let perm_check = authz::has_permission(
-        &conn,
-        initiator.user.id,
-        Scope::Journals,
-        Ability::Read
-    )
-        .await
-        .context("failed to retrieve permission for user")?;
+    let perm_check =
+        authz::has_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read)
+            .await
+            .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
     }
 
     let params: db::ParamsArray<'_, 1> = [&initiator.user.id];
-    let journals = conn.query_raw(
-        "\
+    let journals = conn
+        .query_raw(
+            "\
         select journals.id, \
                journals.uid, \
                journals.users_id, \
@@ -118,8 +103,8 @@ async fn retrieve_journals(
                  journals.created, \
                  journals.updated \
         order by journals.name",
-        params
-    )
+            params,
+        )
         .await
         .context("failed to retrieve journals")?;
 
@@ -152,7 +137,7 @@ pub struct MaybeJournalPath {
 
 #[derive(Debug, Deserialize)]
 pub struct JournalPath {
-    journals_id: JournalId
+    journals_id: JournalId,
 }
 
 #[derive(Debug, Serialize)]
@@ -189,7 +174,9 @@ pub struct JournalFull {
 }
 
 impl From<(Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)> for JournalFull {
-    fn from((local, custom_fields, peers): (Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)) -> Self {
+    fn from(
+        (local, custom_fields, peers): (Journal, Vec<CustomFieldFull>, Vec<JournalPeer>),
+    ) -> Self {
         Self {
             id: local.id,
             uid: local.uid,
@@ -220,14 +207,10 @@ async fn retrieve_journal(
 
     let initiator = macros::require_initiator!(&conn, &headers, Some(uri));
 
-    let perm_check = authz::has_permission(
-        &conn,
-        initiator.user.id,
-        Scope::Journals,
-        Ability::Read
-    )
-        .await
-        .context("failed to retrieve permission for user")?;
+    let perm_check =
+        authz::has_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read)
+            .await
+            .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
@@ -286,9 +269,7 @@ async fn retrieve_journal(
         rtn
     };
 
-    Ok(body::Json(JournalFull::from((
-        journal, custom_fields, peers
-    ))).into_response())
+    Ok(body::Json(JournalFull::from((journal, custom_fields, peers))).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,20 +285,16 @@ pub struct NewJournal {
     name: String,
     description: Option<String>,
     custom_fields: Vec<NewCustomField>,
-    peers: Vec<UserPeerId>
+    peers: Vec<UserPeerId>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum NewJournalResult {
     NameExists,
-    DuplicateCustomFields {
-        duplicates: Vec<String>,
-    },
-    PeersNotFound {
-        ids: Vec<UserPeerId>,
-    },
-    Created(JournalFull)
+    DuplicateCustomFields { duplicates: Vec<String> },
+    PeersNotFound { ids: Vec<UserPeerId> },
+    Created(JournalFull),
 }
 
 async fn create_journal(
@@ -326,7 +303,8 @@ async fn create_journal(
     body::Json(json): body::Json<NewJournal>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -336,10 +314,10 @@ async fn create_journal(
         &transaction,
         initiator.user.id,
         Scope::Journals,
-        Ability::Create
+        Ability::Create,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
@@ -356,59 +334,57 @@ async fn create_journal(
     let journal = match result {
         Ok(journal) => journal,
         Err(err) => match err {
-            JournalCreateError::NameExists => return Ok((
-                StatusCode::BAD_REQUEST,
-                body::Json(NewJournalResult::NameExists)
-            ).into_response()),
-            JournalCreateError::UidExists => return Err(
-                error::Error::context("uid already exists")
-            ),
-            JournalCreateError::UserNotFound => return Err(
-                error::Error::context("specified user does not exist")
-            ),
-            JournalCreateError::Db(err) => return Err(
-                error::Error::context_source(
-                    "failed to create journal",
-                    err
+            JournalCreateError::NameExists => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    body::Json(NewJournalResult::NameExists),
                 )
-            ),
-        }
+                    .into_response())
+            }
+            JournalCreateError::UidExists => {
+                return Err(error::Error::context("uid already exists"))
+            }
+            JournalCreateError::UserNotFound => {
+                return Err(error::Error::context("specified user does not exist"))
+            }
+            JournalCreateError::Db(err) => {
+                return Err(error::Error::context_source(
+                    "failed to create journal",
+                    err,
+                ))
+            }
+        },
     };
 
-    let (custom_fields, duplicates) = create_custom_fields(
-        &transaction, &journal, json.custom_fields
-    ).await?;
+    let (custom_fields, duplicates) =
+        create_custom_fields(&transaction, &journal, json.custom_fields).await?;
 
     if !duplicates.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(NewJournalResult::DuplicateCustomFields {
-                duplicates
-            })
-        ).into_response());
+            body::Json(NewJournalResult::DuplicateCustomFields { duplicates }),
+        )
+            .into_response());
     }
 
-    let peers = match upsert_journal_peers(
-        &transaction, 
-        &initiator.user.id,
-        &journal.id,
-        json.peers
-    ).await? {
-        UpsertJournalPeers::Valid(valid) => valid,
-        UpsertJournalPeers::NotFound(ids) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                body::Json(NewJournalResult::PeersNotFound {
-                    ids
-                })
-            ).into_response());
-        }
-    };
+    let peers =
+        match upsert_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers)
+            .await?
+        {
+            UpsertJournalPeers::Valid(valid) => valid,
+            UpsertJournalPeers::NotFound(ids) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    body::Json(NewJournalResult::PeersNotFound { ids }),
+                )
+                    .into_response());
+            }
+        };
 
-    let journal_dir = state.storage()
-        .journal_dir(journal.id);
+    let journal_dir = state.storage().journal_dir(journal.id);
 
-    let root_dir = journal_dir.create_root_dir()
+    let root_dir = journal_dir
+        .create_root_dir()
         .await
         .context("failed to create root journal directory")?;
 
@@ -416,38 +392,35 @@ async fn create_journal(
         Ok(files) => files,
         Err(err) => {
             if let Err(root_err) = tokio::fs::remove_dir(&root_dir).await {
-                error::log_prefix_error(
-                    "failed to remove journal root dir",
-                    &root_err
-                );
+                error::log_prefix_error("failed to remove journal root dir", &root_err);
             }
 
-            return Err(error::Error::context_source("failed to create journal files dir", err));
+            return Err(error::Error::context_source(
+                "failed to create journal files dir",
+                err,
+            ));
         }
     };
 
     if let Err(err) = transaction.commit().await {
         if let Err(files_err) = tokio::fs::remove_dir(&files_dir).await {
-            error::log_prefix_error(
-                "failed to remove journal files dir",
-                &files_err
-            );
+            error::log_prefix_error("failed to remove journal files dir", &files_err);
         } else if let Err(root_err) = tokio::fs::remove_dir(&root_dir).await {
-            error::log_prefix_error(
-                "failed to remove journal root dir",
-                &root_err
-            );
+            error::log_prefix_error("failed to remove journal root dir", &root_err);
         }
 
         return Err(error::Error::context_source(
             "failed to commit transaction",
-            err
+            err,
         ));
     }
 
-    Ok(body::Json(NewJournalResult::Created(
-        JournalFull::from((journal, custom_fields, peers))
-    )).into_response())
+    Ok(body::Json(NewJournalResult::Created(JournalFull::from((
+        journal,
+        custom_fields,
+        peers,
+    ))))
+    .into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -477,15 +450,9 @@ pub struct UpdateJournal {
 #[serde(tag = "type")]
 pub enum UpdateJournalResult {
     NameExists,
-    CustomFieldNotFound {
-        ids: Vec<CustomFieldId>,
-    },
-    DuplicateCustomFields {
-        duplicates: Vec<String>,
-    },
-    PeersNotFound {
-        ids: Vec<UserPeerId>,
-    },
+    CustomFieldNotFound { ids: Vec<CustomFieldId> },
+    DuplicateCustomFields { duplicates: Vec<String> },
+    PeersNotFound { ids: Vec<UserPeerId> },
     Updated(JournalFull),
 }
 
@@ -496,7 +463,8 @@ async fn update_journal(
     body::Json(json): body::Json<UpdateJournal>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -506,10 +474,10 @@ async fn update_journal(
         &transaction,
         initiator.user.id,
         Scope::Journals,
-        Ability::Update
+        Ability::Update,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
@@ -533,76 +501,78 @@ async fn update_journal(
 
     if let Err(err) = journal.update(&transaction).await {
         match err {
-            JournalUpdateError::NameExists => return Ok((
-                StatusCode::BAD_REQUEST,
-                body::Json(UpdateJournalResult::NameExists)
-            ).into_response()),
-            JournalUpdateError::NotFound => return Err(
-                error::Error::context(
-                    "attempted to update journal that no longer exists"
+            JournalUpdateError::NameExists => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    body::Json(UpdateJournalResult::NameExists),
                 )
-            ),
-            JournalUpdateError::Db(err) => return Err(
-                error::Error::context_source(
+                    .into_response())
+            }
+            JournalUpdateError::NotFound => {
+                return Err(error::Error::context(
+                    "attempted to update journal that no longer exists",
+                ))
+            }
+            JournalUpdateError::Db(err) => {
+                return Err(error::Error::context_source(
                     "failed to update journal",
-                    err
-                )
-            )
+                    err,
+                ))
+            }
         }
     }
 
-    let UpdateResults {valid, not_found, duplicates} = update_custom_fields(
-        &transaction,
-        &journal,
-        json.custom_fields,
-    ).await?;
+    let UpdateResults {
+        valid,
+        not_found,
+        duplicates,
+    } = update_custom_fields(&transaction, &journal, json.custom_fields).await?;
 
     if !duplicates.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateJournalResult::DuplicateCustomFields {
-                duplicates
-            })
-        ).into_response());
+            body::Json(UpdateJournalResult::DuplicateCustomFields { duplicates }),
+        )
+            .into_response());
     }
 
     if !not_found.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateJournalResult::CustomFieldNotFound {
-                ids: not_found
-            })
-        ).into_response());
+            body::Json(UpdateJournalResult::CustomFieldNotFound { ids: not_found }),
+        )
+            .into_response());
     }
 
-    let peers = match upsert_journal_peers(
-        &transaction,
-        &initiator.user.id,
-        &journal.id,
-        json.peers
-    ).await? {
-        UpsertJournalPeers::Valid(valid) => valid,
-        UpsertJournalPeers::NotFound(ids) => return Ok((
-            StatusCode::BAD_REQUEST,
-            body::Json(UpdateJournalResult::PeersNotFound {
-                ids
-            })
-        ).into_response()),
-    };
+    let peers =
+        match upsert_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers)
+            .await?
+        {
+            UpsertJournalPeers::Valid(valid) => valid,
+            UpsertJournalPeers::NotFound(ids) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    body::Json(UpdateJournalResult::PeersNotFound { ids }),
+                )
+                    .into_response())
+            }
+        };
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 
-    Ok(body::Json(UpdateJournalResult::Updated(
-        JournalFull::from((journal, valid, peers))
-    )).into_response())
+    Ok(body::Json(UpdateJournalResult::Updated(JournalFull::from((
+        journal, valid, peers,
+    ))))
+    .into_response())
 }
 
 async fn create_custom_fields(
     conn: &impl db::GenericClient,
     journal: &Journal,
-    new_fields: Vec<NewCustomField>
+    new_fields: Vec<NewCustomField>,
 ) -> Result<(Vec<CustomFieldFull>, Vec<String>), error::Error> {
     if new_fields.is_empty() {
         return Ok((Vec::new(), Vec::new()));
@@ -773,7 +743,7 @@ async fn update_custom_fields(
                     description = $4, \
                     updated = $5 \
                 where id = $1",
-                params
+                params,
             ));
         }
 
@@ -804,15 +774,11 @@ async fn update_custom_fields(
     }));
 
     if !existing.is_empty() {
-        let ids: Vec<CustomFieldId> = existing.into_keys()
-            .collect();
+        let ids: Vec<CustomFieldId> = existing.into_keys().collect();
 
         tracing::debug!("deleting ids: {ids:#?}");
 
-        conn.execute(
-            "delete from custom_fields where id = any($1)",
-            &[&ids]
-        )
+        conn.execute("delete from custom_fields where id = any($1)", &[&ids])
             .await
             .context("failed to delete custom fields")?;
     }
@@ -826,7 +792,7 @@ async fn update_custom_fields(
 
 async fn insert_custom_fields(
     conn: &impl db::GenericClient,
-    records: Vec<CustomField>
+    records: Vec<CustomField>,
 ) -> Result<Vec<CustomFieldFull>, error::Error> {
     let mut rtn = Vec::with_capacity(records.len());
     let mut query = String::from(
@@ -855,7 +821,8 @@ async fn insert_custom_fields(
 
     query.push_str(" returning id");
 
-    let results = conn.query_raw(&query, params)
+    let results = conn
+        .query_raw(&query, params)
         .await
         .context("failed to insert new custom fields")?;
 
@@ -922,7 +889,7 @@ async fn upsert_journal_peers(
     let mut query = String::from(
         "\
         with tmp_insert as ( \
-            insert into journal_peers (journals_id, user_peers_id) values "
+            insert into journal_peers (journals_id, user_peers_id) values ",
     );
 
     for (index, id) in list.iter().enumerate() {
@@ -955,7 +922,8 @@ async fn upsert_journal_peers(
         return Ok(UpsertJournalPeers::NotFound(not_found));
     }
 
-    query.push_str(" \
+    query.push_str(
+        " \
             on conflict (journals_id, user_peers_id) \
                 do nothing \
             returning user_peers_id \
@@ -963,7 +931,8 @@ async fn upsert_journal_peers(
         delete from journal_peers \
         using tmp_insert \
         where journal_peers.journals_id = $1 and \
-              journal_peers.user_peers_id != tmp_insert.user_peers_id");
+              journal_peers.user_peers_id != tmp_insert.user_peers_id",
+    );
 
     tracing::debug!("upsert journal peers query: {query}");
 
@@ -980,10 +949,7 @@ pub struct SyncOptions {}
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum SyncResult {
-    Queued {
-        successful: u32,
-        failed: u32,
-    },
+    Queued { successful: u32, failed: u32 },
     Noop,
     JournalNotFound,
 
@@ -993,22 +959,10 @@ pub enum SyncResult {
 impl IntoResponse for SyncResult {
     fn into_response(self) -> Response {
         match &self {
-            Self::Noop => (
-                StatusCode::OK,
-                body::Json(self)
-            ).into_response(),
-            Self::Queued { .. } => (
-                StatusCode::ACCEPTED,
-                body::Json(self)
-            ).into_response(),
-            Self::JournalNotFound => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self),
-            ).into_response(),
-            Self::PermissionDenied => (
-                StatusCode::UNAUTHORIZED,
-                body::Json(self)
-            ).into_response()
+            Self::Noop => (StatusCode::OK, body::Json(self)).into_response(),
+            Self::Queued { .. } => (StatusCode::ACCEPTED, body::Json(self)).into_response(),
+            Self::JournalNotFound => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::PermissionDenied => (StatusCode::UNAUTHORIZED, body::Json(self)).into_response(),
         }
     }
 }
@@ -1020,7 +974,8 @@ async fn sync_with_remote(
     body::Json(_json): body::Json<SyncOptions>,
 ) -> Result<SyncResult, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -1028,10 +983,10 @@ async fn sync_with_remote(
         &transaction,
         initiator.user.id,
         Scope::Journals,
-        Ability::Update
+        Ability::Update,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(SyncResult::PermissionDenied);
@@ -1072,7 +1027,11 @@ async fn sync_with_remote(
 
         tracing::debug!("spinning job for peer: {peer:#?}");
 
-        tokio::spawn(jobs::sync::kickoff_send_journal(state.clone(), peer, journal.clone()));
+        tokio::spawn(jobs::sync::kickoff_send_journal(
+            state.clone(),
+            peer,
+            journal.clone(),
+        ));
 
         successful += 1;
     }
@@ -1080,9 +1039,6 @@ async fn sync_with_remote(
     if successful == 0 && failed == 0 {
         Ok(SyncResult::Noop)
     } else {
-        Ok(SyncResult::Queued {
-            successful,
-            failed,
-        })
+        Ok(SyncResult::Queued { successful, failed })
     }
 }

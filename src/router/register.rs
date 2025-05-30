@@ -1,4 +1,4 @@
-use axum::http::{StatusCode, HeaderMap};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
@@ -6,17 +6,14 @@ use crate::db;
 use crate::db::ids::InviteToken;
 use crate::error::{self, Context};
 use crate::router::{body, macros};
-use crate::sec::authn::Session;
-use crate::sec::authn::session::SessionOptions;
 use crate::sec;
+use crate::sec::authn::session::SessionOptions;
+use crate::sec::authn::Session;
 use crate::state;
-use crate::user::{User, UserBuilder, UserBuilderError};
 use crate::user::invite::{Invite, InviteError};
+use crate::user::{User, UserBuilder, UserBuilderError};
 
-pub async fn get(
-    state: state::SharedState,
-    headers: HeaderMap,
-) -> Result<Response, error::Error> {
+pub async fn get(state: state::SharedState, headers: HeaderMap) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
     Ok(body::Json("okay").into_response())
@@ -67,7 +64,7 @@ pub enum RegisterError {
 
     #[serde(skip)]
     #[error(transparent)]
-    Io(#[from] std::io::Error)
+    Io(#[from] std::io::Error),
 }
 
 impl IntoResponse for RegisterError {
@@ -76,10 +73,10 @@ impl IntoResponse for RegisterError {
 
         let status = match &self {
             Self::InviteNotFound => StatusCode::NOT_FOUND,
-            Self::UsernameExists |
-            Self::InvalidConfirm |
-            Self::InviteExpired |
-            Self::InviteUsed => StatusCode::BAD_REQUEST,
+            Self::UsernameExists
+            | Self::InvalidConfirm
+            | Self::InviteExpired
+            | Self::InviteUsed => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -89,7 +86,7 @@ impl IntoResponse for RegisterError {
 
 pub async fn post(
     state: state::SharedState,
-    body::Json(body): body::Json<RegisterBody>
+    body::Json(body): body::Json<RegisterBody>,
 ) -> Result<Response, RegisterError> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
@@ -105,25 +102,22 @@ pub async fn post(
         .context("failed to create session record")?;
     let session_cookie = session.build_cookie();
 
-    let user_dir = state.storage()
-        .user_dir(user.id);
+    let user_dir = state.storage().user_dir(user.id);
 
     user_dir.create().await?;
 
     // do this last since we are making changes to the file system
-    let private_key = tj2_lib::sec::pki::PrivateKey::generate()
-        .context("failed to generate private key")?;
+    let private_key =
+        tj2_lib::sec::pki::PrivateKey::generate().context("failed to generate private key")?;
 
-    private_key.save(user_dir.private_key(), false)
+    private_key
+        .save(user_dir.private_key(), false)
         .await
         .context("failed to save private key")?;
 
     transaction.commit().await?;
 
-    Ok((
-        session_cookie,
-        StatusCode::CREATED
-    ).into_response())
+    Ok((session_cookie, StatusCode::CREATED).into_response())
 }
 
 async fn register_user(
@@ -133,7 +127,7 @@ async fn register_user(
         username,
         password,
         confirm,
-    }: RegisterBody
+    }: RegisterBody,
 ) -> Result<User, RegisterError> {
     let mut invite = Invite::retrieve(conn, &token)
         .await?
@@ -155,20 +149,19 @@ async fn register_user(
         Ok(b) => b,
         Err(err) => match err {
             UserBuilderError::Argon(argon_err) => return Err(argon_err.into()),
-            _ => unreachable!()
-        }
+            _ => unreachable!(),
+        },
     };
     let user = match builder.build(conn).await {
         Ok(u) => u,
         Err(err) => match err {
-            UserBuilderError::UsernameExists =>
-                return Err(RegisterError::UsernameExists),
-            UserBuilderError::UidExists =>
-                return Err(error::Error::context("user uid collision").into()),
-            UserBuilderError::Db(db_err) =>
-                return Err(db_err.into()),
+            UserBuilderError::UsernameExists => return Err(RegisterError::UsernameExists),
+            UserBuilderError::UidExists => {
+                return Err(error::Error::context("user uid collision").into())
+            }
+            UserBuilderError::Db(db_err) => return Err(db_err.into()),
             _ => unreachable!(),
-        }
+        },
     };
 
     // we have pre-checked that the invite is pending and the user

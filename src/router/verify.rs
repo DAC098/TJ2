@@ -1,4 +1,4 @@
-use axum::http::{StatusCode, HeaderMap};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +11,7 @@ use crate::state;
 
 pub async fn get(
     state: state::SharedState,
-    headers: HeaderMap
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
@@ -20,7 +20,7 @@ pub async fn get(
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyBody {
-    code: String
+    code: String,
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -60,16 +60,10 @@ impl IntoResponse for VerifyError {
         error::log_prefix_error("response error", &self);
 
         match self {
-            Self::InvalidSession |
-            Self::InvalidCode |
-            Self::AlreadyVerified => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self)
-            ).into_response(),
-            Self::MFANotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self),
-            ).into_response(),
+            Self::InvalidSession | Self::InvalidCode | Self::AlreadyVerified => {
+                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
+            }
+            Self::MFANotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
@@ -78,7 +72,7 @@ impl IntoResponse for VerifyError {
 pub async fn post(
     state: state::SharedState,
     headers: HeaderMap,
-    body::Json(verify): body::Json<VerifyBody>
+    body::Json(verify): body::Json<VerifyBody>,
 ) -> Result<impl IntoResponse, VerifyError> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
@@ -89,7 +83,7 @@ pub async fn post(
             InitiatorError::Unverified(session) => session,
             InitiatorError::DbPg(err) => return Err(VerifyError::Db(err)),
             _ => return Err(VerifyError::InvalidSession),
-        }
+        },
     };
 
     let totp = otp::Totp::retrieve(&transaction, &session.users_id)

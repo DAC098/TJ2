@@ -6,23 +6,15 @@ use chrono::Utc;
 use futures::StreamExt;
 
 use crate::db;
-use crate::db::ids::{
-    JournalId,
-    EntryId,
-    CustomFieldUid,
-    FileEntryUid,
-};
+use crate::db::ids::{CustomFieldUid, EntryId, FileEntryUid, JournalId};
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
+use crate::journal::{self, FileEntry, FileStatus};
 use crate::router::body;
-use crate::journal::{self, FileStatus, FileEntry};
 use crate::sec::authn::ApiInitiator;
 use crate::state;
 use crate::sync;
-use crate::sync::journal::{
-    SyncEntryResult,
-    EntryFileSync,
-};
+use crate::sync::journal::{EntryFileSync, SyncEntryResult};
 
 pub async fn post(
     state: state::SharedState,
@@ -30,7 +22,8 @@ pub async fn post(
     body::Json(json): body::Json<sync::journal::EntrySync>,
 ) -> Result<SyncEntryResult, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -39,7 +32,8 @@ pub async fn post(
     let journal = {
         let Some(result) = journal::Journal::retrieve(&transaction, &json.journals_uid)
             .await
-            .context("failed to retrieve journal")? else {
+            .context("failed to retrieve journal")?
+        else {
             tracing::debug!("failed to retrieve journal: {}", json.journals_uid);
 
             return Ok(SyncEntryResult::JournalNotFound);
@@ -72,48 +66,39 @@ pub async fn post(
     upsert_tags(&transaction, &entries_id, &json.tags).await?;
 
     {
-        let UpsertCFS {
-            not_found,
-            invalid
-        } = upsert_cfs(&transaction, &journal.id, &entries_id, &json.custom_fields).await?;
+        let UpsertCFS { not_found, invalid } =
+            upsert_cfs(&transaction, &journal.id, &entries_id, &json.custom_fields).await?;
 
         if !not_found.is_empty() {
-            return Ok(SyncEntryResult::CFNotFound {
-                uids: not_found
-            });
+            return Ok(SyncEntryResult::CFNotFound { uids: not_found });
         }
 
         if !invalid.is_empty() {
-            return Ok(SyncEntryResult::CFInvalid {
-                uids: invalid
-            });
+            return Ok(SyncEntryResult::CFInvalid { uids: invalid });
         }
     }
 
     let mut removed_files = RemovedFiles::new();
 
     {
-        let journal_dir = state.storage()
-            .journal_dir(journal.id);
+        let journal_dir = state.storage().journal_dir(journal.id);
 
-        let UpsertFiles {
-            not_found
-        } = upsert_files(
+        let UpsertFiles { not_found } = upsert_files(
             &transaction,
             &entries_id,
             journal_dir,
             json.files,
-            &mut removed_files
-        ).await?;
+            &mut removed_files,
+        )
+        .await?;
 
         if !not_found.is_empty() {
-            return Ok(SyncEntryResult::FileNotFound {
-                uids: not_found,
-            });
+            return Ok(SyncEntryResult::FileNotFound { uids: not_found });
         }
     }
 
-    let result = transaction.commit()
+    let result = transaction
+        .commit()
         .await
         .context("failed to commit entry sync transaction");
 
@@ -131,14 +116,14 @@ pub async fn post(
 async fn upsert_tags(
     conn: &impl db::GenericClient,
     entries_id: &EntryId,
-    tags: &Vec<sync::journal::EntryTagSync>
+    tags: &Vec<sync::journal::EntryTagSync>,
 ) -> Result<(), error::Error> {
     if !tags.is_empty() {
         let mut params: db::ParamsVec<'_> = vec![entries_id];
         let mut query = String::from(
             "with tmp_insert as ( \
                 insert into entry_tags (entries_id, key, value, created, updated) \
-                values "
+                values ",
         );
 
         for (index, tag) in tags.iter().enumerate() {
@@ -157,7 +142,8 @@ async fn upsert_tags(
             query.push_str(&statement);
         }
 
-        query.push_str(" on conflict (entries_id, key) do update \
+        query.push_str(
+            " on conflict (entries_id, key) do update \
                 set key = excluded.key, \
                     value = excluded.value, \
                     updated = excluded.updated \
@@ -166,7 +152,7 @@ async fn upsert_tags(
             delete from entry_tags \
             using tmp_insert \
             where entry_tags.entries_id = tmp_insert.entries_id and \
-                  entry_tags.key != tmp_insert.key"
+                  entry_tags.key != tmp_insert.key",
         );
 
         conn.execute(&query, params.as_slice())
@@ -177,10 +163,10 @@ async fn upsert_tags(
             "\
             delete from entry_tags \
             where entries_id = $1",
-            &[entries_id]
+            &[entries_id],
         )
-            .await
-            .context("failed to delete tags")?;
+        .await
+        .context("failed to delete tags")?;
     }
 
     Ok(())
@@ -246,7 +232,8 @@ async fn upsert_cfs(
         }
 
         if counted > 0 {
-            query.push_str(" on conflict (custom_fields_id, entries_id) do update \
+            query.push_str(
+                " on conflict (custom_fields_id, entries_id) do update \
                     set value = excluded.value, \
                         updated = excluded.updated \
                     returning custom_fields_id, \
@@ -255,7 +242,7 @@ async fn upsert_cfs(
                 delete from custom_field_entries \
                 using tmp_insert \
                 where custom_field_entries.entries_id = tmp_insert.entries_id and \
-                      custom_field_entries.custom_fields_id != tmp_insert.custom_fields_id"
+                      custom_field_entries.custom_fields_id != tmp_insert.custom_fields_id",
             );
 
             //tracing::debug!("query: {query}");
@@ -269,10 +256,10 @@ async fn upsert_cfs(
             "\
             delete from custom_field_entries \
             where entries_id = $1",
-            &[entries_id]
+            &[entries_id],
         )
-            .await
-            .context("failed to delete custom fields")?;
+        .await
+        .context("failed to delete custom fields")?;
     }
 
     Ok(results)
@@ -280,7 +267,7 @@ async fn upsert_cfs(
 
 #[derive(Debug, Default)]
 struct UpsertFiles {
-    not_found: Vec<FileEntryUid>
+    not_found: Vec<FileEntryUid>,
 }
 
 async fn upsert_files(
@@ -314,7 +301,7 @@ async fn upsert_files(
                 mime_subtype, \
                 hash \
             ) \
-            values "
+            values ",
         );
 
         let mut update_id = HashSet::new();
@@ -324,7 +311,7 @@ async fn upsert_files(
             update file_entries \
             set name = tmp_update.name, \
                 updated = $1 \
-            from (values "
+            from (values ",
         );
 
         for (index, file) in files.iter().enumerate() {
@@ -334,7 +321,7 @@ async fn upsert_files(
                     continue;
                 }
 
-                // we know that the file exists for this entry so we will not 
+                // we know that the file exists for this entry so we will not
                 // need to check the entry id
                 if update_id.len() > 1 {
                     upd_query.push_str(", ");
@@ -345,7 +332,8 @@ async fn upsert_files(
                     "(${}, ${})",
                     db::push_param(&mut upd_params, exists.id_ref()),
                     db::push_param(&mut upd_params, &file.name),
-                ).unwrap();
+                )
+                .unwrap();
             } else {
                 // do a lookup to make sure that the uid exists for a different
                 // entry
@@ -374,11 +362,13 @@ async fn upsert_files(
                     "($1, $2, $3, ${}, ${}, '', '', '')",
                     db::push_param(&mut ins_params, &file.uid),
                     db::push_param(&mut ins_params, &file.name),
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
 
-        let to_drop: Vec<FileEntryUid> = known.keys()
+        let to_drop: Vec<FileEntryUid> = known
+            .keys()
             .filter(|v| !update_id.contains(v))
             .map(|v| v.clone())
             .collect();
@@ -389,10 +379,7 @@ async fn upsert_files(
             // a similar name
             tracing::debug!("deleting file entries: {}", to_drop.len());
 
-            conn.execute(
-                "delete from file_entries where uid = any($1)",
-                &[&to_drop]
-            )
+            conn.execute("delete from file_entries where uid = any($1)", &[&to_drop])
                 .await
                 .context("failed to delete from file entries")?;
         }
@@ -427,7 +414,8 @@ async fn upsert_files(
 
             match file {
                 FileEntry::Received(rec) => {
-                    removed_files.add(journal_dir.file_path(&rec.id))
+                    removed_files
+                        .add(journal_dir.file_path(&rec.id))
                         .await
                         .context("failed to remove received journal file")?;
 
@@ -439,10 +427,10 @@ async fn upsert_files(
 
         conn.execute(
             "delete from file_entries where entries_id = $1",
-            &[entries_id]
+            &[entries_id],
         )
-            .await
-            .context("failed to delete file entries")?;
+        .await
+        .context("failed to delete file entries")?;
     }
 
     Ok(rtn)

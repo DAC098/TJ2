@@ -1,9 +1,9 @@
-use std::io::{ErrorKind, Error as IoError};
+use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::task::{Poll, Context as TaskContext};
+use std::task::{Context as TaskContext, Poll};
 
-use futures::stream::{StreamExt, FuturesOrdered};
+use futures::stream::{FuturesOrdered, StreamExt};
 use pin_project::pin_project;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWrite;
@@ -31,7 +31,7 @@ pub enum FileUpdaterError {
     PrevNotFile,
 
     #[error(transparent)]
-    Io(#[from] std::io::Error)
+    Io(#[from] std::io::Error),
 }
 
 /// helps to provide a transactional file to update without modifying the
@@ -70,33 +70,32 @@ pub struct FileUpdater {
 impl FileUpdater {
     pub async fn new(path: PathBuf) -> Result<Self, FileUpdaterError> {
         // replace with path_add_extension when available
-        let prev = add_extension(&path, "prev")
-            .ok_or(FileUpdaterError::NoFileName)?;
-        let temp = add_extension(&path, "temp")
-            .unwrap();
+        let prev = add_extension(&path, "prev").ok_or(FileUpdaterError::NoFileName)?;
+        let temp = add_extension(&path, "temp").unwrap();
         // end replace
 
-        let (curr_check, prev_check) = tokio::join!(
-            tokio_metadata(&path),
-            tokio_metadata(&prev)
-        );
+        let (curr_check, prev_check) = tokio::join!(tokio_metadata(&path), tokio_metadata(&prev));
 
         match curr_check {
-            Ok(Some(meta)) => if !meta.is_file() {
-                return Err(FileUpdaterError::CurrNotFile);
+            Ok(Some(meta)) => {
+                if !meta.is_file() {
+                    return Err(FileUpdaterError::CurrNotFile);
+                }
             }
             Ok(None) => return Err(FileUpdaterError::CurrNotFound),
             Err(err) => return Err(FileUpdaterError::Io(err)),
         }
 
         match prev_check {
-            Ok(Some(meta)) => if !meta.is_file() {
-                return Err(FileUpdaterError::PrevNotFile);
-            } else {
-                return Err(FileUpdaterError::PrevExists);
+            Ok(Some(meta)) => {
+                if !meta.is_file() {
+                    return Err(FileUpdaterError::PrevNotFile);
+                } else {
+                    return Err(FileUpdaterError::PrevExists);
+                }
             }
             Ok(None) => {}
-            Err(err) => return Err(FileUpdaterError::Io(err))
+            Err(err) => return Err(FileUpdaterError::Io(err)),
         }
 
         let result = OpenOptions::new()
@@ -109,15 +108,15 @@ impl FileUpdater {
             Ok(f) => f,
             Err(err) => match err.kind() {
                 ErrorKind::AlreadyExists => return Err(FileUpdaterError::TempExists),
-                _ => return Err(FileUpdaterError::Io(err))
-            }
+                _ => return Err(FileUpdaterError::Io(err)),
+            },
         };
 
         Ok(Self {
             file,
             curr: path,
             temp,
-            prev
+            prev,
         })
     }
 
@@ -128,7 +127,7 @@ impl FileUpdater {
             // to recover from. just return the error
             return Err(UpdateError::PrevMove {
                 temp: self.temp,
-                err
+                err,
             });
         }
 
@@ -147,7 +146,7 @@ impl FileUpdater {
             } else {
                 Err(UpdateError::TempMove {
                     temp: self.temp,
-                    err
+                    err,
                 })
             }
         } else {
@@ -173,10 +172,7 @@ impl FileUpdater {
 
     pub async fn log_clean(self) {
         if let Err((updater, err)) = self.clean().await {
-            let prefix = format!(
-                "failed to clean temp file: \"{}\"",
-                updater.temp.display()
-            );
+            let prefix = format!("failed to clean temp file: \"{}\"", updater.temp.display());
 
             error::log_prefix_error(&prefix, &err);
         }
@@ -194,19 +190,13 @@ impl AsyncWrite for FileUpdater {
         pinned.file.poll_write(cx, buf)
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut TaskContext<'_>,
-    ) -> Poll<Result<(), IoError>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Result<(), IoError>> {
         let pinned = self.project();
 
         pinned.file.poll_flush(cx)
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut TaskContext<'_>,
-    ) -> Poll<Result<(), IoError>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Result<(), IoError>> {
         let pinned = self.project();
 
         pinned.file.poll_shutdown(cx)
@@ -218,17 +208,11 @@ impl AsyncWrite for FileUpdater {
 pub enum UpdateError {
     /// failed to move the current file to previous
     #[error("failed to move the current file to previous")]
-    PrevMove {
-        temp: PathBuf,
-        err: std::io::Error
-    },
+    PrevMove { temp: PathBuf, err: std::io::Error },
 
     /// failed to move the temp file to current
     #[error("failed to move the temp file to current")]
-    TempMove {
-        temp: PathBuf,
-        err: std::io::Error,
-    },
+    TempMove { temp: PathBuf, err: std::io::Error },
 
     /// failed recovery after temp move error
     #[error("failed recovery after temp move error")]
@@ -237,7 +221,7 @@ pub enum UpdateError {
         temp: PathBuf,
         err: std::io::Error,
         rcvr: std::io::Error,
-    }
+    },
 }
 
 /// the resulting files after a file has been updated
@@ -314,7 +298,7 @@ pub enum RemovedFileError {
     MarkExists,
 
     #[error(transparent)]
-    Io(#[from] std::io::Error)
+    Io(#[from] std::io::Error),
 }
 
 /// represents a file that has been marked for deletion.
@@ -330,13 +314,9 @@ pub struct RemovedFile {
 impl RemovedFile {
     /// marks the specified file for deletion
     pub async fn mark(curr: PathBuf) -> Result<Self, RemovedFileError> {
-        let mark = add_extension(&curr, "mark")
-            .ok_or(RemovedFileError::NoFileName)?;
+        let mark = add_extension(&curr, "mark").ok_or(RemovedFileError::NoFileName)?;
 
-        let (curr_meta, mark_meta) = tokio::join!(
-            tokio_metadata(&curr),
-            tokio_metadata(&mark),
-        );
+        let (curr_meta, mark_meta) = tokio::join!(tokio_metadata(&curr), tokio_metadata(&mark),);
 
         if curr_meta?.is_none() {
             return Err(RemovedFileError::CurrNotFound);
@@ -348,10 +328,7 @@ impl RemovedFile {
 
         tokio::fs::rename(&curr, &mark).await?;
 
-        Ok(Self {
-            curr,
-            mark
-        })
+        Ok(Self { curr, mark })
     }
 
     /// attempts to remove the marked file
@@ -376,14 +353,14 @@ impl RemovedFile {
 /// contains a list of files marked for deletion
 #[derive(Debug)]
 pub struct RemovedFiles {
-    processed: Vec<RemovedFile>
+    processed: Vec<RemovedFile>,
 }
 
 impl RemovedFiles {
     /// creates an empty RemovedFiles struct
     pub fn new() -> Self {
         Self {
-            processed: Vec::new()
+            processed: Vec::new(),
         }
     }
 
@@ -450,10 +427,7 @@ impl RemovedFiles {
         let failed = self.clean().await;
 
         for (marked, err) in failed {
-            let prefix = format!(
-                "failed to clean file: \"{}\"",
-                marked.mark.display()
-            );
+            let prefix = format!("failed to clean file: \"{}\"", marked.mark.display());
 
             error::log_prefix_error(prefix.as_str(), &err);
         }
@@ -464,10 +438,7 @@ impl RemovedFiles {
         let failed = self.rollback().await;
 
         for (marked, err) in failed {
-            let prefix = format!(
-                "failed to rollback file: \"{}\"",
-                marked.mark.display()
-            );
+            let prefix = format!("failed to rollback file: \"{}\"", marked.mark.display());
 
             error::log_prefix_error(prefix.as_str(), &err);
         }
@@ -482,7 +453,7 @@ pub enum FileCreaterError {
     AlreadyExists,
 
     #[error(transparent)]
-    Io(#[from] std::io::Error)
+    Io(#[from] std::io::Error),
 }
 
 #[pin_project]
@@ -504,14 +475,11 @@ impl FileCreater {
             .await;
 
         match result {
-            Ok(file) => Ok(Self {
-                file,
-                curr: path
-            }),
+            Ok(file) => Ok(Self { file, curr: path }),
             Err(err) => Err(match err.kind() {
                 ErrorKind::AlreadyExists => FileCreaterError::AlreadyExists,
-                _ => FileCreaterError::Io(err)
-            })
+                _ => FileCreaterError::Io(err),
+            }),
         }
     }
 
@@ -552,19 +520,13 @@ impl AsyncWrite for FileCreater {
         pinned.file.poll_write(cx, buf)
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut TaskContext<'_>,
-    ) -> Poll<Result<(), IoError>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Result<(), IoError>> {
         let pinned = self.project();
 
         pinned.file.poll_flush(cx)
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut TaskContext<'_>,
-    ) -> Poll<Result<(), IoError>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Result<(), IoError>> {
         let pinned = self.project();
 
         pinned.file.poll_shutdown(cx)

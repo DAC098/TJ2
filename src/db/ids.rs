@@ -2,14 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::str::FromStr;
 
-use postgres_types::{ToSql, FromSql};
-use serde::{Serialize, Deserialize};
+use postgres_types::{FromSql, ToSql};
+use serde::{Deserialize, Serialize};
 
 pub const UID_SIZE: usize = 16;
 pub const UID_ALPHABET: [char; 62] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',
+    'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b',
+    'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u',
+    'v', 'w', 'x', 'y', 'z',
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -24,10 +25,17 @@ macro_rules! id_type {
     ($name:ident) => {
         #[derive(
             Debug,
-            Clone, Copy,
-            PartialEq, Eq, PartialOrd, Ord, Hash,
-            ToSql, FromSql,
-            Serialize, Deserialize,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            ToSql,
+            FromSql,
+            Serialize,
+            Deserialize,
         )]
         #[postgres(transparent)]
         #[serde(try_from = "i64", into = "i64")]
@@ -96,7 +104,7 @@ macro_rules! id_type {
                 }
             }
         }
-    }
+    };
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -108,9 +116,15 @@ macro_rules! uid_type {
         #[derive(
             Debug,
             Clone,
-            PartialEq, Eq, PartialOrd, Ord, Hash,
-            ToSql, FromSql,
-            Serialize, Deserialize,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            ToSql,
+            FromSql,
+            Serialize,
+            Deserialize,
         )]
         #[postgres(transparent)]
         #[serde(try_from = "String", into = "String")]
@@ -136,7 +150,11 @@ macro_rules! uid_type {
             }
 
             pub fn gen() -> Self {
-                Self(nanoid::format(nanoid::rngs::default, &UID_ALPHABET, $uid_size))
+                Self(nanoid::format(
+                    nanoid::rngs::default,
+                    &UID_ALPHABET,
+                    $uid_size,
+                ))
             }
 
             pub fn new(given: String) -> Result<Self, InvalidUidString> {
@@ -187,7 +205,7 @@ macro_rules! uid_type {
                 }
             }
         }
-    }
+    };
 }
 
 macro_rules! set_type {
@@ -273,7 +291,7 @@ macro_rules! set_type {
         impl std::hash::Hash for $name {
             fn hash<H>(&self, state: &mut H)
             where
-                H: std::hash::Hasher
+                H: std::hash::Hasher,
             {
                 self.id.hash(state);
             }
@@ -284,7 +302,7 @@ macro_rules! set_type {
                 write!(f, "id: {} uid: {}", self.id, self.uid)
             }
         }
-    }
+    };
 }
 
 id_type!(UserId);
@@ -330,7 +348,7 @@ pub fn unique_ids<K, V>(
     current: Option<&mut HashMap<K, V>>,
 ) -> (HashSet<K>, Vec<K>, HashMap<K, V>)
 where
-    K: std::cmp::Eq + std::hash::Hash + std::marker::Copy
+    K: std::cmp::Eq + std::hash::Hash + std::marker::Copy,
 {
     let mut set = HashSet::with_capacity(ids.len());
     let mut list = Vec::with_capacity(ids.len());

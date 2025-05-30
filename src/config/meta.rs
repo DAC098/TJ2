@@ -1,7 +1,7 @@
 //! traits and helpers when loading configuration files
 
-use std::path::{Path, PathBuf};
 use std::fmt::{Display, Formatter};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::error::{self, Context};
@@ -25,8 +25,8 @@ pub fn get_cwd() -> Result<&'static Path, error::Error> {
         return Ok(cwd);
     }
 
-    let result = std::env::current_dir()
-        .context("failed to retrieve the current working directory")?;
+    let result =
+        std::env::current_dir().context("failed to retrieve the current working directory")?;
 
     if CWD.set(result.into_boxed_path()).is_err() {
         Err(error::Error::context("failed to set cwd global"))
@@ -52,13 +52,11 @@ impl<'a> SrcFile<'a> {
     /// this will fail
     pub fn new(src: &'a Path) -> Result<Self, error::Error> {
         let parent = src.parent().context(format!(
-            "failed to retrieve parent path from source file \"{}\"", src.display()
+            "failed to retrieve parent path from source file \"{}\"",
+            src.display()
         ))?;
 
-        Ok(SrcFile {
-            parent,
-            src
-        })
+        Ok(SrcFile { parent, src })
     }
 
     /// normalizes a given path using the parent directory of the src file
@@ -124,19 +122,24 @@ impl<'a> Display for DotPath<'a> {
 /// checks to see if a given path exists as a file or a directory
 ///
 /// the path exists if this returns without an error
-pub fn check_path<P>(given: P, src: &SrcFile<'_>, dot: DotPath<'_>, is_file: bool) -> Result<(), error::Error>
+pub fn check_path<P>(
+    given: P,
+    src: &SrcFile<'_>,
+    dot: DotPath<'_>,
+    is_file: bool,
+) -> Result<(), error::Error>
 where
-    P: AsRef<Path>
+    P: AsRef<Path>,
 {
     let given_ref = given.as_ref();
     let path_display = given_ref.display();
     let path_quote = Quote(&path_display);
 
-    let meta = metadata(given_ref).context(format!(
-        "{dot} failed to retrieve metadata for {path_quote} in {src}"
-    ))?.context(format!(
-        "{dot} {path_quote} was not found {src}"
-    ))?;
+    let meta = metadata(given_ref)
+        .context(format!(
+            "{dot} failed to retrieve metadata for {path_quote} in {src}"
+        ))?
+        .context(format!("{dot} {path_quote} was not found {src}"))?;
 
     if is_file {
         if !meta.is_file() {
@@ -154,7 +157,11 @@ where
 }
 
 /// sanitizes a given string as a url and returns the resulting string
-pub fn sanitize_url_key(given: &str, src: &SrcFile<'_>, dot: DotPath<'_>) -> Result<String, error::Error> {
+pub fn sanitize_url_key(
+    given: &str,
+    src: &SrcFile<'_>,
+    dot: DotPath<'_>,
+) -> Result<String, error::Error> {
     let trimmed = given.trim();
     let rtn: String;
 

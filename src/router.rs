@@ -1,37 +1,37 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use axum::Router;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::ConnectInfo;
-use axum::http::{Uri, Request, HeaderMap, StatusCode};
-use axum::response::{Response, IntoResponse};
+use axum::http::{HeaderMap, Request, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use tower::ServiceBuilder;
-use tower_http::trace::TraceLayer;
-use tower_http::classify::ServerErrorsFailureClass;
-use tracing::Span;
+use axum::Router;
 use serde::Serialize;
+use tower::ServiceBuilder;
+use tower_http::classify::ServerErrorsFailureClass;
+use tower_http::trace::TraceLayer;
+use tracing::Span;
 
-use crate::state;
 use crate::error::{self, Context};
+use crate::state;
 
-mod layer;
 mod assets;
+mod layer;
 
-pub mod macros;
 pub mod body;
+pub mod macros;
 
-mod journals;
 mod admin;
+mod api;
+mod journals;
 mod login;
-mod verify;
 mod logout;
+mod peers;
 mod register;
 mod settings;
-mod peers;
-mod api;
+mod verify;
 
 pub async fn ping() -> (StatusCode, &'static str) {
     (StatusCode::OK, "pong")
@@ -39,7 +39,7 @@ pub async fn ping() -> (StatusCode, &'static str) {
 
 #[derive(Debug, Serialize)]
 pub struct RootJson {
-    message: String
+    message: String,
 }
 
 async fn retrieve_root(
@@ -47,7 +47,8 @@ async fn retrieve_root(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
-    let conn = state.db()
+    let conn = state
+        .db()
         .get()
         .await
         .context("failed to retrieve database connection")?;
@@ -56,13 +57,14 @@ async fn retrieve_root(
     macros::res_if_html!(state.templates(), &headers);
 
     Ok(body::Json(RootJson {
-        message: String::from("okay")
-    }).into_response())
+        message: String::from("okay"),
+    })
+    .into_response())
 }
 
 async fn handle_error<E>(error: E) -> error::Error
 where
-    E: Into<error::Error>
+    E: Into<error::Error>,
 {
     let wrapper = error.into();
 
@@ -75,35 +77,36 @@ pub fn build(state: &state::SharedState) -> Router {
     Router::new()
         .route("/", get(retrieve_root))
         .route("/ping", get(ping))
-        .route("/login", get(login::get)
-            .post(login::post))
-        .route("/verify", get(verify::get)
-            .post(verify::post))
+        .route("/login", get(login::get).post(login::post))
+        .route("/verify", get(verify::get).post(verify::post))
         .route("/logout", post(logout::post))
-        .route("/register", get(register::get)
-            .post(register::post))
+        .route("/register", get(register::get).post(register::post))
         .route("/peers", get(peers::get))
         .nest("/journals", journals::build(state))
         .nest("/settings", settings::build(state))
         .nest("/admin", admin::build(state))
         .nest("/api", api::build(state))
         .fallback(assets::handle)
-        .layer(ServiceBuilder::new()
-            .layer(layer::RIDLayer::new())
-            .layer(TraceLayer::new_for_http()
-                .make_span_with(make_span_with)
-                .on_request(on_request)
-                .on_response(on_response)
-                .on_failure(on_failure))
-            .layer(HandleErrorLayer::new(handle_error))
-            .layer(layer::TimeoutLayer::new(Duration::new(90, 0))))
+        .layer(
+            ServiceBuilder::new()
+                .layer(layer::RIDLayer::new())
+                .layer(
+                    TraceLayer::new_for_http()
+                        .make_span_with(make_span_with)
+                        .on_request(on_request)
+                        .on_response(on_response)
+                        .on_failure(on_failure),
+                )
+                .layer(HandleErrorLayer::new(handle_error))
+                .layer(layer::TimeoutLayer::new(Duration::new(90, 0))),
+        )
         .with_state(state.clone())
 }
 
 fn make_span_with(request: &Request<Body>) -> Span {
-    let req_id = layer::RequestId::from_request(request)
-        .expect("missing request id");
-    let socket = request.extensions()
+    let req_id = layer::RequestId::from_request(request).expect("missing request id");
+    let socket = request
+        .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .expect("missing connect info");
 

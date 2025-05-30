@@ -1,11 +1,11 @@
 use axum::http::StatusCode;
-use axum::response::{Response, IntoResponse};
-use serde::{Serialize, Deserialize};
+use axum::response::{IntoResponse, Response};
+use serde::{Deserialize, Serialize};
 use tj2_lib::sec::pki::PublicKey;
 
 use crate::router::body;
 use crate::sec::authn::session::ApiSessionToken;
-use crate::sec::pki::{Data, Challenge};
+use crate::sec::pki::{Challenge, Data};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GetAuthn {
@@ -14,7 +14,7 @@ pub struct GetAuthn {
 
     /// encrypted data sent by client to be decrypted by peer and sent back,
     /// includes nonce at the start of the bytes
-    pub challenge: Challenge
+    pub challenge: Challenge,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -5,9 +5,9 @@ use futures::{Stream, StreamExt};
 use serde::Serialize;
 
 use crate::db;
-use crate::db::ids::{UserId, GroupId, GroupUid, RoleId};
-use crate::sec::authz::Role;
+use crate::db::ids::{GroupId, GroupUid, RoleId, UserId};
 use crate::error::{self, Context};
+use crate::sec::authz::Role;
 
 use super::User;
 
@@ -21,7 +21,10 @@ pub struct Group {
 }
 
 impl Group {
-    pub async fn retrieve_id(conn: &impl db::GenericClient, groups_id: GroupId) -> Result<Option<Self>, db::PgError> {
+    pub async fn retrieve_id(
+        conn: &impl db::GenericClient,
+        groups_id: GroupId,
+    ) -> Result<Option<Self>, db::PgError> {
         conn.query_opt(
             "\
             select id, \
@@ -31,30 +34,37 @@ impl Group {
                    updated \
             from groups \
             where id = $1",
-            &[&groups_id]
+            &[&groups_id],
         )
-            .await
-            .map(|maybe| maybe.map(|row| Self {
+        .await
+        .map(|maybe| {
+            maybe.map(|row| Self {
                 id: row.get(0),
                 uid: row.get(1),
                 name: row.get(2),
                 created: row.get(3),
                 updated: row.get(4),
-            }))
+            })
+        })
     }
 
-    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Option<Self>, db::PgError> {
+    pub async fn create(
+        conn: &impl db::GenericClient,
+        name: &str,
+    ) -> Result<Option<Self>, db::PgError> {
         let uid = GroupUid::gen();
         let created = Utc::now();
 
-        let result = conn.query_opt(
-            "\
+        let result = conn
+            .query_opt(
+                "\
             insert into groups (uid, name, created) values \
             ($1, $2, $3) \
             on conflict on constraint groups_name_key do nothing \
             returning id",
-            &[&uid, &name, &created]
-        ).await?;
+                &[&uid, &name, &created],
+            )
+            .await?;
 
         match result {
             Some(row) => Ok(Some(Self {
@@ -62,7 +72,7 @@ impl Group {
                 uid,
                 name: name.to_owned(),
                 created,
-                updated: None
+                updated: None,
             })),
             None => Ok(None),
         }
@@ -71,28 +81,34 @@ impl Group {
     pub async fn update(&mut self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
         self.updated = Some(Utc::now());
 
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             update groups \
             set name = $2, \
                 updated = $3
             where id = $1",
-            &[&self.id, &self.name, &self.updated]
-        ).await;
+                &[&self.id, &self.name, &self.updated],
+            )
+            .await;
 
         match result {
             Ok(count) => Ok(count == 1),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => if constraint == "groups_name_key" {
-                        Ok(false)
-                    } else {
-                        Err(err)
-                    },
-                    _ => Err(err)
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => {
+                            if constraint == "groups_name_key" {
+                                Ok(false)
+                            } else {
+                                Err(err)
+                            }
+                        }
+                        _ => Err(err),
+                    }
+                } else {
+                    Err(err)
                 }
-            } else {
-                Err(err)
             }
         }
     }
@@ -120,16 +136,16 @@ impl<'a> From<&'a Role> for GroupRefId<'a> {
 pub struct AttachedGroup {
     pub groups_id: GroupId,
     pub name: String,
-    pub added: DateTime<Utc>
+    pub added: DateTime<Utc>,
 }
 
 impl AttachedGroup {
     pub async fn retrieve_stream<'a, I>(
         conn: &impl db::GenericClient,
-        id: I
+        id: I,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError>
     where
-        I: Into<GroupRefId<'a>>
+        I: Into<GroupRefId<'a>>,
     {
         let stream = match id.into() {
             GroupRefId::User(users_id) => {
@@ -144,8 +160,9 @@ impl AttachedGroup {
                         left join groups on \
                             group_users.groups_id = groups.id \
                     where group_users.users_id = $1",
-                    params
-                ).await?
+                    params,
+                )
+                .await?
             }
             GroupRefId::Role(role_id) => {
                 let params: db::ParamsArray<'_, 1> = [role_id];
@@ -159,24 +176,27 @@ impl AttachedGroup {
                         left join groups on \
                             group_roles.groups_id = groups.id \
                     where group_roles.role_id = $1",
-                    params
-                ).await?
+                    params,
+                )
+                .await?
             }
         };
 
-        Ok(stream.map(|result| result.map(|row| Self {
-            groups_id: row.get(0),
-            name: row.get(1),
-            added: row.get(2),
-        })))
+        Ok(stream.map(|result| {
+            result.map(|row| Self {
+                groups_id: row.get(0),
+                name: row.get(1),
+                added: row.get(2),
+            })
+        }))
     }
 
     pub async fn retrieve<'a, I>(
         conn: &impl db::GenericClient,
-        id: I
+        id: I,
     ) -> Result<Vec<Self>, error::Error>
     where
-        I: Into<GroupRefId<'a>>
+        I: Into<GroupRefId<'a>>,
     {
         let stream = Self::retrieve_stream(conn, id)
             .await
@@ -202,7 +222,7 @@ pub async fn create_attached_groups<'a, I>(
     groups: Vec<GroupId>,
 ) -> Result<(Vec<AttachedGroup>, Vec<GroupId>), error::Error>
 where
-    I: Into<GroupRefId<'a>>
+    I: Into<GroupRefId<'a>>,
 {
     if groups.is_empty() {
         return Ok((Vec::new(), Vec::new()));
@@ -232,10 +252,10 @@ where
                 from tmp_insert \
                     left join groups on \
                         tmp_insert.groups_id = groups.id",
-                params
+                params,
             )
-                .await
-                .context("failed to add groups to user")?
+            .await
+            .context("failed to add groups to user")?
         }
         GroupRefId::Role(role_id) => {
             let params: db::ParamsArray<'_, 3> = [role_id, &added, &groups];
@@ -257,10 +277,10 @@ where
                 from tmp_insert \
                     left join groups on \
                         tmp_insert.groups_id = groups.id",
-                params
+                params,
             )
-                .await
-                .context("failed to add groups to role")?
+            .await
+            .context("failed to add groups to role")?
         }
     };
 
@@ -289,18 +309,15 @@ where
 pub async fn update_attached_groups<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
-    groups: Option<Vec<GroupId>>
+    groups: Option<Vec<GroupId>>,
 ) -> Result<(Vec<AttachedGroup>, Vec<GroupId>), error::Error>
 where
-    I: Into<GroupRefId<'a>>
+    I: Into<GroupRefId<'a>>,
 {
     let id = id.into();
 
     let Some(groups) = groups else {
-        return Ok((
-            AttachedGroup::retrieve(conn, id).await?,
-            Vec::new()
-        ));
+        return Ok((AttachedGroup::retrieve(conn, id).await?, Vec::new()));
     };
 
     let added = Utc::now();
@@ -344,10 +361,10 @@ where
                     from tmp_insert \
                         left join groups on \
                             tmp_insert.groups_id = groups.id",
-                    params
+                    params,
                 )
-                    .await
-                    .context("failed to add groups to user")?
+                .await
+                .context("failed to add groups to user")?
             }
             GroupRefId::Role(role_id) => {
                 let params: db::ParamsArray<'_, 3> = [role_id, &added, &groups];
@@ -370,10 +387,10 @@ where
                     from tmp_insert \
                         left join groups on \
                             tmp_insert.groups_id = groups.id",
-                    params
+                    params,
                 )
-                    .await
-                    .context("failed to add groups to role")?
+                .await
+                .context("failed to add groups to role")?
             }
         };
 
@@ -402,18 +419,18 @@ where
             GroupRefId::User(users_id) => {
                 conn.execute(
                     "delete from group_users where users_id = $1 and groups_id = any($2)",
-                    &[users_id, &to_delete]
+                    &[users_id, &to_delete],
                 )
-                    .await
-                    .context("failed to delete from groups users")?;
+                .await
+                .context("failed to delete from groups users")?;
             }
             GroupRefId::Role(role_id) => {
                 conn.execute(
                     "delete from group_roles where role_id = $1 and groups_id = any($2)",
-                    &[role_id, &to_delete]
+                    &[role_id, &to_delete],
                 )
-                    .await
-                    .context("failed to delete from group roles")?;
+                .await
+                .context("failed to delete from group roles")?;
             }
         }
     }
@@ -424,7 +441,7 @@ where
 pub async fn assign_user_group(
     conn: &impl db::GenericClient,
     users_id: UserId,
-    groups_id: GroupId
+    groups_id: GroupId,
 ) -> Result<(), db::PgError> {
     let added = Utc::now();
 
@@ -432,8 +449,9 @@ pub async fn assign_user_group(
         "\
         insert into group_users (users_id, groups_id, added) values \
         ($1, $2, $3)",
-        &[&users_id, &groups_id, &added]
-    ).await?;
+        &[&users_id, &groups_id, &added],
+    )
+    .await?;
 
     Ok(())
 }

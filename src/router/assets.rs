@@ -3,7 +3,7 @@ use std::path::Path;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{header, Method, Uri, StatusCode};
+use axum::http::{header, Method, StatusCode, Uri};
 use axum::response::Response;
 use tokio::fs::OpenOptions;
 use tokio_util::io::ReaderStream;
@@ -48,13 +48,10 @@ fn get_mime(path: &Path) -> String {
     let guess = mime_guess::MimeGuess::from_path(path);
 
     if guess.count() <= 1 {
-        guess.first_or_octet_stream()
-            .to_string()
+        guess.first_or_octet_stream().to_string()
     } else {
         let mut iter = guess.iter();
-        let mut rtn = iter.next()
-            .unwrap()
-            .to_string();
+        let mut rtn = iter.next().unwrap().to_string();
 
         for found in iter {
             write!(&mut rtn, ",{found}").unwrap();
@@ -70,10 +67,12 @@ async fn send_file(path: &Path) -> Response<Body> {
     let mime = get_mime(path);
 
     let metadata = match path::metadata(path) {
-        Ok(maybe) => if let Some(meta) = maybe {
-            meta
-        } else {
-            return not_found();
+        Ok(maybe) => {
+            if let Some(meta) = maybe {
+                meta
+            } else {
+                return not_found();
+            }
         }
         Err(err) => {
             error::log_prefix_error("error when retrieving metadata for asset file", &err);
@@ -86,10 +85,7 @@ async fn send_file(path: &Path) -> Response<Body> {
         return bad_request();
     }
 
-    let file = match OpenOptions::new()
-        .read(true)
-        .open(path)
-        .await {
+    let file = match OpenOptions::new().read(true).open(path).await {
         Ok(file) => file,
         Err(err) => {
             error::log_prefix_error("error when opening asset file", &err);
@@ -115,11 +111,7 @@ async fn send_file(path: &Path) -> Response<Body> {
     }
 }
 
-pub async fn handle(
-    State(state): State<SharedState>,
-    method: Method,
-    uri: Uri
-) -> Response<Body> {
+pub async fn handle(State(state): State<SharedState>, method: Method, uri: Uri) -> Response<Body> {
     if method != Method::GET {
         return method_not_allowed();
     }

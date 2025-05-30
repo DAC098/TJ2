@@ -1,10 +1,10 @@
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use postgres_types as pg_types;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{UserId, InviteToken};
+use crate::db::ids::{InviteToken, UserId};
 use crate::error::BoxDynError;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ impl TryFrom<i16> for InviteStatus {
             0 => Ok(InviteStatus::Pending),
             1 => Ok(InviteStatus::Accepted),
             2 => Ok(InviteStatus::Rejected),
-            _ => Err(InvalidInviteStatus)
+            _ => Err(InvalidInviteStatus),
         }
     }
 }
@@ -64,7 +64,11 @@ impl<'a> pg_types::FromSql<'a> for InviteStatus {
 }
 
 impl pg_types::ToSql for InviteStatus {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let v: i16 = self.into();
 
         v.to_sql(ty, w)
@@ -96,11 +100,11 @@ pub enum InviteError {
     UserNotFound,
 
     #[error(transparent)]
-    Db(#[from] db::PgError)
+    Db(#[from] db::PgError),
 }
 
 pub enum InviteQuery<'a> {
-    Token(&'a InviteToken)
+    Token(&'a InviteToken),
 }
 
 impl<'a> From<&'a InviteToken> for InviteQuery<'a> {
@@ -110,9 +114,12 @@ impl<'a> From<&'a InviteToken> for InviteQuery<'a> {
 }
 
 impl Invite {
-    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    pub async fn retrieve<'a, T>(
+        conn: &impl db::GenericClient,
+        given: T,
+    ) -> Result<Option<Self>, db::PgError>
     where
-        T: Into<InviteQuery<'a>>
+        T: Into<InviteQuery<'a>>,
     {
         let result = match given.into() {
             InviteQuery::Token(token) => {
@@ -126,8 +133,9 @@ impl Invite {
                            user_invites.users_id \
                     from user_invites \
                     where token = $1",
-                    &[token]
-                ).await?
+                    &[token],
+                )
+                .await?
             }
         };
 
@@ -152,28 +160,32 @@ impl Invite {
     pub async fn mark_accepted(
         &mut self,
         conn: &impl db::GenericClient,
-        users_id: &UserId
+        users_id: &UserId,
     ) -> Result<(), InviteError> {
         if !self.status.is_pending() {
             return Err(InviteError::NotPending);
         }
 
         let status = InviteStatus::Accepted;
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             update user_invites \
             set status = $2, \
                 users_id = $3 \
             where token = $1",
-            &[&self.token, &status, users_id]
-        ).await;
+                &[&self.token, &status, users_id],
+            )
+            .await;
 
         if let Err(err) = result {
             if let Some(kind) = db::ErrorKind::check(&err) {
                 match kind {
-                    db::ErrorKind::ForeignKey(constraint) => if constraint == "user_invites_users_id_fkey" {
-                        return Err(InviteError::UserNotFound);
-                    },
+                    db::ErrorKind::ForeignKey(constraint) => {
+                        if constraint == "user_invites_users_id_fkey" {
+                            return Err(InviteError::UserNotFound);
+                        }
+                    }
                     _ => {}
                 }
             }

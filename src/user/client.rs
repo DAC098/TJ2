@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use tj2_lib::sec::pki::PublicKey;
 
 use crate::db;
-use crate::db::ids::{UserId, UserClientId};
+use crate::db::ids::{UserClientId, UserId};
 
 pub struct UserClient {
     pub id: UserClientId,
@@ -14,7 +14,7 @@ pub struct UserClient {
 }
 
 pub enum RetrieveOne<'a> {
-    PublicKey(&'a PublicKey)
+    PublicKey(&'a PublicKey),
 }
 
 impl<'a> From<&'a PublicKey> for RetrieveOne<'a> {
@@ -26,14 +26,15 @@ impl<'a> From<&'a PublicKey> for RetrieveOne<'a> {
 impl UserClient {
     pub async fn retrieve<'a, T>(
         conn: &impl db::GenericClient,
-        given: T
+        given: T,
     ) -> Result<Option<Self>, db::PgError>
     where
         T: Into<RetrieveOne<'a>>,
     {
         Ok(match given.into() {
-            RetrieveOne::PublicKey(key) => conn.query_opt(
-                "\
+            RetrieveOne::PublicKey(key) => {
+                conn.query_opt(
+                    "\
                 select user_clients.id, \
                        user_clients.users_id, \
                        user_clients.name, \
@@ -42,9 +43,12 @@ impl UserClient {
                        user_clients.updated \
                 from user_clients \
                 where user_clients.public_key = $1",
-                &[&db::ToBytea(key)]
-            ).await?
-        }.map(|record| Self {
+                    &[&db::ToBytea(key)],
+                )
+                .await?
+            }
+        }
+        .map(|record| Self {
             id: record.get(0),
             users_id: record.get(1),
             name: record.get(2),

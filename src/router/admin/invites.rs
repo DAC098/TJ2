@@ -1,12 +1,12 @@
 use axum::extract::Path;
-use axum::http::{StatusCode, HeaderMap};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chrono::{Utc, DateTime};
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{UserId, InviteToken};
+use crate::db::ids::{InviteToken, UserId};
 use crate::error::{self, Context};
 use crate::router::{body, macros};
 use crate::sec::authn::Initiator;
@@ -34,16 +34,17 @@ pub async fn search_invites(
     // check if the user has permission to view invites
 
     let params: db::ParamsArray<'_, 0> = [];
-    let stream = conn.query_raw(
-        "\
+    let stream = conn
+        .query_raw(
+            "\
         select user_invites.token, \
                user_invites.name, \
                user_invites.issued_on, \
                user_invites.expires_on, \
                user_invites.status \
         from user_invites",
-        params
-    )
+            params,
+        )
         .await
         .context("failed to query user invites")?;
 
@@ -63,15 +64,12 @@ pub async fn search_invites(
         });
     }
 
-    Ok((
-        StatusCode::OK,
-        body::Json(rtn)
-    ).into_response())
+    Ok((StatusCode::OK, body::Json(rtn)).into_response())
 }
 
 #[derive(Debug, Deserialize)]
 pub struct InvitePath {
-    token: InviteToken
+    token: InviteToken,
 }
 
 pub async fn new_invite(
@@ -105,10 +103,11 @@ pub struct InviteUser {
 impl InviteForm {
     pub async fn retrieve(
         conn: &impl db::GenericClient,
-        token: &InviteToken
+        token: &InviteToken,
     ) -> Result<Option<Self>, db::PgError> {
-        let result = conn.query_opt(
-            "\
+        let result = conn
+            .query_opt(
+                "\
             select user_invites.token, \
                    user_invites.name, \
                    user_invites.issued_on, \
@@ -122,8 +121,9 @@ impl InviteForm {
                 left join users on \
                     user_invites.users_id = users.id \
             where user_invites.token = $1",
-            &[token]
-        ).await?;
+                &[token],
+            )
+            .await?;
 
         Ok(result.map(|record| {
             let expires_on: Option<DateTime<Utc>> = record.get(3);
@@ -163,9 +163,7 @@ pub async fn retrieve_invite(
     state: state::SharedState,
     _initiator: Initiator,
     headers: HeaderMap,
-    Path(InvitePath {
-        token,
-    }): Path<InvitePath>,
+    Path(InvitePath { token }): Path<InvitePath>,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
@@ -195,24 +193,15 @@ pub struct NewInvite {
 pub enum CreateResult {
     NameExists,
     InvalidExpiresOn,
-    Created(InviteForm)
+    Created(InviteForm),
 }
 
 impl IntoResponse for CreateResult {
     fn into_response(self) -> Response {
         match self {
-            Self::NameExists => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self)
-            ).into_response(),
-            Self::InvalidExpiresOn => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self),
-            ).into_response(),
-            Self::Created(invite) => (
-                StatusCode::CREATED,
-                body::Json(invite)
-            ).into_response(),
+            Self::NameExists => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::InvalidExpiresOn => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::Created(invite) => (StatusCode::CREATED, body::Json(invite)).into_response(),
         }
     }
 }
@@ -220,13 +209,11 @@ impl IntoResponse for CreateResult {
 pub async fn create_invite(
     state: state::SharedState,
     _initiator: Initiator,
-    body::Json(NewInvite {
-        name,
-        expires_on,
-    }): body::Json<NewInvite>,
+    body::Json(NewInvite { name, expires_on }): body::Json<NewInvite>,
 ) -> Result<CreateResult, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -244,30 +231,32 @@ pub async fn create_invite(
     let issued_on = Utc::now();
     let status = InviteStatus::Pending;
 
-    let result = transaction.execute(
-        "\
+    let result = transaction
+        .execute(
+            "\
         insert into user_invites (token, name, issued_on, expires_on, status) values \
         ($1, $2, $3, $4, $5)",
-        &[&token, &name, &issued_on, &expires_on, &status]
-    ).await;
+            &[&token, &name, &issued_on, &expires_on, &status],
+        )
+        .await;
 
     if let Err(err) = result {
         if let Some(kind) = db::ErrorKind::check(&err) {
             match kind {
-                db::ErrorKind::Unique(constraint) => if constraint == "user_invites_name_key" {
-                    return Ok(CreateResult::NameExists);
-                },
+                db::ErrorKind::Unique(constraint) => {
+                    if constraint == "user_invites_name_key" {
+                        return Ok(CreateResult::NameExists);
+                    }
+                }
                 _ => {}
             }
         }
 
-        return Err(error::Error::context_source(
-            "failed to create invite",
-            err
-        ));
+        return Err(error::Error::context_source("failed to create invite", err));
     }
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to create transaction")?;
 
@@ -303,26 +292,11 @@ pub enum UpdateResult {
 impl IntoResponse for UpdateResult {
     fn into_response(self) -> Response {
         match self {
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self),
-            ).into_response(),
-            Self::NotPending => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self),
-            ).into_response(),
-            Self::NameExists => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self),
-            ).into_response(),
-            Self::InvalidExpiresOn => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self),
-            ).into_response(),
-            Self::Updated(invite) => (
-                StatusCode::OK,
-                body::Json(invite)
-            ).into_response()
+            Self::NotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::NotPending => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::NameExists => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::InvalidExpiresOn => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::Updated(invite) => (StatusCode::OK, body::Json(invite)).into_response(),
         }
     }
 }
@@ -330,16 +304,12 @@ impl IntoResponse for UpdateResult {
 pub async fn update_invite(
     state: state::SharedState,
     _initiator: Initiator,
-    Path(InvitePath {
-        token,
-    }): Path<InvitePath>,
-    body::Json(UpdateInvite {
-        name,
-        expires_on,
-    }): body::Json<UpdateInvite>,
+    Path(InvitePath { token }): Path<InvitePath>,
+    body::Json(UpdateInvite { name, expires_on }): body::Json<UpdateInvite>,
 ) -> Result<UpdateResult, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -350,10 +320,9 @@ pub async fn update_invite(
     let now = Utc::now();
 
     let Some(Invite {
-        issued_on,
-        status,
-        ..
-    }) = result else {
+        issued_on, status, ..
+    }) = result
+    else {
         return Ok(UpdateResult::NotFound);
     };
 
@@ -367,32 +336,37 @@ pub async fn update_invite(
         }
     }
 
-    let result = transaction.execute(
-        "\
+    let result = transaction
+        .execute(
+            "\
         update user_invites \
         set name = $2, \
             expires_on = $3 \
         where token = $1",
-        &[&token, &name, &expires_on]
-    ).await;
+            &[&token, &name, &expires_on],
+        )
+        .await;
 
     if let Err(err) = result {
         if let Some(kind) = db::ErrorKind::check(&err) {
             match kind {
-                db::ErrorKind::Unique(constraint) => if constraint == "user_invites_name_key" {
-                    return Ok(UpdateResult::NameExists);
-                },
+                db::ErrorKind::Unique(constraint) => {
+                    if constraint == "user_invites_name_key" {
+                        return Ok(UpdateResult::NameExists);
+                    }
+                }
                 _ => {}
             }
         }
 
         return Err(error::Error::context_source(
             "failed to update user invite",
-            err
+            err,
         ));
     }
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 
@@ -419,14 +393,8 @@ pub enum DeleteResult {
 impl IntoResponse for DeleteResult {
     fn into_response(self) -> Response {
         match self {
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self),
-            ).into_response(),
-            Self::Deleted => (
-                StatusCode::OK,
-                body::Json(self),
-            ).into_response(),
+            Self::NotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::Deleted => (StatusCode::OK, body::Json(self)).into_response(),
         }
     }
 }
@@ -434,25 +402,26 @@ impl IntoResponse for DeleteResult {
 pub async fn delete_invite(
     state: state::SharedState,
     _initiator: Initiator,
-    Path(InvitePath {
-        token,
-    }): Path<InvitePath>,
+    Path(InvitePath { token }): Path<InvitePath>,
 ) -> Result<DeleteResult, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
-    let result = transaction.execute(
-        "\
+    let result = transaction
+        .execute(
+            "\
         delete from user_invites \
         where token = $1",
-        &[&token]
-    )
+            &[&token],
+        )
         .await
         .context("failed to delete user invite")?;
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 

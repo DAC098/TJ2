@@ -1,16 +1,16 @@
 use std::convert::Infallible;
-use std::fmt::{Display, Result as FmtResult, Formatter, Write};
+use std::fmt::{Display, Formatter, Result as FmtResult, Write};
 
 use axum::body::Body;
 use axum::http::StatusCode;
-use axum::response::{Response, IntoResponse};
+use axum::response::{IntoResponse, Response};
 
 pub type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
 
 /// creates an error response with the given message
 pub fn error_response<S>(msg: S) -> Response<Body>
 where
-    S: Into<String>
+    S: Into<String>,
 {
     let message = msg.into();
 
@@ -28,14 +28,14 @@ pub struct Error {
     cxt: String,
 
     #[source]
-    src: Option<BoxDynError>
+    src: Option<BoxDynError>,
 }
 
 impl Error {
     /// creates a new error with the given context
     pub fn context<C>(cxt: C) -> Error
     where
-        C: Into<String>
+        C: Into<String>,
     {
         Error {
             cxt: cxt.into(),
@@ -47,11 +47,11 @@ impl Error {
     pub fn context_source<C, S>(cxt: C, src: S) -> Error
     where
         C: Into<String>,
-        S: Into<BoxDynError>
+        S: Into<BoxDynError>,
     {
         Error {
             cxt: cxt.into(),
-            src: Some(src.into())
+            src: Some(src.into()),
         }
     }
 }
@@ -79,15 +79,15 @@ pub trait Context<T, E> {
 
 impl<T, E> Context<T, E> for std::result::Result<T, E>
 where
-    E: Into<BoxDynError>
+    E: Into<BoxDynError>,
 {
     fn context<C>(self, cxt: C) -> std::result::Result<T, Error>
     where
-        C: Into<String>
+        C: Into<String>,
     {
         self.map_err(|err| Error {
             cxt: cxt.into(),
-            src: Some(err.into())
+            src: Some(err.into()),
         })
     }
 }
@@ -95,11 +95,11 @@ where
 impl<T> Context<T, ()> for std::option::Option<T> {
     fn context<C>(self, cxt: C) -> std::result::Result<T, Error>
     where
-        C: Into<String>
+        C: Into<String>,
     {
         self.ok_or(Error {
             cxt: cxt.into(),
-            src: None
+            src: None,
         })
     }
 }
@@ -150,7 +150,7 @@ where
 /// wrapper method to just log an error
 pub fn log_error<E>(err: &E)
 where
-    E: std::error::Error
+    E: std::error::Error,
 {
     log_prefix_error("error stack", err)
 }

@@ -2,25 +2,23 @@ use axum::http::StatusCode;
 use chrono::Utc;
 
 use crate::error::{self, Context};
+use crate::journal::{CustomField, Journal};
 use crate::router::body;
-use crate::journal::{Journal, CustomField};
 use crate::sec::authn::ApiInitiator;
 use crate::state;
 use crate::sync;
-use crate::sync::journal::{
-    SyncEntryResult,
-    EntryFileSync,
-};
+use crate::sync::journal::{EntryFileSync, SyncEntryResult};
 
 pub mod journals_id;
 
 pub async fn post(
     state: state::SharedState,
     initiator: ApiInitiator,
-    body::Json(json): body::Json<sync::journal::JournalSync>
+    body::Json(json): body::Json<sync::journal::JournalSync>,
 ) -> Result<StatusCode, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -38,7 +36,8 @@ pub async fn post(
         exists.name = json.name;
         exists.description = json.description;
 
-        exists.update(&transaction)
+        exists
+            .update(&transaction)
             .await
             .context("failed to update journal")?;
 
@@ -69,7 +68,8 @@ pub async fn post(
             .context("failed to create custom field")?;
     }
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 

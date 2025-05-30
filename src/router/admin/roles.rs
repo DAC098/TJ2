@@ -1,22 +1,22 @@
-use std::collections::{BTreeSet, BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 
-use axum::extract::{Request, Path};
-use axum::http::{HeaderMap, Uri, StatusCode};
+use axum::extract::{Path, Request};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{UserId, GroupId, RoleId, RoleUid};
+use crate::db::ids::{GroupId, RoleId, RoleUid, UserId};
 use crate::error::{self, Context};
 use crate::router::body;
 use crate::router::macros;
-use crate::state;
 use crate::sec::authz::{self, Role};
-use crate::user::{AttachedUser, create_attached_users, update_attached_users};
-use crate::user::group::{AttachedGroup, create_attached_groups, update_attached_groups};
+use crate::state;
+use crate::user::group::{create_attached_groups, update_attached_groups, AttachedGroup};
+use crate::user::{create_attached_users, update_attached_users, AttachedUser};
 
 #[derive(Debug, Serialize)]
 pub struct RolePartial {
@@ -29,15 +29,11 @@ pub struct RolePartial {
 
 pub async fn retrieve_roles(
     state: state::SharedState,
-    req: Request
+    req: Request,
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator!(
-        &conn,
-        req.headers(),
-        Some(req.uri().clone())
-    );
+    let initiator = macros::require_initiator!(&conn, req.headers(), Some(req.uri().clone()));
 
     macros::res_if_html!(state.templates(), req.headers());
 
@@ -47,16 +43,17 @@ pub async fn retrieve_roles(
         authz::Scope::Roles,
         authz::Ability::Read,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
     }
 
     let params: db::ParamsArray<'_, 0> = [];
-    let roles = conn.query_raw(
-        "\
+    let roles = conn
+        .query_raw(
+            "\
         with search_roles as ( \
             select * from authz_roles\
         ) \
@@ -67,8 +64,8 @@ pub async fn retrieve_roles(
                search_roles.updated \
         from search_roles \
         order by search_roles.name",
-        params
-    )
+            params,
+        )
         .await
         .context("failed to retrieve roles")?;
 
@@ -93,12 +90,12 @@ pub async fn retrieve_roles(
 
 #[derive(Debug, Deserialize)]
 pub struct RolePath {
-    role_id: RoleId
+    role_id: RoleId,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct MaybeRolePath {
-    role_id: Option<RoleId>
+    role_id: Option<RoleId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,7 +111,10 @@ pub struct RoleFull {
 }
 
 impl RoleFull {
-    pub async fn retrieve(conn: &impl db::GenericClient, role_id: &RoleId) -> Result<Option<Self>, error::Error> {
+    pub async fn retrieve(
+        conn: &impl db::GenericClient,
+        role_id: &RoleId,
+    ) -> Result<Option<Self>, error::Error> {
         let result = Role::retrieve_id(conn, role_id)
             .await
             .context("failed to retrieve role")?;
@@ -141,7 +141,7 @@ impl RoleFull {
             updated: role.updated,
             permissions,
             users,
-            groups
+            groups,
         }))
     }
 }
@@ -156,12 +156,13 @@ pub struct AttachedPermission {
 impl AttachedPermission {
     async fn retrieve_stream(
         conn: &impl db::GenericClient,
-        role_id: &RoleId
+        role_id: &RoleId,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
         let params: db::ParamsArray<'_, 1> = [role_id];
 
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select authz_permissions.scope, \
                    authz_permissions.ability, \
                    authz_permissions.added
@@ -169,18 +170,23 @@ impl AttachedPermission {
             where authz_permissions.role_id = $1 \
             order by authz_permissions.scope, \
                      authz_permissions.ability",
-            params
-        )
+                params,
+            )
             .await?;
 
-        Ok(stream.map(|result| result.map(|row| Self {
-            scope: row.get(0),
-            ability: row.get(1),
-            added: row.get(2),
-        })))
+        Ok(stream.map(|result| {
+            result.map(|row| Self {
+                scope: row.get(0),
+                ability: row.get(1),
+                added: row.get(2),
+            })
+        }))
     }
 
-    async fn retrieve(conn: &impl db::GenericClient, role_id: &RoleId) -> Result<Vec<Self>, error::Error> {
+    async fn retrieve(
+        conn: &impl db::GenericClient,
+        role_id: &RoleId,
+    ) -> Result<Vec<Self>, error::Error> {
         let stream = Self::retrieve_stream(conn, role_id)
             .await
             .context("failed to retrieve attached permissions")?;
@@ -203,7 +209,7 @@ pub async fn retrieve_role(
     state: state::SharedState,
     headers: HeaderMap,
     uri: Uri,
-    Path(MaybeRolePath { role_id }): Path<MaybeRolePath>
+    Path(MaybeRolePath { role_id }): Path<MaybeRolePath>,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
@@ -213,11 +219,7 @@ pub async fn retrieve_role(
 
     let conn = state.db_conn().await?;
 
-    let initiator = macros::require_initiator!(
-        &conn,
-        &headers,
-        Some(uri.clone())
-    );
+    let initiator = macros::require_initiator!(&conn, &headers, Some(uri.clone()));
 
     let perm_check = authz::has_permission(
         &conn,
@@ -225,8 +227,8 @@ pub async fn retrieve_role(
         authz::Scope::Roles,
         authz::Ability::Read,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
@@ -261,13 +263,9 @@ pub struct NewRole {
 #[serde(tag = "result")]
 pub enum NewRoleResult {
     RoleExists,
-    UsersNotFound {
-        ids: Vec<UserId>
-    },
-    GroupsNotFound {
-        ids: Vec<GroupId>
-    },
-    Created(RoleFull)
+    UsersNotFound { ids: Vec<UserId> },
+    GroupsNotFound { ids: Vec<GroupId> },
+    Created(RoleFull),
 }
 
 pub async fn create_role(
@@ -275,15 +273,12 @@ pub async fn create_role(
     headers: HeaderMap,
     body::Json(json): body::Json<NewRole>,
 ) -> Result<Response, error::Error> {
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
-    let initiator = macros::require_initiator!(
-        &transaction,
-        &headers,
-        None::<&str>
-    );
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<&str>);
 
     let perm_check = authz::has_permission(
         &transaction,
@@ -291,8 +286,8 @@ pub async fn create_role(
         authz::Scope::Roles,
         authz::Ability::Create,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
@@ -305,8 +300,9 @@ pub async fn create_role(
     let Some(role) = result else {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(NewRoleResult::RoleExists)
-        ).into_response());
+            body::Json(NewRoleResult::RoleExists),
+        )
+            .into_response());
     };
 
     let permissions = create_permissions(&transaction, &role, json.permissions).await?;
@@ -316,10 +312,9 @@ pub async fn create_role(
     if !not_found.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(NewRoleResult::UsersNotFound {
-                ids: not_found
-            })
-        ).into_response());
+            body::Json(NewRoleResult::UsersNotFound { ids: not_found }),
+        )
+            .into_response());
     }
 
     let (groups, not_found) = create_attached_groups(&transaction, &role, json.groups).await?;
@@ -327,13 +322,13 @@ pub async fn create_role(
     if !not_found.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(NewRoleResult::GroupsNotFound {
-                ids: not_found
-            })
-        ).into_response());
+            body::Json(NewRoleResult::GroupsNotFound { ids: not_found }),
+        )
+            .into_response());
     }
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 
@@ -345,8 +340,9 @@ pub async fn create_role(
         updated: role.updated,
         permissions,
         users,
-        groups
-    })).into_response())
+        groups,
+    }))
+    .into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -361,12 +357,8 @@ pub struct UpdateRole {
 #[serde(tag = "result")]
 pub enum UpdateRoleResult {
     RoleExists,
-    UsersNotFound {
-        ids: Vec<UserId>
-    },
-    GroupsNotFound {
-        ids: Vec<GroupId>
-    }
+    UsersNotFound { ids: Vec<UserId> },
+    GroupsNotFound { ids: Vec<GroupId> },
 }
 
 pub async fn update_role(
@@ -377,20 +369,16 @@ pub async fn update_role(
 ) -> Result<Response, error::Error> {
     let transaction = conn.transaction().await?;
 
-    let initiator = macros::require_initiator!(
-        &transaction,
-        &headers,
-        None::<&str>
-    );
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<&str>);
 
     let perm_check = authz::has_permission(
         &transaction,
         initiator.user.id,
         authz::Scope::Roles,
-        authz::Ability::Update
+        authz::Ability::Update,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
@@ -409,30 +397,30 @@ pub async fn update_role(
             role.name = name;
         }
 
-        let did_update = role.update(&transaction)
+        let did_update = role
+            .update(&transaction)
             .await
             .context("failed to update role")?;
 
         if !did_update {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                body::Json(UpdateRoleResult::RoleExists)
-            ).into_response());
+                body::Json(UpdateRoleResult::RoleExists),
+            )
+                .into_response());
         }
     }
 
-    let _permissions = update_permissions(&transaction, &role, json.permissions)
-        .await?;
+    let _permissions = update_permissions(&transaction, &role, json.permissions).await?;
 
     let (_attached, not_found) = update_attached_users(&transaction, &role, json.users).await?;
 
     if !not_found.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateRoleResult::UsersNotFound {
-                ids: not_found
-            })
-        ).into_response());
+            body::Json(UpdateRoleResult::UsersNotFound { ids: not_found }),
+        )
+            .into_response());
     }
 
     let (_attached, not_found) = update_attached_groups(&transaction, &role, json.groups).await?;
@@ -440,13 +428,13 @@ pub async fn update_role(
     if !not_found.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateRoleResult::GroupsNotFound {
-                ids: not_found
-            })
-        ).into_response());
+            body::Json(UpdateRoleResult::GroupsNotFound { ids: not_found }),
+        )
+            .into_response());
     }
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 
@@ -460,11 +448,7 @@ pub async fn delete_role(
 ) -> Result<Response, error::Error> {
     let transaction = conn.transaction().await?;
 
-    let initiator = macros::require_initiator!(
-        &transaction,
-        &headers,
-        None::<&str>
-    );
+    let initiator = macros::require_initiator!(&transaction, &headers, None::<&str>);
 
     let perm_check = authz::has_permission(
         &transaction,
@@ -472,8 +456,8 @@ pub async fn delete_role(
         authz::Scope::Roles,
         authz::Ability::Delete,
     )
-        .await
-        .context("failed to retrieve permission for user")?;
+    .await
+    .context("failed to retrieve permission for user")?;
 
     if !perm_check {
         return Ok(StatusCode::UNAUTHORIZED.into_response());
@@ -487,42 +471,40 @@ pub async fn delete_role(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let _users = transaction.execute(
-        "delete from user_roles where role_id = $1",
-        &[&role.id]
-    )
+    let _users = transaction
+        .execute("delete from user_roles where role_id = $1", &[&role.id])
         .await
         .context("failed to delete frome user roles")?;
 
-    let _groups = transaction.execute(
-        "delete from group_roles where role_id = $1",
-        &[&role.id]
-    )
+    let _groups = transaction
+        .execute("delete from group_roles where role_id = $1", &[&role.id])
         .await
         .context("failed to delete from group roles")?;
 
-    let _permissions = transaction.execute(
-        "delete from authz_permissions where role_id = $1",
-        &[&role.id]
-    )
+    let _permissions = transaction
+        .execute(
+            "delete from authz_permissions where role_id = $1",
+            &[&role.id],
+        )
         .await
         .context("failed to delete from authz permissions")?;
 
-    let _role = transaction.execute(
-        "delete from authz_roles where id = $1",
-        &[&role.id]
-    )
+    let _role = transaction
+        .execute("delete from authz_roles where id = $1", &[&role.id])
         .await
         .context("failed to delete from authz roles")?;
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 
     Ok(StatusCode::OK.into_response())
 }
 
-fn unique_permissions(permissions: Vec<PermissionBody>) -> BTreeMap<authz::Scope, BTreeSet<authz::Ability>> {
+fn unique_permissions(
+    permissions: Vec<PermissionBody>,
+) -> BTreeMap<authz::Scope, BTreeSet<authz::Ability>> {
     let mut rtn: BTreeMap<authz::Scope, BTreeSet<authz::Ability>> = BTreeMap::new();
 
     for perm in permissions {
@@ -541,7 +523,7 @@ fn unique_permissions(permissions: Vec<PermissionBody>) -> BTreeMap<authz::Scope
 async fn create_permissions(
     conn: &impl db::GenericClient,
     role: &Role,
-    permissions: Vec<PermissionBody>
+    permissions: Vec<PermissionBody>,
 ) -> Result<Vec<AttachedPermission>, error::Error> {
     let added = Utc::now();
     let unique = unique_permissions(permissions);
@@ -553,9 +535,8 @@ async fn create_permissions(
 
     let mut first = true;
     let mut params: db::ParamsVec<'_> = vec![&role.id, &added];
-    let mut query = String::from(
-        "insert into authz_permissions (role_id, scope, ability, added) values "
-    );
+    let mut query =
+        String::from("insert into authz_permissions (role_id, scope, ability, added) values ");
 
     tracing::debug!("unique permissions: {unique:#?}");
 
@@ -577,18 +558,19 @@ async fn create_permissions(
                 &mut query,
                 "($1, ${scope_index}, ${}, $2)",
                 db::push_param(&mut params, ability)
-            ).unwrap();
+            )
+            .unwrap();
 
             rtn.push(AttachedPermission {
                 scope: scope.clone(),
                 ability: ability.clone(),
-                added
+                added,
             });
         }
     }
 
     tracing::debug!("permissions query: {query}");
-    
+
     conn.execute(query.as_str(), params.as_slice())
         .await
         .context("failed to insert permissions")?;
@@ -599,7 +581,7 @@ async fn create_permissions(
 async fn update_permissions(
     conn: &impl db::GenericClient,
     role: &Role,
-    permissions: Option<Vec<PermissionBody>>
+    permissions: Option<Vec<PermissionBody>>,
 ) -> Result<Vec<AttachedPermission>, error::Error> {
     let Some(permissions) = permissions else {
         tracing::debug!("no permissions provided");
@@ -612,7 +594,8 @@ async fn update_permissions(
     let stream = authz::Permission::retrieve_stream(conn, &role.id)
         .await
         .context("failed to retrieve permissions")?;
-    let mut current: HashMap<authz::Scope, HashMap<authz::Ability, authz::Permission>> = HashMap::new();
+    let mut current: HashMap<authz::Scope, HashMap<authz::Ability, authz::Permission>> =
+        HashMap::new();
 
     futures::pin_mut!(stream);
 
@@ -622,7 +605,10 @@ async fn update_permissions(
         if let Some(perms) = current.get_mut(&record.scope) {
             perms.insert(record.ability.clone(), record);
         } else {
-            current.insert(record.scope.clone(), HashMap::from([(record.ability.clone(), record)]));
+            current.insert(
+                record.scope.clone(),
+                HashMap::from([(record.ability.clone(), record)]),
+            );
         }
     }
 
@@ -633,9 +619,8 @@ async fn update_permissions(
     if !unique.is_empty() {
         let mut first = true;
         let mut params: db::ParamsVec<'_> = vec![&role.id, &added];
-        let mut query = String::from(
-            "insert into authz_permissions (role_id, scope, ability, added) values "
-        );
+        let mut query =
+            String::from("insert into authz_permissions (role_id, scope, ability, added) values ");
 
         for (scope, abilities) in &unique {
             let scope_index = db::push_param(&mut params, scope);
@@ -657,12 +642,13 @@ async fn update_permissions(
                     &mut query,
                     "($1, ${scope_index}, ${}, $2)",
                     db::push_param(&mut params, ability)
-                ).unwrap();
+                )
+                .unwrap();
 
                 rtn.push(AttachedPermission {
                     scope: scope.clone(),
                     ability: ability.clone(),
-                    added
+                    added,
                 });
             }
         }
@@ -689,10 +675,10 @@ async fn update_permissions(
 
         conn.execute(
             "delete from authz_permissions where id = any($1)",
-            &[&id_list]
+            &[&id_list],
         )
-            .await
-            .context("failed to delete permissions")?;
+        .await
+        .context("failed to delete permissions")?;
     }
 
     Ok(rtn)

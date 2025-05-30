@@ -3,13 +3,13 @@ use std::convert::TryFrom;
 
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt};
+use futures::StreamExt;
 use postgres_types as pg_types;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::error::BoxDynError;
+use crate::db::ids::{CustomFieldId, EntryId};
 use crate::db::{self, GenericClient, PgError};
-use crate::db::ids::{EntryId, CustomFieldId};
+use crate::error::BoxDynError;
 
 fn default_time_range_show_diff() -> bool {
     false
@@ -25,19 +25,19 @@ fn default_precision() -> i32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimpleValue<T> {
-    pub value: T
+    pub value: T,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RangeValue<T> {
-   pub low: T,
-   pub high: T,
+    pub low: T,
+    pub high: T,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegerType {
-   pub minimum: Option<i32>,
-   pub maximum: Option<i32>
+    pub minimum: Option<i32>,
+    pub maximum: Option<i32>,
 }
 
 pub type IntegerValue = SimpleValue<i32>;
@@ -45,7 +45,7 @@ pub type IntegerValue = SimpleValue<i32>;
 impl IntegerType {
     pub fn validate(
         &self,
-        IntegerValue { value }: IntegerValue
+        IntegerValue { value }: IntegerValue,
     ) -> Result<IntegerValue, IntegerValue> {
         match (&self.minimum, &self.maximum) {
             (Some(min), Some(max)) if value >= *min && value <= *max => Ok(IntegerValue { value }),
@@ -58,15 +58,15 @@ impl IntegerType {
 
     pub fn make_value(&self) -> IntegerValue {
         IntegerValue {
-            value: self.minimum.unwrap_or(0)
+            value: self.minimum.unwrap_or(0),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegerRangeType {
-   pub minimum: Option<i32>,
-   pub maximum: Option<i32>
+    pub minimum: Option<i32>,
+    pub maximum: Option<i32>,
 }
 
 pub type IntegerRangeValue = RangeValue<i32>;
@@ -77,7 +77,9 @@ impl IntegerRangeType {
         IntegerRangeValue { low, high }: IntegerRangeValue,
     ) -> Result<IntegerRangeValue, IntegerRangeValue> {
         match (&self.minimum, &self.maximum) {
-            (Some(min), Some(max)) if low >= *min && low < high && high <= *max => Ok(IntegerRangeValue { low, high }),
+            (Some(min), Some(max)) if low >= *min && low < high && high <= *max => {
+                Ok(IntegerRangeValue { low, high })
+            }
             (Some(min), None) if low >= *min && low < high => Ok(IntegerRangeValue { low, high }),
             (None, Some(max)) if low < high && high <= *max => Ok(IntegerRangeValue { low, high }),
             (None, None) if low < high => Ok(IntegerRangeValue { low, high }),
@@ -93,39 +95,33 @@ impl IntegerRangeType {
             },
             (Some(min), None) => IntegerRangeValue {
                 low: *min,
-                high: *min + 10
+                high: *min + 10,
             },
             (None, Some(max)) => IntegerRangeValue {
                 low: *max - 10,
-                high: *max
+                high: *max,
             },
-            (None, None) => IntegerRangeValue {
-                low: 0,
-                high: 10
-            },
+            (None, None) => IntegerRangeValue { low: 0, high: 10 },
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FloatType {
-   pub minimum: Option<f32>,
-   pub maximum: Option<f32>,
+    pub minimum: Option<f32>,
+    pub maximum: Option<f32>,
 
-   #[serde(default = "default_step")]
-   pub step: f32,
+    #[serde(default = "default_step")]
+    pub step: f32,
 
-   #[serde(default = "default_precision")]
-   pub precision: i32
+    #[serde(default = "default_precision")]
+    pub precision: i32,
 }
 
 pub type FloatValue = SimpleValue<f32>;
 
 impl FloatType {
-    pub fn validate(
-        &self,
-        FloatValue { value }: FloatValue,
-    ) -> Result<FloatValue, FloatValue> {
+    pub fn validate(&self, FloatValue { value }: FloatValue) -> Result<FloatValue, FloatValue> {
         match (&self.minimum, &self.maximum) {
             (Some(min), Some(max)) if value >= *min && value <= *max => Ok(FloatValue { value }),
             (Some(min), None) if value >= *min => Ok(FloatValue { value }),
@@ -137,7 +133,7 @@ impl FloatType {
 
     pub fn make_value(&self) -> FloatValue {
         FloatValue {
-            value: self.minimum.unwrap_or(0.0)
+            value: self.minimum.unwrap_or(0.0),
         }
     }
 }
@@ -151,7 +147,7 @@ pub struct FloatRangeType {
     pub step: f32,
 
     #[serde(default = "default_precision")]
-    pub precision: i32
+    pub precision: i32,
 }
 
 pub type FloatRangeValue = RangeValue<f32>;
@@ -159,10 +155,12 @@ pub type FloatRangeValue = RangeValue<f32>;
 impl FloatRangeType {
     pub fn validate(
         &self,
-        FloatRangeValue { low, high }: FloatRangeValue
+        FloatRangeValue { low, high }: FloatRangeValue,
     ) -> Result<FloatRangeValue, FloatRangeValue> {
         match (&self.minimum, &self.maximum) {
-            (Some(min), Some(max)) if low >= *min && low < high && high <= *max => Ok(FloatRangeValue { low, high }),
+            (Some(min), Some(max)) if low >= *min && low < high && high <= *max => {
+                Ok(FloatRangeValue { low, high })
+            }
             (Some(min), None) if low >= *min && low < high => Ok(FloatRangeValue { low, high }),
             (None, Some(max)) if low < high && high <= *max => Ok(FloatRangeValue { low, high }),
             (None, None) if low < high => Ok(FloatRangeValue { low, high }),
@@ -178,7 +176,7 @@ impl FloatRangeType {
             },
             (Some(min), None) => FloatRangeValue {
                 low: *min,
-                high: *min + 10.0
+                high: *min + 10.0,
             },
             (None, Some(max)) => FloatRangeValue {
                 low: *max - 10.0,
@@ -198,17 +196,12 @@ pub struct TimeType {}
 pub type TimeValue = SimpleValue<DateTime<Utc>>;
 
 impl TimeType {
-    pub fn validate(
-        &self,
-        TimeValue { value }: TimeValue
-    ) -> Result<TimeValue, TimeValue> {
+    pub fn validate(&self, TimeValue { value }: TimeValue) -> Result<TimeValue, TimeValue> {
         Ok(TimeValue { value })
     }
 
     pub fn make_value(&self) -> TimeValue {
-        TimeValue {
-            value: Utc::now(),
-        }
+        TimeValue { value: Utc::now() }
     }
 }
 
@@ -293,7 +286,11 @@ impl From<TimeRangeType> for Type {
 }
 
 impl pg_types::ToSql for Type {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let wrapper: pg_types::Json<&Self> = pg_types::Json(self);
 
         wrapper.to_sql(ty, w)
@@ -369,13 +366,17 @@ impl TryFrom<Value> for IntegerValue {
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
             Value::Integer(v) => Ok(v),
-            _ => Err(TypeMissMatch)
+            _ => Err(TypeMissMatch),
         }
     }
 }
 
 impl pg_types::ToSql for IntegerValue {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let value_ref = ValueRef::Integer(self);
         let wrapper: pg_types::Json<&ValueRef<'_>> = pg_types::Json(&value_ref);
 
@@ -401,13 +402,17 @@ impl TryFrom<Value> for IntegerRangeValue {
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
             Value::IntegerRange(v) => Ok(v),
-            _ => Err(TypeMissMatch)
+            _ => Err(TypeMissMatch),
         }
     }
 }
 
 impl pg_types::ToSql for IntegerRangeValue {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let value_ref = ValueRef::IntegerRange(self);
         let wrapper: pg_types::Json<&ValueRef<'_>> = pg_types::Json(&value_ref);
 
@@ -433,13 +438,17 @@ impl TryFrom<Value> for FloatValue {
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
             Value::Float(v) => Ok(v),
-            _ => Err(TypeMissMatch)
+            _ => Err(TypeMissMatch),
         }
     }
 }
 
 impl pg_types::ToSql for FloatValue {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let value_ref = ValueRef::Float(self);
         let wrapper: pg_types::Json<&ValueRef<'_>> = pg_types::Json(&value_ref);
 
@@ -465,13 +474,17 @@ impl TryFrom<Value> for FloatRangeValue {
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
             Value::FloatRange(v) => Ok(v),
-            _ => Err(TypeMissMatch)
+            _ => Err(TypeMissMatch),
         }
     }
 }
 
 impl pg_types::ToSql for FloatRangeValue {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let value_ref = ValueRef::FloatRange(self);
         let wrapper: pg_types::Json<&ValueRef<'_>> = pg_types::Json(&value_ref);
 
@@ -497,13 +510,17 @@ impl TryFrom<Value> for TimeValue {
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
             Value::Time(v) => Ok(v),
-            _ => Err(TypeMissMatch)
+            _ => Err(TypeMissMatch),
         }
     }
 }
 
 impl pg_types::ToSql for TimeValue {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let value_ref = ValueRef::Time(self);
         let wrapper: pg_types::Json<&ValueRef<'_>> = pg_types::Json(&value_ref);
 
@@ -529,13 +546,17 @@ impl TryFrom<Value> for TimeRangeValue {
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
             Value::TimeRange(v) => Ok(v),
-            _ => Err(TypeMissMatch)
+            _ => Err(TypeMissMatch),
         }
     }
 }
 
 impl pg_types::ToSql for TimeRangeValue {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let value_ref = ValueRef::TimeRange(self);
         let wrapper: pg_types::Json<&ValueRef<'_>> = pg_types::Json(&value_ref);
 
@@ -550,7 +571,11 @@ impl pg_types::ToSql for TimeRangeValue {
 }
 
 impl pg_types::ToSql for Value {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let wrapper: pg_types::Json<&Self> = pg_types::Json(self);
 
         wrapper.to_sql(ty, w)
@@ -581,13 +606,15 @@ pub async fn retrieve_known_entry_ids(
 ) -> Result<HashSet<CustomFieldId>, PgError> {
     let params: db::ParamsArray<'_, 1> = [entries_id];
 
-    let stream = conn.query_raw(
-        "\
+    let stream = conn
+        .query_raw(
+            "\
         select custom_field_entries.custom_fields_id \
         from custom_field_entries \
         where custom_field_entries.entries_id = $1",
-        params
-    ).await?;
+            params,
+        )
+        .await?;
 
     futures::pin_mut!(stream);
 
@@ -606,7 +633,7 @@ pub async fn retrieve_known_entry_ids(
 mod test {
     use super::*;
 
-    use chrono::{Utc, Duration};
+    use chrono::{Duration, Utc};
 
     const INT: IntegerType = IntegerType {
         minimum: Some(1),
@@ -692,12 +719,10 @@ mod test {
         precision: 2,
     };
 
-    const TIME: TimeType = TimeType {
-        as_12hr: false
-    };
+    const TIME: TimeType = TimeType { as_12hr: false };
     const TIME_RANGE: TimeRangeType = TimeRangeType {
         show_diff: false,
-        as_12hr: false
+        as_12hr: false,
     };
 
     #[test]
@@ -760,8 +785,14 @@ mod test {
     #[test]
     fn integer_range_low() {
         let given = IntegerRangeValue { low: 3, high: 7 };
-        let given_low = IntegerRangeValue { low: 1, high: i32::MAX };
-        let given_high = IntegerRangeValue { low: 3, high: i32::MAX };
+        let given_low = IntegerRangeValue {
+            low: 1,
+            high: i32::MAX,
+        };
+        let given_high = IntegerRangeValue {
+            low: 3,
+            high: i32::MAX,
+        };
 
         assert!(INT_RANGE_LOW.validate(given).is_ok());
         assert!(INT_RANGE_LOW.validate(given_low).is_ok());
@@ -771,8 +802,14 @@ mod test {
     #[test]
     fn integer_range_high() {
         let given = IntegerRangeValue { low: 3, high: 7 };
-        let given_low = IntegerRangeValue { low: i32::MIN, high: 7 };
-        let given_high = IntegerRangeValue { low: i32::MIN, high: 10 };
+        let given_low = IntegerRangeValue {
+            low: i32::MIN,
+            high: 7,
+        };
+        let given_high = IntegerRangeValue {
+            low: i32::MIN,
+            high: 10,
+        };
 
         assert!(INT_RANGE_HIGH.validate(given).is_ok());
         assert!(INT_RANGE_HIGH.validate(given_low).is_ok());
@@ -782,7 +819,10 @@ mod test {
     #[test]
     fn integer_range_no_limit() {
         let given = IntegerRangeValue { low: 3, high: 7 };
-        let given_bounds = IntegerRangeValue { low: i32::MIN, high: i32::MAX };
+        let given_bounds = IntegerRangeValue {
+            low: i32::MIN,
+            high: i32::MAX,
+        };
 
         assert!(INT_RANGE_NO_LIMIT.validate(given).is_ok());
         assert!(INT_RANGE_NO_LIMIT.validate(given_bounds).is_ok());
@@ -834,10 +874,22 @@ mod test {
 
     #[test]
     fn float_range() {
-        let given = FloatRangeValue { low: 3.0, high: 7.0 };
-        let given_low = FloatRangeValue { low: 1.0, high: 7.0 };
-        let given_high = FloatRangeValue { low: 3.0, high: 10.0 };
-        let given_bounds = FloatRangeValue { low: 1.0, high: 10.0 };
+        let given = FloatRangeValue {
+            low: 3.0,
+            high: 7.0,
+        };
+        let given_low = FloatRangeValue {
+            low: 1.0,
+            high: 7.0,
+        };
+        let given_high = FloatRangeValue {
+            low: 3.0,
+            high: 10.0,
+        };
+        let given_bounds = FloatRangeValue {
+            low: 1.0,
+            high: 10.0,
+        };
 
         assert!(FLOAT_RANGE.validate(given).is_ok());
         assert!(FLOAT_RANGE.validate(given_low).is_ok());
@@ -847,9 +899,18 @@ mod test {
 
     #[test]
     fn float_range_low() {
-        let given = FloatRangeValue { low: 3.0, high: 7.0 };
-        let given_low = FloatRangeValue { low: 1.0, high: f32::MAX };
-        let given_high = FloatRangeValue { low: 3.0, high: f32::MAX };
+        let given = FloatRangeValue {
+            low: 3.0,
+            high: 7.0,
+        };
+        let given_low = FloatRangeValue {
+            low: 1.0,
+            high: f32::MAX,
+        };
+        let given_high = FloatRangeValue {
+            low: 3.0,
+            high: f32::MAX,
+        };
 
         assert!(FLOAT_RANGE_LOW.validate(given).is_ok());
         assert!(FLOAT_RANGE_LOW.validate(given_low).is_ok());
@@ -858,9 +919,18 @@ mod test {
 
     #[test]
     fn float_range_high() {
-        let given = FloatRangeValue { low: 3.0, high: 7.0 };
-        let given_low = FloatRangeValue { low: f32::MIN, high: 7.0 };
-        let given_high = FloatRangeValue { low: f32::MIN, high: 10.0 };
+        let given = FloatRangeValue {
+            low: 3.0,
+            high: 7.0,
+        };
+        let given_low = FloatRangeValue {
+            low: f32::MIN,
+            high: 7.0,
+        };
+        let given_high = FloatRangeValue {
+            low: f32::MIN,
+            high: 10.0,
+        };
 
         assert!(FLOAT_RANGE_HIGH.validate(given).is_ok());
         assert!(FLOAT_RANGE_HIGH.validate(given_low).is_ok());
@@ -869,8 +939,14 @@ mod test {
 
     #[test]
     fn float_range_no_limit() {
-        let given = FloatRangeValue { low: 3.0, high: 7.0 };
-        let given_bounds = FloatRangeValue { low: f32::MIN, high: f32::MAX };
+        let given = FloatRangeValue {
+            low: 3.0,
+            high: 7.0,
+        };
+        let given_bounds = FloatRangeValue {
+            low: f32::MIN,
+            high: f32::MAX,
+        };
 
         assert!(FLOAT_RANGE_NO_LIMIT.validate(given).is_ok());
         assert!(FLOAT_RANGE_NO_LIMIT.validate(given_bounds).is_ok());

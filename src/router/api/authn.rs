@@ -1,18 +1,18 @@
-use axum::http::{StatusCode, HeaderMap};
-use axum::response::{Response, IntoResponse};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use crypto_box::ChaChaBox;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use tj2_lib::sec::pki::{PrivateKey, PrivateKeyError};
 
 use crate::api;
 use crate::db;
 use crate::error;
-use crate::state;
 use crate::router::body;
-use crate::user::client::UserClient;
+use crate::sec::authn::session::{ApiSessionError, ApiSessionOptions};
 use crate::sec::authn::{ApiInitiator, ApiInitiatorError, ApiSession};
-use crate::sec::authn::session::{ApiSessionOptions, ApiSessionError};
 use crate::sec::pki::{Data, EncryptError};
+use crate::state;
+use crate::user::client::UserClient;
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 pub enum AuthnError {
@@ -70,20 +70,13 @@ impl IntoResponse for AuthnError {
         error::log_prefix_error("error response", &self);
 
         match &self {
-            Self::ClientChallenge |
-            Self::InvalidData => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self),
-            ).into_response(),
-            Self::DataNotFound |
-            Self::UserNotFound |
-            Self::SessionNotFound |
-            Self::KeyNotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self)
-            ).into_response(),
-            _ => StatusCode::INTERNAL_SERVER_ERROR
-                .into_response(),
+            Self::ClientChallenge | Self::InvalidData => {
+                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
+            }
+            Self::DataNotFound | Self::UserNotFound | Self::SessionNotFound | Self::KeyNotFound => {
+                (StatusCode::NOT_FOUND, body::Json(self)).into_response()
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
 }
@@ -93,7 +86,7 @@ pub async fn post(
     body::Json(api::authn::GetAuthn {
         public_key,
         challenge: client_challenge,
-    }): body::Json<api::authn::GetAuthn>
+    }): body::Json<api::authn::GetAuthn>,
 ) -> Result<api::authn::AuthnChallenge, AuthnError> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
@@ -111,7 +104,9 @@ pub async fn post(
 
     // attempt to decrypt the provided challenge from the client to verify
     // that this is the peer they expect
-    let result = client_challenge.into_data(&user_box).map_err(|_| AuthnError::ClientChallenge)?;
+    let result = client_challenge
+        .into_data(&user_box)
+        .map_err(|_| AuthnError::ClientChallenge)?;
 
     // generate challenge for the client to verify
     let data = Data::new()?;
@@ -121,7 +116,11 @@ pub async fn post(
     let options = ApiSessionOptions::new(client.users_id, client.id);
     let session = ApiSession::create(&transaction, options).await?;
 
-    state.security().authn.api.insert(session.token.clone(), data);
+    state
+        .security()
+        .authn
+        .api
+        .insert(session.token.clone(), data);
 
     transaction.commit().await?;
 
@@ -135,9 +134,7 @@ pub async fn post(
 pub async fn patch(
     state: state::SharedState,
     headers: HeaderMap,
-    body::Json(api::authn::AuthnResponse {
-        result
-    }): body::Json<api::authn::AuthnResponse>
+    body::Json(api::authn::AuthnResponse { result }): body::Json<api::authn::AuthnResponse>,
 ) -> Result<StatusCode, AuthnError> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
@@ -149,9 +146,11 @@ pub async fn patch(
             ApiInitiatorError::NotFound => return Err(AuthnError::SessionNotFound),
             ApiInitiatorError::UserNotFound(_) => return Err(AuthnError::UserNotFound),
             ApiInitiatorError::Expired(_) => return Err(AuthnError::Expired),
-            ApiInitiatorError::InvalidAuthorization => return Err(AuthnError::InvalidAuthorization),
+            ApiInitiatorError::InvalidAuthorization => {
+                return Err(AuthnError::InvalidAuthorization)
+            }
             ApiInitiatorError::DbPg(err) => return Err(err.into()),
-        }
+        },
     };
 
     let security = state.security();

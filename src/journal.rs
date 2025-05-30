@@ -3,24 +3,17 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use bytes::BytesMut;
-use chrono::{NaiveDate, DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use futures::{Stream, StreamExt};
 use postgres_types as pg_types;
 use serde::Serialize;
 use serde_repr::Serialize_repr;
 
-use crate::db::{self, GenericClient, PgError};
 use crate::db::ids::{
-    EntryId,
-    EntryUid,
-    FileEntryId,
-    FileEntryUid,
-    JournalId,
-    JournalUid,
-    UserId,
-    CustomFieldId,
-    CustomFieldUid,
+    CustomFieldId, CustomFieldUid, EntryId, EntryUid, FileEntryId, FileEntryUid, JournalId,
+    JournalUid, UserId,
 };
+use crate::db::{self, GenericClient, PgError};
 use crate::error::BoxDynError;
 use crate::sec::Hash;
 
@@ -80,7 +73,7 @@ impl JournalCreateOptions {
     /// assigns a description to the journal
     pub fn description<T>(&mut self, value: T)
     where
-        T: Into<String>
+        T: Into<String>,
     {
         self.description = Some(value.into());
     }
@@ -116,7 +109,7 @@ pub struct Journal {
 
 pub enum RetrieveQuery<'a> {
     IdAndUser((&'a JournalId, &'a UserId)),
-    Uid(&'a JournalUid)
+    Uid(&'a JournalUid),
 }
 
 impl<'a> From<(&'a JournalId, &'a UserId)> for RetrieveQuery<'a> {
@@ -133,9 +126,12 @@ impl<'a> From<&'a JournalUid> for RetrieveQuery<'a> {
 
 impl Journal {
     /// attempts to retrieve a journal with the given [`RetrieveQuery`]
-    pub async fn retrieve<'a, T>(conn: &impl GenericClient, given: T) -> Result<Option<Self>, PgError>
+    pub async fn retrieve<'a, T>(
+        conn: &impl GenericClient,
+        given: T,
+    ) -> Result<Option<Self>, PgError>
     where
-        T: Into<RetrieveQuery<'a>>
+        T: Into<RetrieveQuery<'a>>,
     {
         let base = "\
             select journals.id, \
@@ -166,7 +162,8 @@ impl Journal {
                 conn.query_opt(&query, &[journals_uid]).await
             }
         }
-            .map(|maybe| maybe.map(|row| Self {
+        .map(|maybe| {
+            maybe.map(|row| Self {
                 id: row.get(0),
                 uid: row.get(1),
                 users_id: row.get(2),
@@ -174,7 +171,8 @@ impl Journal {
                 description: row.get(4),
                 created: row.get(5),
                 updated: row.get(6),
-            }))
+            })
+        })
     }
 
     /// attempts to retrieve the journal with the specified [`JournalId`] with
@@ -182,7 +180,7 @@ impl Journal {
     pub async fn retrieve_id(
         conn: &impl GenericClient,
         journals_id: &JournalId,
-        users_id: &UserId
+        users_id: &UserId,
     ) -> Result<Option<Self>, PgError> {
         Self::retrieve(conn, (journals_id, users_id)).await
     }
@@ -190,7 +188,7 @@ impl Journal {
     /// creates the [`JournalCreateOptions`] with the given [`UserId`] and name
     pub fn create_options<N>(users_id: UserId, name: N) -> JournalCreateOptions
     where
-        N: Into<String>
+        N: Into<String>,
     {
         JournalCreateOptions {
             users_id,
@@ -201,26 +199,25 @@ impl Journal {
     }
 
     /// attempts to create a new [`Journal`] with the given options
-    pub async fn create(conn: &impl GenericClient, options: JournalCreateOptions) -> Result<Self, JournalCreateError> {
+    pub async fn create(
+        conn: &impl GenericClient,
+        options: JournalCreateOptions,
+    ) -> Result<Self, JournalCreateError> {
         let uid = options.uid.unwrap_or(JournalUid::gen());
         let created = Utc::now();
         let users_id = options.users_id;
         let name = options.name;
         let description = options.description;
 
-        let result = conn.query_one(
-            "\
+        let result = conn
+            .query_one(
+                "\
             insert into journals (uid, users_id, name, description, created) values \
             ($1, $2, $3, $4, $5) \
             returning id",
-            &[
-                &uid,
-                &users_id,
-                &name,
-                &description,
-                &created
-            ]
-        ).await;
+                &[&uid, &users_id, &name, &description, &created],
+            )
+            .await;
 
         match result {
             Ok(row) => Ok(Self {
@@ -230,22 +227,24 @@ impl Journal {
                 name,
                 description,
                 created,
-                updated: None
+                updated: None,
             }),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "journals_users_id_name_key" => Err(JournalCreateError::NameExists),
-                        "journals_uid_key" => Err(JournalCreateError::UidExists),
-                        _ => Err(JournalCreateError::Db(err))
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "journals_users_id_name_key" => Err(JournalCreateError::NameExists),
+                            "journals_uid_key" => Err(JournalCreateError::UidExists),
+                            _ => Err(JournalCreateError::Db(err)),
+                        },
+                        db::ErrorKind::ForeignKey(constraint) => match constraint {
+                            "journals_users_id_fkey" => Err(JournalCreateError::UserNotFound),
+                            _ => Err(JournalCreateError::Db(err)),
+                        },
                     }
-                    db::ErrorKind::ForeignKey(constraint) => match constraint {
-                        "journals_users_id_fkey" => Err(JournalCreateError::UserNotFound),
-                        _ => Err(JournalCreateError::Db(err))
-                    }
+                } else {
+                    Err(JournalCreateError::Db(err))
                 }
-            } else {
-                Err(JournalCreateError::Db(err))
             }
         }
     }
@@ -255,34 +254,38 @@ impl Journal {
     /// only the fields updated, name, and description will be sent to the
     /// database
     pub async fn update(&self, conn: &impl GenericClient) -> Result<(), JournalUpdateError> {
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             update journals \
             set updated = $2, \
                 name = $3, \
                 description = $4 \
             where id = $1",
-            &[&self.id, &self.updated, &self.name, &self.description]
-        ).await;
+                &[&self.id, &self.updated, &self.name, &self.description],
+            )
+            .await;
 
         match result {
             Ok(result) => match result {
                 1 => Ok(()),
                 0 => Err(JournalUpdateError::NotFound),
                 _ => unreachable!(),
-            }
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "journals_users_id_name_key" => Err(JournalUpdateError::NameExists),
-                        _ => Err(JournalUpdateError::Db(err)),
+            },
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "journals_users_id_name_key" => Err(JournalUpdateError::NameExists),
+                            _ => Err(JournalUpdateError::Db(err)),
+                        },
+                        // this should not happen as we are not updating foreign
+                        // key fields
+                        db::ErrorKind::ForeignKey(_) => unreachable!(),
                     }
-                    // this should not happen as we are not updating foreign
-                    // key fields
-                    db::ErrorKind::ForeignKey(_) => unreachable!()
+                } else {
+                    Err(JournalUpdateError::Db(err))
                 }
-            } else {
-                Err(JournalUpdateError::Db(err))
             }
         }
     }
@@ -303,7 +306,7 @@ pub enum EntryCreateError {
     UidExists,
 
     #[error(transparent)]
-    Db(#[from] db::PgError)
+    Db(#[from] db::PgError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -315,7 +318,7 @@ pub enum EntryUpdateError {
     NotFound,
 
     #[error(transparent)]
-    Db(#[from] db::PgError)
+    Db(#[from] db::PgError),
 }
 
 pub struct EntryCreateOptions {
@@ -361,7 +364,7 @@ impl Entry {
     pub fn create_options(
         journals_id: JournalId,
         users_id: UserId,
-        date: NaiveDate
+        date: NaiveDate,
     ) -> EntryCreateOptions {
         EntryCreateOptions {
             journals_id,
@@ -374,7 +377,7 @@ impl Entry {
 
     pub async fn create(
         conn: &impl GenericClient,
-        options: EntryCreateOptions
+        options: EntryCreateOptions,
     ) -> Result<Self, EntryCreateError> {
         let uid = EntryUid::gen();
         let created = Utc::now();
@@ -383,16 +386,26 @@ impl Entry {
             users_id,
             date,
             title,
-            contents
+            contents,
         } = options;
 
-        let result = conn.query_one(
-            "\
+        let result = conn
+            .query_one(
+                "\
             insert into entries (uid, journals_id, users_id, entry_date, title, contents, created) \
             values ($1, $2, $3, $4, $5, $6, $7) \
             returning id",
-            &[&uid, &journals_id, &users_id, &date, &title, &contents, &created]
-        ).await;
+                &[
+                    &uid,
+                    &journals_id,
+                    &users_id,
+                    &date,
+                    &title,
+                    &contents,
+                    &created,
+                ],
+            )
+            .await;
 
         match result {
             Ok(row) => Ok(Self {
@@ -406,21 +419,25 @@ impl Entry {
                 created,
                 updated: None,
             }),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "entries_journals_id_entry_date_key" => Err(EntryCreateError::DateExists),
-                        "entries_uid_key" => Err(EntryCreateError::UidExists),
-                        _ => Err(EntryCreateError::Db(err))
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "entries_journals_id_entry_date_key" => {
+                                Err(EntryCreateError::DateExists)
+                            }
+                            "entries_uid_key" => Err(EntryCreateError::UidExists),
+                            _ => Err(EntryCreateError::Db(err)),
+                        },
+                        db::ErrorKind::ForeignKey(constraint) => match constraint {
+                            "entries_journals_id_fkey" => Err(EntryCreateError::JournalNotFound),
+                            "entries_users_id_fkey" => Err(EntryCreateError::UserNotFound),
+                            _ => Err(EntryCreateError::Db(err)),
+                        },
                     }
-                    db::ErrorKind::ForeignKey(constraint) => match constraint {
-                        "entries_journals_id_fkey" => Err(EntryCreateError::JournalNotFound),
-                        "entries_users_id_fkey" => Err(EntryCreateError::UserNotFound),
-                        _ => Err(EntryCreateError::Db(err))
-                    }
+                } else {
+                    Err(EntryCreateError::Db(err))
                 }
-            } else {
-                Err(EntryCreateError::Db(err))
             }
         }
     }
@@ -448,10 +465,11 @@ impl Entry {
             where entries.journals_id = $1 and \
                   entries.id = $3 and \
                   entries.users_id = $2",
-            &[journals_id, users_id, entries_id]
+            &[journals_id, users_id, entries_id],
         )
-            .await
-            .map(|maybe| maybe.map(|found| Self {
+        .await
+        .map(|maybe| {
+            maybe.map(|found| Self {
                 id: found.get(0),
                 uid: found.get(1),
                 journals_id: found.get(2),
@@ -461,37 +479,50 @@ impl Entry {
                 contents: found.get(6),
                 created: found.get(7),
                 updated: found.get(8),
-            }))
+            })
+        })
     }
 
     pub async fn update(&mut self, conn: &impl GenericClient) -> Result<(), EntryUpdateError> {
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             update entries \
             set entry_date = $2, \
                 title = $3, \
                 contents = $4, \
                 updated = $5 \
             where id = $1",
-            &[&self.id, &self.date, &self.title, &self.contents, &self.updated]
-        ).await;
+                &[
+                    &self.id,
+                    &self.date,
+                    &self.title,
+                    &self.contents,
+                    &self.updated,
+                ],
+            )
+            .await;
 
         match result {
             Ok(count) => match count {
                 1 => Ok(()),
                 0 => Err(EntryUpdateError::NotFound),
-                _ => unreachable!()
-            }
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "entries_journals_id_entry_date_key" => Err(EntryUpdateError::DateExists),
-                        _ => Err(EntryUpdateError::Db(err))
+                _ => unreachable!(),
+            },
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "entries_journals_id_entry_date_key" => {
+                                Err(EntryUpdateError::DateExists)
+                            }
+                            _ => Err(EntryUpdateError::Db(err)),
+                        },
+                        _ => Err(EntryUpdateError::Db(err)),
                     }
-                    _ => Err(EntryUpdateError::Db(err))
+                } else {
+                    Err(EntryUpdateError::Db(err))
                 }
-            } else {
-                Err(EntryUpdateError::Db(err))
             }
         }
     }
@@ -547,7 +578,11 @@ impl TryFrom<i16> for FileStatus {
 }
 
 impl pg_types::ToSql for FileStatus {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         (*self as i16).to_sql(ty, w)
     }
 
@@ -564,7 +599,9 @@ impl<'a> pg_types::FromSql<'a> for FileStatus {
 
         match value.try_into() {
             Ok(rep) => Ok(rep),
-            Err(_err) => Err("invalid sql value for FileStatus. expected smallint with valid status".into())
+            Err(_err) => {
+                Err("invalid sql value for FileStatus. expected smallint with valid status".into())
+            }
         }
     }
 
@@ -624,12 +661,13 @@ impl<'a> From<&'a FileEntryUid> for RetrieveFileEntryQuery<'a> {
 impl FileEntry {
     pub async fn retrieve_entry_stream(
         conn: &impl GenericClient,
-        entries_id: &EntryId
+        entries_id: &EntryId,
     ) -> Result<impl Stream<Item = Result<Self, PgError>>, PgError> {
         let params: db::ParamsArray<'_, 1> = [entries_id];
 
-        Ok(conn.query_raw(
-            "\
+        Ok(conn
+            .query_raw(
+                "\
             select file_entries.id, \
                    file_entries.uid, \
                    file_entries.entries_id, \
@@ -644,40 +682,42 @@ impl FileEntry {
                    file_entries.updated \
             from file_entries \
             where file_entries.entries_id = $1",
-            params
-        )
+                params,
+            )
             .await?
-            .map(|result| result.map(|record| match record.get::<usize, FileStatus>(3) {
-                FileStatus::Requested => Self::Requested(RequestedFile {
-                    id: record.get(0),
-                    uid: record.get(1),
-                    entries_id: record.get(2),
-                    name: record.get(4),
-                    created: record.get(10),
-                    updated: record.get(11),
-                }),
-                FileStatus::Received => Self::Received(ReceivedFile {
-                    id: record.get(0),
-                    uid: record.get(1),
-                    entries_id: record.get(2),
-                    name: record.get(4),
-                    mime_type: record.get(5),
-                    mime_subtype: record.get(6),
-                    mime_param: record.get(7),
-                    size: record.get(8),
-                    hash: record.get(9),
-                    created: record.get(10),
-                    updated: record.get(11),
-                }),
-            })))
+            .map(|result| {
+                result.map(|record| match record.get::<usize, FileStatus>(3) {
+                    FileStatus::Requested => Self::Requested(RequestedFile {
+                        id: record.get(0),
+                        uid: record.get(1),
+                        entries_id: record.get(2),
+                        name: record.get(4),
+                        created: record.get(10),
+                        updated: record.get(11),
+                    }),
+                    FileStatus::Received => Self::Received(ReceivedFile {
+                        id: record.get(0),
+                        uid: record.get(1),
+                        entries_id: record.get(2),
+                        name: record.get(4),
+                        mime_type: record.get(5),
+                        mime_subtype: record.get(6),
+                        mime_param: record.get(7),
+                        size: record.get(8),
+                        hash: record.get(9),
+                        created: record.get(10),
+                        updated: record.get(11),
+                    }),
+                })
+            }))
     }
 
     pub async fn retrieve<'a, T>(
         conn: &impl GenericClient,
-        given: T
+        given: T,
     ) -> Result<Option<Self>, PgError>
     where
-        T: Into<RetrieveFileEntryQuery<'a>>
+        T: Into<RetrieveFileEntryQuery<'a>>,
     {
         let base = "\
             select file_entries.id, \
@@ -711,29 +751,31 @@ impl FileEntry {
             }
         };
 
-        Ok(result.map(|record| match record.get::<usize, FileStatus>(3) {
-            FileStatus::Requested => Self::Requested(RequestedFile {
-                id: record.get(0),
-                uid: record.get(1),
-                entries_id: record.get(2),
-                name: record.get(4),
-                created: record.get(10),
-                updated: record.get(11),
+        Ok(
+            result.map(|record| match record.get::<usize, FileStatus>(3) {
+                FileStatus::Requested => Self::Requested(RequestedFile {
+                    id: record.get(0),
+                    uid: record.get(1),
+                    entries_id: record.get(2),
+                    name: record.get(4),
+                    created: record.get(10),
+                    updated: record.get(11),
+                }),
+                FileStatus::Received => Self::Received(ReceivedFile {
+                    id: record.get(0),
+                    uid: record.get(1),
+                    entries_id: record.get(2),
+                    name: record.get(4),
+                    mime_type: record.get(5),
+                    mime_subtype: record.get(6),
+                    mime_param: record.get(7),
+                    size: record.get(8),
+                    hash: record.get(9),
+                    created: record.get(10),
+                    updated: record.get(11),
+                }),
             }),
-            FileStatus::Received => Self::Received(ReceivedFile {
-                id: record.get(0),
-                uid: record.get(1),
-                entries_id: record.get(2),
-                name: record.get(4),
-                mime_type: record.get(5),
-                mime_subtype: record.get(6),
-                mime_param: record.get(7),
-                size: record.get(8),
-                hash: record.get(9),
-                created: record.get(10),
-                updated: record.get(11),
-            }),
-        }))
+        )
     }
 
     pub async fn retrieve_file_entry(
@@ -746,7 +788,7 @@ impl FileEntry {
 
     pub async fn retrieve_file_entries(
         conn: &impl GenericClient,
-        entries_id: &EntryId
+        entries_id: &EntryId,
     ) -> Result<Vec<Self>, PgError> {
         let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
 
@@ -806,14 +848,14 @@ impl FileEntry {
     pub fn into_received(self) -> Result<ReceivedFile, Self> {
         match self {
             Self::Received(rec) => Ok(rec),
-            _ => Err(self)
+            _ => Err(self),
         }
     }
 
     pub fn into_requested(self) -> Result<RequestedFile, Self> {
         match self {
             Self::Requested(req) => Ok(req),
-            _ => Err(self)
+            _ => Err(self),
         }
     }
 }
@@ -837,16 +879,13 @@ impl RequestedFile {
         }: PromoteOptions,
     ) -> Result<ReceivedFile, (Self, PgError)> {
         let status = FileStatus::Received;
-        let mime_type = mime.type_()
-            .as_str()
-            .to_owned();
-        let mime_subtype = mime.subtype()
-            .as_str()
-            .to_owned();
+        let mime_type = mime.type_().as_str().to_owned();
+        let mime_subtype = mime.subtype().as_str().to_owned();
         let mime_param = get_mime_param(mime.params());
 
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             update file_entries \
             set name = $2, \
                 mime_type = $3, \
@@ -857,18 +896,19 @@ impl RequestedFile {
                 created = $8, \
                 status = $9 \
             where id = $1",
-            &[
-                &self.id,
-                &self.name,
-                &mime_type,
-                &mime_subtype,
-                &mime_param,
-                &size,
-                &hash,
-                &created,
-                &status
-            ]
-        ).await;
+                &[
+                    &self.id,
+                    &self.name,
+                    &mime_type,
+                    &mime_subtype,
+                    &mime_param,
+                    &size,
+                    &hash,
+                    &created,
+                    &status,
+                ],
+            )
+            .await;
 
         match result {
             Ok(_) => Ok(ReceivedFile {
@@ -882,9 +922,9 @@ impl RequestedFile {
                 size,
                 hash,
                 created,
-                updated: None
+                updated: None,
             }),
-            Err(err) => Err((self, err))
+            Err(err) => Err((self, err)),
         }
     }
 }
@@ -897,13 +937,13 @@ impl ReceivedFile {
             format!("{}/{}", self.mime_type, self.mime_subtype)
         };
 
-        mime::Mime::from_str(&parse)
-            .expect("failed to parse MIME from database")
+        mime::Mime::from_str(&parse).expect("failed to parse MIME from database")
     }
 }
 
 fn get_mime_param(params: mime::Params<'_>) -> Option<String> {
-    let collected = params.map(|(key, value)| format!("{key}={value}"))
+    let collected = params
+        .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<String>>()
         .join(";");
 
@@ -955,10 +995,10 @@ impl CustomField {
     pub fn create_options<N>(
         journals_id: JournalId,
         name: N,
-        config: custom_field::Type
+        config: custom_field::Type,
     ) -> CreateCustomFieldOptions
     where
-        N: Into<String>
+        N: Into<String>,
     {
         CreateCustomFieldOptions {
             journals_id,
@@ -972,7 +1012,7 @@ impl CustomField {
 
     pub async fn create(
         conn: &impl GenericClient,
-        options: CreateCustomFieldOptions
+        options: CreateCustomFieldOptions,
     ) -> Result<Self, CreateCustomFieldError> {
         let CreateCustomFieldOptions {
             journals_id,
@@ -985,8 +1025,9 @@ impl CustomField {
         let uid = uid.unwrap_or(CustomFieldUid::gen());
         let created = Utc::now();
 
-        let result = conn.query_one(
-            "\
+        let result = conn
+            .query_one(
+                "\
             insert into custom_fields (\
                 uid, \
                 journals_id, \
@@ -997,8 +1038,17 @@ impl CustomField {
                 created \
             ) values ($1, $2, $3, $4, $5, $6, $7) \
             returning id",
-            &[&uid, &journals_id, &name, &order, &config, &description, &created]
-        ).await;
+                &[
+                    &uid,
+                    &journals_id,
+                    &name,
+                    &order,
+                    &config,
+                    &description,
+                    &created,
+                ],
+            )
+            .await;
 
         match result {
             Ok(row) => Ok(Self {
@@ -1012,23 +1062,26 @@ impl CustomField {
                 created,
                 updated: None,
             }),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => match constraint {
-                        "custom_fields_journals_id_name_key" =>
-                            Err(CreateCustomFieldError::NameExists),
-                        "custom_fields_uid_key" =>
-                            Err(CreateCustomFieldError::UidExists),
-                        _ => Err(CreateCustomFieldError::Db(err)),
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "custom_fields_journals_id_name_key" => {
+                                Err(CreateCustomFieldError::NameExists)
+                            }
+                            "custom_fields_uid_key" => Err(CreateCustomFieldError::UidExists),
+                            _ => Err(CreateCustomFieldError::Db(err)),
+                        },
+                        db::ErrorKind::ForeignKey(constraint) => match constraint {
+                            "custom_fields_journals_id_fkey" => {
+                                Err(CreateCustomFieldError::JournalNotFound)
+                            }
+                            _ => Err(CreateCustomFieldError::Db(err)),
+                        },
                     }
-                    db::ErrorKind::ForeignKey(constraint) => match constraint {
-                        "custom_fields_journals_id_fkey" =>
-                            Err(CreateCustomFieldError::JournalNotFound),
-                        _ => Err(CreateCustomFieldError::Db(err))
-                    }
+                } else {
+                    Err(CreateCustomFieldError::Db(err))
                 }
-            } else {
-                Err(CreateCustomFieldError::Db(err))
             }
         }
     }
@@ -1039,8 +1092,9 @@ impl CustomField {
     ) -> Result<impl Stream<Item = Result<Self, PgError>>, PgError> {
         let params: db::ParamsArray<'_, 1> = [journals_id];
 
-        Ok(conn.query_raw(
-            "\
+        Ok(conn
+            .query_raw(
+                "\
             select custom_fields.id, \
                    custom_fields.uid, \
                    custom_fields.journals_id, \
@@ -1054,20 +1108,22 @@ impl CustomField {
             where custom_fields.journals_id = $1 \
             order by custom_fields.\"order\" desc, \
                      custom_fields.name",
-            params
-        )
+                params,
+            )
             .await?
-            .map(|stream| stream.map(|row| Self {
-                id: row.get(0),
-                uid: row.get(1),
-                journals_id: row.get(2),
-                name: row.get(3),
-                order: row.get(4),
-                config: row.get(5),
-                description: row.get(6),
-                created: row.get(7),
-                updated: row.get(8),
-            })))
+            .map(|stream| {
+                stream.map(|row| Self {
+                    id: row.get(0),
+                    uid: row.get(1),
+                    journals_id: row.get(2),
+                    name: row.get(3),
+                    order: row.get(4),
+                    config: row.get(5),
+                    description: row.get(6),
+                    created: row.get(7),
+                    updated: row.get(8),
+                })
+            }))
     }
 
     pub async fn retrieve_journal_map(
@@ -1119,7 +1175,7 @@ impl JournalDir {
         let path = format!("journals/{journals_id}");
 
         Self {
-            root: root.join(path)
+            root: root.join(path),
         }
     }
 

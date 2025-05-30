@@ -1,39 +1,25 @@
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 use axum::extract::Path;
-use axum::http::{StatusCode, Uri, HeaderMap};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use chrono::{NaiveDate, Utc, DateTime};
+use chrono::{DateTime, NaiveDate, Utc};
 use futures::{Stream, StreamExt};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::state;
 use crate::db;
-use crate::db::ids::{
-    EntryId,
-    EntryUid,
-    FileEntryId,
-    FileEntryUid,
-    JournalId,
-    CustomFieldId
-};
+use crate::db::ids::{CustomFieldId, EntryId, EntryUid, FileEntryId, FileEntryUid, JournalId};
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
 use crate::journal::{
-    custom_field,
-    Journal,
-    Entry,
-    JournalDir,
-    CustomField,
-    EntryCreateError,
-    FileStatus,
-    FileEntry,
+    custom_field, CustomField, Entry, EntryCreateError, FileEntry, FileStatus, Journal, JournalDir,
     ReceivedFile,
 };
 use crate::router::body;
 use crate::router::macros;
-use crate::sec::authz::{Scope, Ability};
+use crate::sec::authz::{Ability, Scope};
+use crate::state;
 
 mod auth;
 mod search;
@@ -96,8 +82,9 @@ impl EntryForm {
         journals_id: &JournalId,
         entries_id: &EntryId,
     ) -> Result<Option<Self>, error::Error> {
-        let maybe = conn.query_opt(
-            "\
+        let maybe = conn
+            .query_opt(
+                "\
             select entries.id, \
                    entries.uid, \
                    entries.entry_date, \
@@ -106,8 +93,8 @@ impl EntryForm {
             from entries \
             where entries.journals_id = $1 and \
                   entries.id = $2",
-            &[journals_id, entries_id]
-        )
+                &[journals_id, entries_id],
+            )
             .await
             .context("failed to retrieve entry")?;
 
@@ -147,28 +134,32 @@ pub struct EntryTagForm {
 impl EntryTagForm {
     pub async fn retrieve_entry_stream(
         conn: &impl db::GenericClient,
-        entries_id: &EntryId
+        entries_id: &EntryId,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
         let params: db::ParamsArray<'_, 1> = [entries_id];
 
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select entry_tags.key, \
                    entry_tags.value \
             from entry_tags \
             where entry_tags.entries_id = $1",
-            params
-        ).await?;
+                params,
+            )
+            .await?;
 
-        Ok(stream.map(|result| result.map(|record| Self {
-            key: record.get(0),
-            value: record.get(1),
-        })))
+        Ok(stream.map(|result| {
+            result.map(|record| Self {
+                key: record.get(0),
+                value: record.get(1),
+            })
+        }))
     }
 
     pub async fn retrieve_entry(
         conn: &impl db::GenericClient,
-        entries_id: &EntryId
+        entries_id: &EntryId,
     ) -> Result<Vec<Self>, error::Error> {
         let stream = Self::retrieve_entry_stream(conn, entries_id)
             .await
@@ -257,15 +248,14 @@ impl EntryFileForm {
 
     fn id(&self) -> &FileEntryId {
         match self {
-            Self::Requested { _id, .. } |
-            Self::Received { _id, .. } => _id,
+            Self::Requested { _id, .. } | Self::Received { _id, .. } => _id,
         }
     }
 
     fn is_received(&self) -> bool {
         match self {
             Self::Received { .. } => true,
-            _ => false
+            _ => false,
         }
     }
 }
@@ -333,8 +323,9 @@ impl EntryCustomFieldForm {
         journals_id: &JournalId,
     ) -> Result<Vec<Self>, error::Error> {
         let params: db::ParamsArray<'_, 1> = [journals_id];
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select custom_fields.id, \
                    custom_fields.name, \
                    custom_fields.config, \
@@ -344,8 +335,8 @@ impl EntryCustomFieldForm {
             where custom_fields.journals_id = $1 \
             order by custom_fields.\"order\" desc,
                      custom_fields.name",
-            params
-        )
+                params,
+            )
             .await
             .context("failed to retrieve custom fields for entry")?;
 
@@ -373,7 +364,7 @@ impl EntryCustomFieldForm {
                         name,
                         description,
                         config,
-                        value
+                        value,
                     })
                 }
                 custom_field::Type::IntegerRange(config) => {
@@ -453,12 +444,15 @@ impl EntryCustomFieldForm {
         name: String,
         description: Option<String>,
         ty: custom_field::Type,
-        v: Option<custom_field::Value>
+        v: Option<custom_field::Value>,
     ) -> Self {
         match ty {
             custom_field::Type::Integer(config) => {
-                let mapped = v.map(|exists| exists.try_into()
-                    .expect("failed to convert custom field entry into integer value"));
+                let mapped = v.map(|exists| {
+                    exists
+                        .try_into()
+                        .expect("failed to convert custom field entry into integer value")
+                });
 
                 let (enabled, value) = if let Some(value) = mapped {
                     (true, value)
@@ -477,8 +471,11 @@ impl EntryCustomFieldForm {
                 })
             }
             custom_field::Type::IntegerRange(config) => {
-                let mapped = v.map(|exists| exists.try_into()
-                    .expect("failed to convert custom field entry into integer range value"));
+                let mapped = v.map(|exists| {
+                    exists
+                        .try_into()
+                        .expect("failed to convert custom field entry into integer range value")
+                });
 
                 let (enabled, value) = if let Some(value) = mapped {
                     (true, value)
@@ -497,8 +494,11 @@ impl EntryCustomFieldForm {
                 })
             }
             custom_field::Type::Float(config) => {
-                let mapped = v.map(|exists| exists.try_into()
-                    .expect("failed to convert custom field entry into float value"));
+                let mapped = v.map(|exists| {
+                    exists
+                        .try_into()
+                        .expect("failed to convert custom field entry into float value")
+                });
 
                 let (enabled, value) = if let Some(value) = mapped {
                     (true, value)
@@ -517,8 +517,11 @@ impl EntryCustomFieldForm {
                 })
             }
             custom_field::Type::FloatRange(config) => {
-                let mapped = v.map(|exists| exists.try_into()
-                    .expect("failed to convert custom field entry into float range value"));
+                let mapped = v.map(|exists| {
+                    exists
+                        .try_into()
+                        .expect("failed to convert custom field entry into float range value")
+                });
 
                 let (enabled, value) = if let Some(value) = mapped {
                     (true, value)
@@ -537,8 +540,11 @@ impl EntryCustomFieldForm {
                 })
             }
             custom_field::Type::Time(config) => {
-                let mapped = v.map(|exists| exists.try_into()
-                    .expect("failed to convert custom field entry into time value"));
+                let mapped = v.map(|exists| {
+                    exists
+                        .try_into()
+                        .expect("failed to convert custom field entry into time value")
+                });
 
                 let (enabled, value) = if let Some(value) = mapped {
                     (true, value)
@@ -557,8 +563,11 @@ impl EntryCustomFieldForm {
                 })
             }
             custom_field::Type::TimeRange(config) => {
-                let mapped = v.map(|exists| exists.try_into()
-                    .expect("failed to convert custom field entry into time range value"));
+                let mapped = v.map(|exists| {
+                    exists
+                        .try_into()
+                        .expect("failed to convert custom field entry into time range value")
+                });
 
                 let (enabled, value) = if let Some(value) = mapped {
                     (true, value)
@@ -585,8 +594,9 @@ impl EntryCustomFieldForm {
         entries_id: &EntryId,
     ) -> Result<impl Stream<Item = Result<Self, error::Error>>, db::PgError> {
         let params: db::ParamsArray<'_, 2> = [journals_id, entries_id];
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select custom_fields.id, \
                    custom_fields.name, \
                    custom_fields.config, \
@@ -600,15 +610,26 @@ impl EntryCustomFieldForm {
             where custom_fields.journals_id = $1 \
             order by custom_fields.\"order\" desc, \
                      custom_fields.name",
-            params
-        ).await?;
+                params,
+            )
+            .await?;
 
-        Ok(stream.map(|try_record| try_record.map(|row| {
-            Self::get_record(row.get(0), row.get(4), row.get(1), row.get(3), row.get(2), row.get(5))
-        }).map_err(|err| error::Error::context_source(
-            "failed to retrieve custom field record",
-            err
-        ))))
+        Ok(stream.map(|try_record| {
+            try_record
+                .map(|row| {
+                    Self::get_record(
+                        row.get(0),
+                        row.get(4),
+                        row.get(1),
+                        row.get(3),
+                        row.get(2),
+                        row.get(5),
+                    )
+                })
+                .map_err(|err| {
+                    error::Error::context_source("failed to retrieve custom field record", err)
+                })
+        }))
     }
 
     pub async fn retrieve_entry(
@@ -636,7 +657,10 @@ pub async fn retrieve_entry(
     state: state::SharedState,
     uri: Uri,
     headers: HeaderMap,
-    Path(MaybeEntryPath { journals_id, entries_id }): Path<MaybeEntryPath>,
+    Path(MaybeEntryPath {
+        journals_id,
+        entries_id,
+    }): Path<MaybeEntryPath>,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
 
@@ -675,7 +699,7 @@ pub async fn retrieve_entry(
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientData {
-    key: String
+    key: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -768,19 +792,11 @@ fn opt_non_empty_str(given: Option<String>) -> Option<String> {
 pub enum CreateEntryResult {
     DateExists,
     JournalNotFound,
-    CustomFieldMismatch {
-        mismatched: Vec<CustomFieldEntry>,
-    },
-    CustomFieldNotFound {
-        ids: Vec<CustomFieldId>,
-    },
-    CustomFieldInvalid {
-        invalid: Vec<CustomFieldEntry>,
-    },
-    CustomFieldDuplicates {
-        ids: Vec<CustomFieldId>,
-    },
-    Created(ResultEntryFull)
+    CustomFieldMismatch { mismatched: Vec<CustomFieldEntry> },
+    CustomFieldNotFound { ids: Vec<CustomFieldId> },
+    CustomFieldInvalid { invalid: Vec<CustomFieldEntry> },
+    CustomFieldDuplicates { ids: Vec<CustomFieldId> },
+    Created(ResultEntryFull),
 }
 
 pub async fn create_entry(
@@ -790,7 +806,8 @@ pub async fn create_entry(
     body::Json(json): body::Json<NewEntryBody>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -804,14 +821,21 @@ pub async fn create_entry(
         let Some(journal) = result else {
             return Ok((
                 StatusCode::NOT_FOUND,
-                body::Json(CreateEntryResult::JournalNotFound)
-            ).into_response());
+                body::Json(CreateEntryResult::JournalNotFound),
+            )
+                .into_response());
         };
 
         journal
     };
 
-    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Create);
+    auth::perm_check!(
+        &transaction,
+        initiator,
+        journal,
+        Scope::Entries,
+        Ability::Create
+    );
 
     let entry = {
         let mut options = Entry::create_options(journal.id, initiator.user.id, json.date);
@@ -821,16 +845,15 @@ pub async fn create_entry(
         match Entry::create(&transaction, options).await {
             Ok(result) => result,
             Err(err) => match err {
-                EntryCreateError::DateExists =>
+                EntryCreateError::DateExists => {
                     return Ok((
                         StatusCode::BAD_REQUEST,
-                        body::Json(CreateEntryResult::DateExists)
-                    ).into_response()),
-                _ => return Err(error::Error::context_source(
-                    "failed to create entry",
-                    err
-                )),
-            }
+                        body::Json(CreateEntryResult::DateExists),
+                    )
+                        .into_response())
+                }
+                _ => return Err(error::Error::context_source("failed to create entry", err)),
+            },
         }
     };
 
@@ -843,10 +866,7 @@ pub async fn create_entry(
             };
             let value = opt_non_empty_str(tag.value);
 
-            rtn.push(EntryTagForm {
-                key,
-                value,
-            });
+            rtn.push(EntryTagForm { key, value });
         }
 
         upsert_tags(&transaction, &entry.id, &entry.created, &rtn).await?;
@@ -862,47 +882,38 @@ pub async fn create_entry(
         mismatched,
         invalid,
         duplicates,
-    } = upsert_custom_fields(
-        &transaction,
-        &journal.id,
-        &entry.id,
-        json.custom_fields
-    ).await?;
+    } = upsert_custom_fields(&transaction, &journal.id, &entry.id, json.custom_fields).await?;
 
     if !not_found.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(CreateEntryResult::CustomFieldNotFound {
-                ids: not_found,
-            })
-        ).into_response());
+            body::Json(CreateEntryResult::CustomFieldNotFound { ids: not_found }),
+        )
+            .into_response());
     }
 
     if !mismatched.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(CreateEntryResult::CustomFieldMismatch {
-                mismatched,
-            })
-        ).into_response());
+            body::Json(CreateEntryResult::CustomFieldMismatch { mismatched }),
+        )
+            .into_response());
     }
 
     if !invalid.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(CreateEntryResult::CustomFieldInvalid {
-                invalid
-            })
-        ).into_response());
+            body::Json(CreateEntryResult::CustomFieldInvalid { invalid }),
+        )
+            .into_response());
     }
 
     if !duplicates.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(CreateEntryResult::CustomFieldDuplicates {
-                ids: duplicates,
-            })
-        ).into_response());
+            body::Json(CreateEntryResult::CustomFieldDuplicates { ids: duplicates }),
+        )
+            .into_response());
     }
 
     let dir = state.storage().journal_dir(journal.id);
@@ -914,10 +925,12 @@ pub async fn create_entry(
         &entry.id,
         &entry.created,
         UpsertFilesKind::Creating(json.files),
-        &mut removed_files
-    ).await?;
+        &mut removed_files,
+    )
+    .await?;
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit changes to journal entry")?;
 
@@ -935,36 +948,33 @@ pub async fn create_entry(
     Ok((
         StatusCode::CREATED,
         body::Json(CreateEntryResult::Created(entry)),
-    ).into_response())
+    )
+        .into_response())
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum UpdateEntryResult {
     JournalNotFound,
-    CustomFieldMismatch {
-        mismatched: Vec<CustomFieldEntry>,
-    },
-    CustomFieldNotFound {
-        ids: Vec<CustomFieldId>,
-    },
-    CustomFieldInvalid {
-        invalid: Vec<CustomFieldEntry>,
-    },
-    CustomFieldDuplicates {
-        ids: Vec<CustomFieldId>,
-    },
-    Updated(ResultEntryFull)
+    CustomFieldMismatch { mismatched: Vec<CustomFieldEntry> },
+    CustomFieldNotFound { ids: Vec<CustomFieldId> },
+    CustomFieldInvalid { invalid: Vec<CustomFieldEntry> },
+    CustomFieldDuplicates { ids: Vec<CustomFieldId> },
+    Updated(ResultEntryFull),
 }
 
 pub async fn update_entry(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(EntryPath { journals_id, entries_id }): Path<EntryPath>,
+    Path(EntryPath {
+        journals_id,
+        entries_id,
+    }): Path<EntryPath>,
     body::Json(json): body::Json<UpdatedEntryBody>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -979,20 +989,22 @@ pub async fn update_entry(
             return Ok((
                 StatusCode::NOT_FOUND,
                 body::Json(UpdateEntryResult::JournalNotFound),
-            ).into_response());
+            )
+                .into_response());
         };
 
         journal
     };
 
-    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
-
-    let result = Entry::retrieve_id(
+    auth::perm_check!(
         &transaction,
-        &journal.id,
-        &initiator.user.id,
-        &entries_id
-    )
+        initiator,
+        journal,
+        Scope::Entries,
+        Ability::Update
+    );
+
+    let result = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
         .await
         .context("failed to retrieve journal entry by date")?;
 
@@ -1005,7 +1017,8 @@ pub async fn update_entry(
     entry.contents = opt_non_empty_str(json.contents);
     entry.updated = Some(Utc::now());
 
-    entry.update(&transaction)
+    entry
+        .update(&transaction)
         .await
         .context("failed to update journal entry")?;
 
@@ -1049,20 +1062,26 @@ pub async fn update_entry(
         }
 
         if !tags.is_empty() {
-            upsert_tags(&transaction, &entry.id, (entry.updated.as_ref()).unwrap(), &tags).await?;
+            upsert_tags(
+                &transaction,
+                &entry.id,
+                (entry.updated.as_ref()).unwrap(),
+                &tags,
+            )
+            .await?;
         }
 
         if !current_tags.is_empty() {
-            let keys: Vec<String> = current_tags.into_keys()
-                .collect();
+            let keys: Vec<String> = current_tags.into_keys().collect();
 
-            transaction.execute(
-                "\
+            transaction
+                .execute(
+                    "\
                 delete from entry_tags \
                 where entries_id = $1 and \
                       key = any($2)",
-                &[&entry.id, &keys]
-            )
+                    &[&entry.id, &keys],
+                )
                 .await
                 .context("failed to delete tags for journal")?;
         }
@@ -1077,47 +1096,38 @@ pub async fn update_entry(
         mismatched,
         invalid,
         duplicates,
-    } = upsert_custom_fields(
-        &transaction,
-        &journal.id,
-        &entry.id,
-        json.custom_fields
-    ).await?;
+    } = upsert_custom_fields(&transaction, &journal.id, &entry.id, json.custom_fields).await?;
 
     if !not_found.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateEntryResult::CustomFieldNotFound {
-                ids: not_found,
-            })
-        ).into_response());
+            body::Json(UpdateEntryResult::CustomFieldNotFound { ids: not_found }),
+        )
+            .into_response());
     }
 
     if !mismatched.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateEntryResult::CustomFieldMismatch {
-                mismatched
-            })
-        ).into_response());
+            body::Json(UpdateEntryResult::CustomFieldMismatch { mismatched }),
+        )
+            .into_response());
     }
 
     if !invalid.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateEntryResult::CustomFieldInvalid {
-                invalid
-            })
-        ).into_response());
+            body::Json(UpdateEntryResult::CustomFieldInvalid { invalid }),
+        )
+            .into_response());
     }
 
     if !duplicates.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
-            body::Json(UpdateEntryResult::CustomFieldDuplicates {
-                ids: duplicates,
-            })
-        ).into_response());
+            body::Json(UpdateEntryResult::CustomFieldDuplicates { ids: duplicates }),
+        )
+            .into_response());
     }
 
     let dir = state.storage().journal_dir(journal.id);
@@ -1129,8 +1139,9 @@ pub async fn update_entry(
         &entry.id,
         entry.updated.as_ref().unwrap(),
         UpsertFilesKind::Updating(json.files),
-        &mut removed_files
-    ).await;
+        &mut removed_files,
+    )
+    .await;
 
     let files = match upsert_result {
         Ok(files) => files,
@@ -1146,7 +1157,7 @@ pub async fn update_entry(
 
         return Err(error::Error::context_source(
             "failed commit changes to journal entry",
-            err
+            err,
         ));
     }
 
@@ -1169,10 +1180,14 @@ pub async fn update_entry(
 pub async fn delete_entry(
     state: state::SharedState,
     headers: HeaderMap,
-    Path(EntryPath { journals_id, entries_id }): Path<EntryPath>,
+    Path(EntryPath {
+        journals_id,
+        entries_id,
+    }): Path<EntryPath>,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -1190,14 +1205,15 @@ pub async fn delete_entry(
         journal
     };
 
-    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Delete);
-
-    let result = Entry::retrieve_id(
+    auth::perm_check!(
         &transaction,
-        &journal.id,
-        &initiator.user.id,
-        &entries_id
-    )
+        initiator,
+        journal,
+        Scope::Entries,
+        Ability::Delete
+    );
+
+    let result = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
         .await
         .context("failed to retrieve journal entry by date")?;
 
@@ -1205,24 +1221,24 @@ pub async fn delete_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let _tags = transaction.execute(
-        "delete from entry_tags where entries_id = $1",
-        &[&entry.id]
-    )
+    let _tags = transaction
+        .execute("delete from entry_tags where entries_id = $1", &[&entry.id])
         .await
         .context("failed to delete tags for journal entry")?;
 
-    let _custom_fields = transaction.execute(
-        "delete from custom_field_entries where entries_id = $1",
-        &[&entry.id]
-    )
+    let _custom_fields = transaction
+        .execute(
+            "delete from custom_field_entries where entries_id = $1",
+            &[&entry.id],
+        )
         .await
         .context("failed to delete custom field entries for journal entry")?;
 
-    let stream = transaction.query_raw(
-        "delete from file_entries where entries_id = $1 returning id",
-        &[&entry.id]
-    )
+    let stream = transaction
+        .query_raw(
+            "delete from file_entries where entries_id = $1 returning id",
+            &[&entry.id],
+        )
         .await
         .context("failed to delete files for journal entry")?;
 
@@ -1242,15 +1258,14 @@ pub async fn delete_entry(
 
             return Err(error::Error::context_source(
                 "failed to mark files for removal",
-                err
+                err,
             ));
         }
     }
 
-    let entry_result = transaction.execute(
-        "delete from entries where id = $1",
-        &[&entry.id]
-    ).await;
+    let entry_result = transaction
+        .execute("delete from entries where id = $1", &[&entry.id])
+        .await;
 
     match entry_result {
         Ok(execed) => {
@@ -1265,7 +1280,7 @@ pub async fn delete_entry(
 
             return Err(error::Error::context_source(
                 "failed to delete entry for journal",
-                err
+                err,
             ));
         }
     }
@@ -1277,7 +1292,7 @@ pub async fn delete_entry(
 
         Err(error::Error::context_source(
             "failed to commit changes to journal",
-            err
+            err,
         ))
     } else {
         if !marked_files.is_empty() {
@@ -1315,17 +1330,16 @@ async fn upsert_files(
                     EntryFileForm::Requested {
                         _id: FileEntryId::zero(),
                         uid: FileEntryUid::gen(),
-                        name: opt_non_empty_str(name)
+                        name: opt_non_empty_str(name),
                     },
-                    Some(ClientData { key })
+                    Some(ClientData { key }),
                 )));
             }
 
             existing = None;
         }
         UpsertFilesKind::Updating(given) => {
-            let mut current = EntryFileForm::retrieve_entry_map(conn, &entries_id)
-                .await?;
+            let mut current = EntryFileForm::retrieve_entry_map(conn, &entries_id).await?;
 
             for file_entry in given {
                 match file_entry {
@@ -1338,24 +1352,26 @@ async fn upsert_files(
                                 uid: FileEntryUid::gen(),
                                 name: opt_non_empty_str(new.name),
                             },
-                            Some(ClientData {
-                                key: new.key
-                            })
+                            Some(ClientData { key: new.key }),
                         )));
                     }
                     UpdatedFileEntryBody::Existing(exists) => {
                         let Some(mut found) = current.remove(&exists.id) else {
-                            return Err(error::Error::context("a specified file does not exist in the database"));
+                            return Err(error::Error::context(
+                                "a specified file does not exist in the database",
+                            ));
                         };
 
                         let check = opt_non_empty_str(exists.name);
 
                         match &mut found {
-                            EntryFileForm::Requested { name, .. } |
-                            EntryFileForm::Received { name, .. } => if *name != check {
-                                *name = check;
+                            EntryFileForm::Requested { name, .. }
+                            | EntryFileForm::Received { name, .. } => {
+                                if *name != check {
+                                    *name = check;
 
-                                update_indexs.push(files.len());
+                                    update_indexs.push(files.len());
+                                }
                             }
                         }
 
@@ -1382,7 +1398,7 @@ async fn upsert_files(
                 mime_type, \
                 mime_subtype, \
                 hash \
-            ) values "
+            ) values ",
         );
 
         for (index, ins_index) in insert_indexs.iter().enumerate() {
@@ -1398,29 +1414,32 @@ async fn upsert_files(
                         db::push_param(&mut ins_params, uid),
                         db::push_param(&mut ins_params, &status),
                         db::push_param(&mut ins_params, name),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
 
         ins_query.push_str(" returning id");
 
-        let ins_results = conn.query_raw(&ins_query, ins_params)
+        let ins_results = conn
+            .query_raw(&ins_query, ins_params)
             .await
             .context("failed to insert files")?
             .map(|result| match result {
                 Ok(row) => Ok(row.get::<usize, FileEntryId>(0)),
                 Err(err) => Err(error::Error::context_source(
                     "failed to retrieve file entry id from insert",
-                    err
-                ))
+                    err,
+                )),
             });
 
         futures::pin_mut!(ins_results);
 
         for index in insert_indexs {
-            let ins_result = ins_results.next()
+            let ins_result = ins_results
+                .next()
                 .await
                 .context("less than expected number of ids returned")?;
 
@@ -1440,7 +1459,7 @@ async fn upsert_files(
             update file_entries \
             set name = tmp_update.name, \
                 updated = $2 \
-            from (values "
+            from (values ",
         );
 
         for (index, upd_index) in update_indexs.iter().enumerate() {
@@ -1449,22 +1468,24 @@ async fn upsert_files(
             }
 
             match &files[*upd_index].inner {
-                EntryFileForm::Requested { _id, name, .. } |
-                EntryFileForm::Received { _id, name, .. } => {
+                EntryFileForm::Requested { _id, name, .. }
+                | EntryFileForm::Received { _id, name, .. } => {
                     write!(
                         &mut upd_query,
                         "(${}, ${})",
                         db::push_param(&mut upd_params, _id),
                         db::push_param(&mut upd_params, name),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 _ => unreachable!(),
             }
         }
 
-        upd_query.push_str("\
+        upd_query.push_str(
+            "\
             ) as tmp_update (id, name, updated) \
-            where file_entries.id = tmp_update.id"
+            where file_entries.id = tmp_update.id",
         );
 
         tracing::debug!("file update query: \"{upd_query}\"");
@@ -1481,16 +1502,14 @@ async fn upsert_files(
             to_delete.push(id);
 
             if record.is_received() {
-                removed_files.add(journal_dir.file_path(&id))
+                removed_files
+                    .add(journal_dir.file_path(&id))
                     .await
                     .context("failed to remove file")?;
             }
         }
 
-        conn.execute(
-            "delete from file_entries where id = any($1)",
-            &[&to_delete]
-        )
+        conn.execute("delete from file_entries where id = any($1)", &[&to_delete])
             .await
             .context("failed to remove file entries")?;
     }
@@ -1502,13 +1521,12 @@ async fn upsert_tags(
     conn: &impl db::GenericClient,
     entries_id: &EntryId,
     created: &DateTime<Utc>,
-    tags: &Vec<EntryTagForm>
+    tags: &Vec<EntryTagForm>,
 ) -> Result<(), error::Error> {
     let mut first = true;
     let mut params: db::ParamsVec<'_> = vec![entries_id, created];
-    let mut query = String::from(
-        "insert into entry_tags (entries_id, key, value, created) values "
-    );
+    let mut query =
+        String::from("insert into entry_tags (entries_id, key, value, created) values ");
 
     for tag in tags {
         if first {
@@ -1522,12 +1540,15 @@ async fn upsert_tags(
             "($1, ${}, ${}, $2)",
             db::push_param(&mut params, &tag.key),
             db::push_param(&mut params, &tag.value),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
-    query.push_str(" on conflict (entries_id, key) do update set \
+    query.push_str(
+        " on conflict (entries_id, key) do update set \
         value = EXCLUDED.value, \
-        updated = EXCLUDED.updated");
+        updated = EXCLUDED.updated",
+    );
 
     conn.execute(query.as_str(), params.as_slice())
         .await
@@ -1594,11 +1615,11 @@ async fn upsert_custom_fields(
 
                         invalid.push(field);
                     }
-                }
+                },
                 _ => {
                     mismatched.push(field);
                 }
-            }
+            },
             custom_field::Type::IntegerRange(ty) => match field.value {
                 custom_field::Value::IntegerRange(check) => match ty.validate(check) {
                     Ok(valid) => {
@@ -1611,11 +1632,11 @@ async fn upsert_custom_fields(
 
                         invalid.push(field);
                     }
-                }
+                },
                 _ => {
                     mismatched.push(field);
                 }
-            }
+            },
             custom_field::Type::Float(ty) => match field.value {
                 custom_field::Value::Float(check) => match ty.validate(check) {
                     Ok(valid) => {
@@ -1628,11 +1649,11 @@ async fn upsert_custom_fields(
 
                         invalid.push(field);
                     }
-                }
+                },
                 _ => {
                     mismatched.push(field);
                 }
-            }
+            },
             custom_field::Type::FloatRange(ty) => match field.value {
                 custom_field::Value::FloatRange(check) => match ty.validate(check) {
                     Ok(valid) => {
@@ -1645,49 +1666,53 @@ async fn upsert_custom_fields(
 
                         invalid.push(field);
                     }
-                }
+                },
                 _ => {
                     mismatched.push(field);
                 }
-            }
+            },
             custom_field::Type::Time(ty) => match field.value {
                 custom_field::Value::Time(check) => match ty.validate(check) {
                     Ok(valid) => {
                         field.value = valid.into();
 
                         to_insert.push(field);
-                    },
+                    }
                     Err(invalid_v) => {
                         field.value = invalid_v.into();
 
                         invalid.push(field);
                     }
-                }
+                },
                 _ => {
                     mismatched.push(field);
                 }
-            }
+            },
             custom_field::Type::TimeRange(ty) => match field.value {
                 custom_field::Value::TimeRange(check) => match ty.validate(check) {
                     Ok(valid) => {
                         field.value = valid.into();
 
                         to_insert.push(field);
-                    },
+                    }
                     Err(invalid_v) => {
                         field.value = invalid_v.into();
 
                         invalid.push(field);
                     }
-                }
+                },
                 _ => {
                     mismatched.push(field);
                 }
-            }
+            },
         }
     }
 
-    if !not_found.is_empty() || !invalid.is_empty() || !duplicates.is_empty() || !mismatched.is_empty() {
+    if !not_found.is_empty()
+        || !invalid.is_empty()
+        || !duplicates.is_empty()
+        || !mismatched.is_empty()
+    {
         return Ok(CustomFieldsUpsert {
             valid: Vec::new(),
             not_found,
@@ -1705,10 +1730,10 @@ async fn upsert_custom_fields(
             delete from custom_field_entries \
             where custom_fields_id = any($1) and \
                   entries_id = $2",
-            &[&ids, entries_id]
+            &[&ids, entries_id],
         )
-            .await
-            .context("failed to delete custom field entries")?;
+        .await
+        .context("failed to delete custom field entries")?;
     }
 
     let valid = if !to_insert.is_empty() {
@@ -1739,7 +1764,7 @@ async fn upsert_custom_fields(
                 set value = excluded.value, \
                     updated = excluded.created \
             returning custom_fields_id, \
-                      value"
+                      value",
         );
 
         let query = format!(
@@ -1761,7 +1786,8 @@ async fn upsert_custom_fields(
 
         tracing::debug!("upsert query: {query}");
 
-        let stream = conn.query_raw(&query, params)
+        let stream = conn
+            .query_raw(&query, params)
             .await
             .context("failed to upsert custom field entries")?;
 

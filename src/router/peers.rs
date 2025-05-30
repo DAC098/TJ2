@@ -1,11 +1,11 @@
-use axum::http::{StatusCode, HeaderMap};
-use axum::response::{Response, IntoResponse};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::db::ids::UserPeerId;
 use crate::error::{self, Context};
-use crate::header::{Location, is_accepting_html};
+use crate::header::{is_accepting_html, Location};
 use crate::router::{body, macros};
 use crate::sec::authn::Initiator;
 use crate::state;

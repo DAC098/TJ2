@@ -2,32 +2,26 @@ use std::str::FromStr;
 
 use axum::body::Body;
 use axum::extract::{Path, Query};
-use axum::http::{StatusCode, HeaderMap};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use futures::StreamExt;
-use ringbuf::traits::{Producer, Consumer, Observer};
-use serde::{Serialize, Deserialize};
+use ringbuf::traits::{Consumer, Observer, Producer};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio_util::io::ReaderStream;
 
-use crate::state::{self, Storage};
 use crate::db;
-use crate::db::ids::{JournalId, EntryId, FileEntryId};
+use crate::db::ids::{EntryId, FileEntryId, JournalId};
 use crate::error::{self, Context};
 use crate::fs::FileCreater;
-use crate::journal::{
-    Journal,
-    FileEntry,
-    PromoteOptions,
-    RequestedFile,
-    ReceivedFile
-};
+use crate::journal::{FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile};
 use crate::router::body;
-use crate::sec::Hash;
-use crate::sec::hash::HashCheck;
 use crate::sec::authn::Initiator;
-use crate::sec::authz::{Scope, Ability};
+use crate::sec::authz::{Ability, Scope};
+use crate::sec::hash::HashCheck;
+use crate::sec::Hash;
+use crate::state::{self, Storage};
 
 use super::auth;
 use super::EntryFileForm;
@@ -41,7 +35,7 @@ pub struct FileEntryPath {
 
 #[derive(Debug, Deserialize)]
 pub struct FileEntryQuery {
-    download: Option<bool>
+    download: Option<bool>,
 }
 
 pub async fn retrieve_file(
@@ -50,11 +44,9 @@ pub async fn retrieve_file(
     Path(FileEntryPath {
         journals_id,
         entries_id,
-        file_entry_id
+        file_entry_id,
     }): Path<FileEntryPath>,
-    Query(FileEntryQuery {
-        download
-    }): Query<FileEntryQuery>,
+    Query(FileEntryQuery { download }): Query<FileEntryQuery>,
 ) -> Result<Response, error::Error> {
     let conn = state.db_conn().await?;
 
@@ -80,7 +72,8 @@ pub async fn retrieve_file(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    let file_path = state.storage()
+    let file_path = state
+        .storage()
         .journal_file_entry(journal.id, received_file.id);
     let file = tokio::fs::OpenOptions::new()
         .read(true)
@@ -101,11 +94,12 @@ pub async fn retrieve_file(
 
         builder = builder.header(
             "content-disposition",
-            format!("attachment; filename=\"{}\"", name)
+            format!("attachment; filename=\"{}\"", name),
         );
     }
 
-    builder.body(Body::from_stream(reader))
+    builder
+        .body(Body::from_stream(reader))
         .context("failed to create file response")
 }
 
@@ -121,19 +115,11 @@ enum UploadResult {
 impl IntoResponse for UploadResult {
     fn into_response(self) -> Response {
         match &self {
-            Self::Successful(_) => (
-                StatusCode::OK,
-                body::Json(self)
-            ).into_response(),
-            Self::JournalNotFound |
-            Self::FileNotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self)
-            ).into_response(),
-            Self::NotRequestedFile => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self)
-            ).into_response(),
+            Self::Successful(_) => (StatusCode::OK, body::Json(self)).into_response(),
+            Self::JournalNotFound | Self::FileNotFound => {
+                (StatusCode::NOT_FOUND, body::Json(self)).into_response()
+            }
+            Self::NotRequestedFile => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
         }
     }
 }
@@ -147,10 +133,11 @@ pub async fn upload_file(
         entries_id,
         file_entry_id,
     }): Path<FileEntryPath>,
-    stream: Body
+    stream: Body,
 ) -> Result<Response, error::Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -166,7 +153,13 @@ pub async fn upload_file(
         journal
     };
 
-    auth::perm_check!(&transaction, initiator, journal, Scope::Entries, Ability::Update);
+    auth::perm_check!(
+        &transaction,
+        initiator,
+        journal,
+        Scope::Entries,
+        Ability::Update
+    );
 
     let result = FileEntry::retrieve_file_entry(&transaction, &entries_id, &file_entry_id)
         .await
@@ -177,8 +170,7 @@ pub async fn upload_file(
     };
 
     let mime = get_mime(&headers)?;
-    let hash_check = HashCheck::from_headers(&headers)
-        .context("error retrieving x-hash header")?;
+    let hash_check = HashCheck::from_headers(&headers).context("error retrieving x-hash header")?;
 
     let Ok(requested) = file_entry.into_requested() else {
         return Ok(UploadResult::NotRequestedFile.into_response());
@@ -193,8 +185,8 @@ pub async fn upload_file(
         hash_check,
         stream,
     )
-        .await
-        .context("failed to create file")?;
+    .await
+    .context("failed to create file")?;
 
     Ok(UploadResult::Successful(record.into()).into_response())
 }
@@ -220,7 +212,7 @@ async fn create_file(
 
             return Err(error::Error::context_source(
                 "failed to write request body to file",
-                err
+                err,
             ));
         }
     };
@@ -229,7 +221,7 @@ async fn create_file(
         mime,
         size: written,
         hash,
-        created: Utc::now()
+        created: Utc::now(),
     };
 
     let received = match requested.promote(&conn, options).await {
@@ -239,7 +231,7 @@ async fn create_file(
 
             return Err(error::Error::context_source(
                 "failed to promote requested file entry",
-                err
+                err,
             ));
         }
     };
@@ -251,7 +243,7 @@ async fn create_file(
 
         Err(error::Error::context_source(
             "failed to commit changes to file entry",
-            err
+            err,
         ))
     } else {
         Ok(received)
@@ -311,18 +303,13 @@ where
                 Err(WriteError::InvalidHash)
             }
         }
-        HashCheck::None => {
-            stream_to_writer(stream, writer).await
-        }
+        HashCheck::None => stream_to_writer(stream, writer).await,
     }
 }
 
 /// streams the [`Body`] into the given writer and calculates a hash with
 /// number of bytes written
-async fn stream_to_writer<'a, T>(
-    stream: Body,
-    writer: &'a mut T,
-) -> Result<(i64, Hash), WriteError>
+async fn stream_to_writer<'a, T>(stream: Body, writer: &'a mut T) -> Result<(i64, Hash), WriteError>
 where
     T: AsyncWrite + Unpin,
 {
@@ -339,15 +326,13 @@ where
 
         let wrote = buf_writer.write(slice).await?;
 
-        written = written.checked_add(wrote)
-            .ok_or(WriteError::TooLarge)?;
+        written = written.checked_add(wrote).ok_or(WriteError::TooLarge)?;
     }
 
     buf_writer.flush().await?;
 
     let hash = hasher.finalize();
-    let size = written.try_into()
-        .map_err(|_| WriteError::TooLarge)?;
+    let size = written.try_into().map_err(|_| WriteError::TooLarge)?;
 
     Ok((size, hash.into()))
 }
@@ -371,7 +356,11 @@ where
     let mut ring_buf = ringbuf::StaticRb::<u8, { BUF_SIZE + 32 }>::default();
     let mut buffer = [0u8; BUF_SIZE];
 
-    tracing::trace!("buffer size: {} ring size: {}", buffer.len(), ring_buf.vacant_len());
+    tracing::trace!(
+        "buffer size: {} ring size: {}",
+        buffer.len(),
+        ring_buf.vacant_len()
+    );
 
     while let Some(result) = stream.next().await {
         let bytes = result?;
@@ -380,7 +369,10 @@ where
         loop {
             let pushed = ring_buf.push_slice(slice);
 
-            tracing::trace!("pushing slice to buffer. size: {} pushed: {pushed}", slice.len());
+            tracing::trace!(
+                "pushing slice to buffer. size: {} pushed: {pushed}",
+                slice.len()
+            );
 
             if pushed == slice.len() {
                 break;
@@ -395,7 +387,8 @@ where
             hasher.update(&buffer);
             writer.write_all(&buffer).await?;
 
-            written = written.checked_add(buffer.len())
+            written = written
+                .checked_add(buffer.len())
                 .ok_or(WriteError::TooLarge)?;
 
             // create a sub slice of the data that was pushed
@@ -410,14 +403,17 @@ where
         let diff = occupied_len - 32;
         let slice = &mut buffer[..diff];
 
-        tracing::trace!("wrting remaining data to output. occupied_len: {occupied_len} diff: {diff}");
+        tracing::trace!(
+            "wrting remaining data to output. occupied_len: {occupied_len} diff: {diff}"
+        );
 
         ring_buf.pop_slice(slice);
 
         hasher.update(slice);
         writer.write_all(slice).await?;
 
-        written = written.checked_add(slice.len())
+        written = written
+            .checked_add(slice.len())
             .ok_or(WriteError::TooLarge)?;
     }
 
@@ -437,26 +433,25 @@ where
     };
 
     let hash = hasher.finalize();
-    let size = written.try_into()
-        .map_err(|_| WriteError::TooLarge)?;
+    let size = written.try_into().map_err(|_| WriteError::TooLarge)?;
 
     Ok((size, hash.into(), given.into()))
 }
 
 fn get_mime(headers: &HeaderMap) -> Result<mime::Mime, error::Error> {
-    let content_type = headers.get("content-type")
+    let content_type = headers
+        .get("content-type")
         .context("missing content-type header")?
         .to_str()
         .context("contet-type contains invalid utf8 characters")?;
 
-    mime::Mime::from_str(&content_type)
-        .context("content-type is not a valid mime format")
+    mime::Mime::from_str(&content_type).context("content-type is not a valid mime format")
 }
 
 #[cfg(test)]
 mod test {
-    use crate::sec::hash::{Hash, HashCheck};
     use super::*;
+    use crate::sec::hash::{Hash, HashCheck};
 
     fn gen_bytes(amount: usize) -> Vec<u8> {
         let mut rtn = Vec::with_capacity(amount);
@@ -491,7 +486,7 @@ mod test {
                 assert_eq!(hash, given, "hash mismatch");
                 assert_eq!(output, data, "output data does not match input");
             }
-            Err(err) => panic!("failed to stream to output: {err}")
+            Err(err) => panic!("failed to stream to output: {err}"),
         }
     }
 

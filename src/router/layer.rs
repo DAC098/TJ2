@@ -1,11 +1,11 @@
-use std::time::Duration;
-use std::task::{Context, Poll};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
-use axum::http::{Request, Extensions};
+use axum::http::{Extensions, Request};
 use pin_project::pin_project;
 use tokio::time::Sleep;
 use tower::{Layer, Service};
@@ -36,21 +36,18 @@ impl RequestId {
 #[derive(Debug, Clone)]
 pub struct RIDService<S> {
     inner: S,
-    counter: Counter
+    counter: Counter,
 }
 
 impl<S> RIDService<S> {
     pub fn new(inner: S, counter: Counter) -> Self {
-        RIDService {
-            inner,
-            counter
-        }
+        RIDService { inner, counter }
     }
 }
 
 impl<S, B> Service<Request<B>> for RIDService<S>
 where
-    S: Service<Request<B>>
+    S: Service<Request<B>>,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -74,13 +71,13 @@ where
 
 #[derive(Debug, Clone)]
 pub struct RIDLayer {
-    counter: Counter
+    counter: Counter,
 }
 
 impl RIDLayer {
     pub fn new() -> Self {
         RIDLayer {
-            counter: Arc::new(AtomicU64::new(1))
+            counter: Arc::new(AtomicU64::new(1)),
         }
     }
 }
@@ -106,7 +103,7 @@ impl<E> From<E> for TimeoutError<E> {
 
 impl<E> From<TimeoutError<E>> for error::Error
 where
-    E: Into<error::Error>
+    E: Into<error::Error>,
 {
     fn from(err: TimeoutError<E>) -> Self {
         match err {
@@ -138,7 +135,7 @@ where
                 let result = result.map_err(Into::into);
 
                 return Poll::Ready(result);
-            },
+            }
             Poll::Pending => {}
         }
 

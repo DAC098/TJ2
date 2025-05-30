@@ -1,18 +1,18 @@
 use std::collections::HashMap;
-use std::fmt::{Write, Display, Formatter, Result as FmtResult};
+use std::fmt::{Display, Formatter, Result as FmtResult, Write};
 use std::str::FromStr;
 
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use postgres_types as pg_types;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{GroupId, UserId, RoleId, RoleUid, PermissionId};
-use crate::error::{self, Context, BoxDynError};
-use crate::user::User;
+use crate::db::ids::{GroupId, PermissionId, RoleId, RoleUid, UserId};
+use crate::error::{self, BoxDynError, Context};
 use crate::user::group::Group;
+use crate::user::User;
 
 #[derive(Debug, thiserror::Error)]
 #[error("the provided string is not a valid Ability")]
@@ -53,7 +53,7 @@ impl FromStr for Ability {
             "read" => Ok(Ability::Read),
             "update" => Ok(Ability::Update),
             "delete" => Ok(Ability::Delete),
-            _ => Err(InvalidAbility)
+            _ => Err(InvalidAbility),
         }
     }
 }
@@ -71,9 +71,12 @@ impl<'a> pg_types::FromSql<'a> for Ability {
 }
 
 impl pg_types::ToSql for Ability {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
-        self.as_str()
-            .to_sql(ty, w)
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
+        self.as_str().to_sql(ty, w)
     }
 
     fn accepts(ty: &pg_types::Type) -> bool {
@@ -143,9 +146,12 @@ impl<'a> pg_types::FromSql<'a> for Scope {
 }
 
 impl pg_types::ToSql for Scope {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
-        self.as_str()
-            .to_sql(ty, w)
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
+        self.as_str().to_sql(ty, w)
     }
 
     fn accepts(ty: &pg_types::Type) -> bool {
@@ -168,12 +174,13 @@ pub struct Permission {
 impl Permission {
     pub async fn retrieve_stream(
         conn: &impl db::GenericClient,
-        role_id: &RoleId
+        role_id: &RoleId,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
         let params: db::ParamsArray<'_, 1> = [role_id];
 
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select authz_permissions.id, \
                    authz_permissions.role_id, \
                    authz_permissions.scope, \
@@ -184,18 +191,20 @@ impl Permission {
             where authz_permissions.role_id = $1 \
             order by authz_permissions.scope, \
                      authz_permissions.ability",
-            params
-        )
+                params,
+            )
             .await?;
 
-        Ok(stream.map(|result| result.map(|row| Self {
-            id: row.get(0),
-            role_id: row.get(1),
-            scope: row.get(2),
-            ability: row.get(3),
-            ref_id: row.get(4),
-            added: row.get(5),
-        })))
+        Ok(stream.map(|result| {
+            result.map(|row| Self {
+                id: row.get(0),
+                role_id: row.get(1),
+                scope: row.get(2),
+                ability: row.get(3),
+                ref_id: row.get(4),
+                added: row.get(5),
+            })
+        }))
     }
 }
 
@@ -209,7 +218,10 @@ pub struct Role {
 }
 
 impl Role {
-    pub async fn retrieve_id(conn: &impl db::GenericClient, role_id: &RoleId) -> Result<Option<Self>, db::PgError> {
+    pub async fn retrieve_id(
+        conn: &impl db::GenericClient,
+        role_id: &RoleId,
+    ) -> Result<Option<Self>, db::PgError> {
         conn.query_opt(
             "\
             select authz_roles.id, \
@@ -219,29 +231,36 @@ impl Role {
                    authz_roles.updated \
             from authz_roles \
             where authz_roles.id = $1",
-            &[role_id]
+            &[role_id],
         )
-            .await
-            .map(|result| result.map(|row| Self {
+        .await
+        .map(|result| {
+            result.map(|row| Self {
                 id: row.get(0),
                 uid: row.get(1),
                 name: row.get(2),
                 created: row.get(3),
                 updated: row.get(4),
-            }))
+            })
+        })
     }
 
-    pub async fn create(conn: &impl db::GenericClient, name: &str) -> Result<Option<Self>, db::PgError> {
+    pub async fn create(
+        conn: &impl db::GenericClient,
+        name: &str,
+    ) -> Result<Option<Self>, db::PgError> {
         let uid = RoleUid::gen();
         let created = Utc::now();
 
-        let result = conn.query_one(
-            "\
+        let result = conn
+            .query_one(
+                "\
             insert into authz_roles (uid, name, created) values \
             ($1, $2, $3) \
             returning id",
-            &[&uid, &name, &created]
-        ).await;
+                &[&uid, &name, &created],
+            )
+            .await;
 
         match result {
             Ok(row) => Ok(Some(Self {
@@ -249,19 +268,23 @@ impl Role {
                 uid,
                 name: name.to_owned(),
                 created,
-                updated: None
+                updated: None,
             })),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => if constraint == "authz_roles_name_key" {
-                        Ok(None)
-                    } else {
-                        Err(err)
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => {
+                            if constraint == "authz_roles_name_key" {
+                                Ok(None)
+                            } else {
+                                Err(err)
+                            }
+                        }
+                        _ => Err(err),
                     }
-                    _ => Err(err)
+                } else {
+                    Err(err)
                 }
-            } else {
-                Err(err)
             }
         }
     }
@@ -269,43 +292,61 @@ impl Role {
     pub async fn update(&mut self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
         self.updated = Some(Utc::now());
 
-        let result = conn.execute(
-            "\
+        let result = conn
+            .execute(
+                "\
             update authz_roles \
             set name = $2, \
                 updated = $3 \
             where id = $1",
-            &[&self.id, &self.name, &self.updated]
-        ).await;
+                &[&self.id, &self.name, &self.updated],
+            )
+            .await;
 
         match result {
             Ok(count) => Ok(count == 1),
-            Err(err) => if let Some(kind) = db::ErrorKind::check(&err) {
-                match kind {
-                    db::ErrorKind::Unique(constraint) => if constraint == "authz_roles_name_key" {
-                        Ok(false)
-                    } else {
-                        Err(err)
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => {
+                            if constraint == "authz_roles_name_key" {
+                                Ok(false)
+                            } else {
+                                Err(err)
+                            }
+                        }
+                        _ => Err(err),
                     }
-                    _ => Err(err)
+                } else {
+                    Err(err)
                 }
-            } else {
-                Err(err)
             }
         }
     }
 
-    pub async fn assign_user(&self, conn: &impl db::GenericClient, users_id: UserId) -> Result<(), db::PgError> {
+    pub async fn assign_user(
+        &self,
+        conn: &impl db::GenericClient,
+        users_id: UserId,
+    ) -> Result<(), db::PgError> {
         assign_user_role(conn, self.id, users_id).await
     }
 
-    pub async fn assign_group(&self, conn: &impl db::GenericClient, groups_id: GroupId) -> Result<(), db::PgError> {
+    pub async fn assign_group(
+        &self,
+        conn: &impl db::GenericClient,
+        groups_id: GroupId,
+    ) -> Result<(), db::PgError> {
         assign_group_role(conn, self.id, groups_id).await
     }
 
-    pub async fn assign_permissions<'a, I>(&self, conn: &impl db::GenericClient, list: I) -> Result<(), db::PgError>
+    pub async fn assign_permissions<'a, I>(
+        &self,
+        conn: &impl db::GenericClient,
+        list: I,
+    ) -> Result<(), db::PgError>
     where
-        I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>
+        I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>,
     {
         create_permissions(conn, self.id, list).await
     }
@@ -315,10 +356,11 @@ pub async fn has_permission(
     conn: &impl db::GenericClient,
     users_id: UserId,
     scope: Scope,
-    ability: Ability
+    ability: Ability,
 ) -> Result<bool, db::PgError> {
-    let result = conn.execute(
-        "\
+    let result = conn
+        .execute(
+            "\
         select authz_permissions.role_id \
         from authz_permissions \
             join authz_roles on \
@@ -335,8 +377,9 @@ pub async fn has_permission(
             authz_permissions.scope = $2 and \
             authz_permissions.ability = $3 and \
             authz_permissions.ref_id is null",
-        &[&users_id, &scope.as_str(), &ability.as_str()]
-    ).await?;
+            &[&users_id, &scope.as_str(), &ability.as_str()],
+        )
+        .await?;
 
     Ok(result > 0)
 }
@@ -349,12 +392,13 @@ pub async fn has_permission_ref<'a, T>(
     ref_id: T,
 ) -> Result<bool, db::PgError>
 where
-    T: AsRef<i64>
+    T: AsRef<i64>,
 {
     let id = ref_id.as_ref();
 
-    let result = conn.execute(
-        "\
+    let result = conn
+        .execute(
+            "\
         select authz_permissions.role_id \
         from authz_permissions \
             join authz_roles on \
@@ -371,8 +415,9 @@ where
             authz_permissions.scope = $2 and \
             authz_permissions.ability = $3 and \
             authz_permissions.ref_id = $4",
-        &[&users_id, &scope, &ability, id]
-    ).await?;
+            &[&users_id, &scope, &ability, id],
+        )
+        .await?;
 
     Ok(result > 0)
 }
@@ -386,8 +431,9 @@ pub async fn assign_user_role(
 
     conn.execute(
         "insert into user_roles (users_id, role_id, added) values ($1, $2, $3)",
-        &[&users_id, &role_id, &added]
-    ).await?;
+        &[&users_id, &role_id, &added],
+    )
+    .await?;
 
     Ok(())
 }
@@ -401,8 +447,9 @@ pub async fn assign_group_role(
 
     conn.execute(
         "insert into group_roles (groups_id, role_id, added) values ($1, $2, $3)",
-        &[&groups_id, &role_id, &added]
-    ).await?;
+        &[&groups_id, &role_id, &added],
+    )
+    .await?;
 
     Ok(())
 }
@@ -410,17 +457,16 @@ pub async fn assign_group_role(
 pub async fn create_permissions<'a, I>(
     conn: &impl db::GenericClient,
     id: RoleId,
-    list: I
+    list: I,
 ) -> Result<(), db::PgError>
 where
-    I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>
+    I: IntoIterator<Item = &'a (Scope, Vec<Ability>)>,
 {
     let added = Utc::now();
     let mut top_first = true;
     let mut params: db::ParamsVec<'_> = vec![&id, &added];
-    let mut query = String::from(
-        "insert into authz_permissions (role_id, scope, ability, added) values "
-    );
+    let mut query =
+        String::from("insert into authz_permissions (role_id, scope, ability, added) values ");
 
     for (scope, abilities) in list {
         let mut first = true;
@@ -444,14 +490,14 @@ where
                 &mut query,
                 "($1, ${scope_index}, ${}, $2)",
                 db::push_param(&mut params, ability),
-            ).unwrap();
+            )
+            .unwrap();
         }
     }
 
     tracing::debug!("query: \"{query}\"");
 
-    conn.execute(query.as_str(), &params)
-        .await?;
+    conn.execute(query.as_str(), &params).await?;
 
     Ok(())
 }
@@ -484,10 +530,10 @@ pub struct AttachedRole {
 impl AttachedRole {
     pub async fn retrieve_stream<'a, I>(
         conn: &impl db::GenericClient,
-        id: I
+        id: I,
     ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError>
     where
-        I: Into<RefId<'a>>
+        I: Into<RefId<'a>>,
     {
         let stream = match id.into() {
             RefId::User(users_id) => {
@@ -502,8 +548,9 @@ impl AttachedRole {
                         left join authz_roles on \
                             user_roles.role_id = authz_roles.id \
                     where user_roles.users_id = $1",
-                    params
-                ).await?
+                    params,
+                )
+                .await?
             }
             RefId::Group(groups_id) => {
                 let params: db::ParamsArray<'_, 1> = [groups_id];
@@ -517,24 +564,27 @@ impl AttachedRole {
                         left join authz_roles on \
                             group_roles.role_id = authz_roles.id \
                     where group_roles.groups_id = $1",
-                    params
-                ).await?
+                    params,
+                )
+                .await?
             }
         };
 
-        Ok(stream.map(|result| result.map(|row| Self {
-            role_id: row.get(0),
-            name: row.get(1),
-            added: row.get(2),
-        })))
+        Ok(stream.map(|result| {
+            result.map(|row| Self {
+                role_id: row.get(0),
+                name: row.get(1),
+                added: row.get(2),
+            })
+        }))
     }
 
     pub async fn retrieve<'a, I>(
         conn: &impl db::GenericClient,
-        id: I
+        id: I,
     ) -> Result<Vec<Self>, error::Error>
     where
-        I: Into<RefId<'a>>
+        I: Into<RefId<'a>>,
     {
         let stream = Self::retrieve_stream(conn, id)
             .await
@@ -560,7 +610,7 @@ pub async fn create_attached_roles<'a, I>(
     roles: Vec<RoleId>,
 ) -> Result<(Vec<AttachedRole>, Vec<RoleId>), error::Error>
 where
-    I: Into<RefId<'a>>
+    I: Into<RefId<'a>>,
 {
     if roles.is_empty() {
         return Ok((Vec::new(), Vec::new()));
@@ -590,10 +640,10 @@ where
                 from tmp_insert \
                     left join authz_roles on \
                         tmp_insert.role_id = authz_roles.id",
-                params
+                params,
             )
-                .await
-                .context("failed to add roles to user")?
+            .await
+            .context("failed to add roles to user")?
         }
         RefId::Group(groups_id) => {
             let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
@@ -615,10 +665,10 @@ where
                 from tmp_insert \
                     left join authz_roles on \
                         tmp_insert.role_id = authz_roles.id",
-                params
+                params,
             )
-                .await
-                .context("failed to add roles to group")?
+            .await
+            .context("failed to add roles to group")?
         }
     };
 
@@ -699,10 +749,10 @@ where
                     from tmp_insert \
                         left join authz_roles on \
                             tmp_insert.role_id = authz_roles.id",
-                    params
+                    params,
                 )
-                    .await
-                    .context("failed to add roles to user")?
+                .await
+                .context("failed to add roles to user")?
             }
             RefId::Group(groups_id) => {
                 let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
@@ -725,10 +775,10 @@ where
                     from tmp_insert \
                         left join authz_roles on \
                             tmp_insert.role_id = authz_roles.id",
-                    params
+                    params,
                 )
-                    .await
-                    .context("failed to add roles to group")?
+                .await
+                .context("failed to add roles to group")?
             }
         };
 
@@ -757,18 +807,18 @@ where
             RefId::User(users_id) => {
                 conn.execute(
                     "delete from user_roles where users_id = $1 and role_id = any($2)",
-                    &[users_id, &to_delete]
+                    &[users_id, &to_delete],
                 )
-                    .await
-                    .context("failed to delete from user roles")?;
+                .await
+                .context("failed to delete from user roles")?;
             }
             RefId::Group(groups_id) => {
                 conn.execute(
                     "delete from group_roles where groups_id = $1 and role_id = any($2)",
-                    &[groups_id, &to_delete]
+                    &[groups_id, &to_delete],
                 )
-                    .await
-                    .context("failed to delete from user roles")?;
+                .await
+                .context("failed to delete from user roles")?;
             }
         }
     }

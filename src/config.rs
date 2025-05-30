@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::default::Default;
 use std::io::Read;
-use std::net::{SocketAddr, IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -16,15 +16,7 @@ use crate::path::{metadata, normalize_from};
 
 pub mod meta;
 
-use meta::{
-    TryDefault,
-    SrcFile,
-    DotPath,
-    Quote,
-    get_cwd,
-    check_path,
-    sanitize_url_key,
-};
+use meta::{check_path, get_cwd, sanitize_url_key, DotPath, Quote, SrcFile, TryDefault};
 
 /// specifies the verbosity level of the tracing logs
 #[derive(Debug, Clone, ValueEnum)]
@@ -49,7 +41,7 @@ pub struct CliArgs {
     /// attempts to generate test data for the server to use for testing
     /// purposes
     #[arg(long)]
-    pub gen_test_data: bool
+    pub gen_test_data: bool,
 }
 
 /// a stack struct used when creating the Config struct
@@ -81,8 +73,7 @@ impl Config {
         let mut settings = Settings::try_default()?;
         let dot = DotPath::new(&"settings");
 
-        let preload = shape.preload.take()
-            .unwrap_or_default();
+        let preload = shape.preload.take().unwrap_or_default();
         let mut stack: Vec<ConfigStack> = Vec::new();
         stack.push(ConfigStack {
             shape,
@@ -92,20 +83,26 @@ impl Config {
 
         tracing::debug!("initial stack: {stack:#?}");
 
-        while let Some(ConfigStack { shape, path, mut preload }) = stack.pop() {
+        while let Some(ConfigStack {
+            shape,
+            path,
+            mut preload,
+        }) = stack.pop()
+        {
             if let Some(next_path) = preload.next() {
-                let path_parent = path.parent()
-                    .context(format!("failed to retrieve parent directory of path: \"{}\"", path.display()))?;
+                let path_parent = path.parent().context(format!(
+                    "failed to retrieve parent directory of path: \"{}\"",
+                    path.display()
+                ))?;
 
                 let next_resolved = normalize_from(path_parent, next_path);
                 let mut next_shape = Self::load_file(&next_resolved)?;
-                let next_preload = next_shape.preload.take()
-                    .unwrap_or_default();
+                let next_preload = next_shape.preload.take().unwrap_or_default();
 
                 stack.push(ConfigStack {
                     shape,
                     path,
-                    preload
+                    preload,
                 });
                 stack.push(ConfigStack {
                     shape: next_shape,
@@ -127,39 +124,35 @@ impl Config {
             tracing::debug!("settings: {settings:#?}");
         }
 
-        let data_meta = metadata(&settings.data).context(
-            "failed to retrieve metadata for settings.data"
-        )?.context(
-            format!("settings.data was not found: {}", settings.data.display())
-        )?;
+        let data_meta = metadata(&settings.data)
+            .context("failed to retrieve metadata for settings.data")?
+            .context(format!(
+                "settings.data was not found: {}",
+                settings.data.display()
+            ))?;
 
         if !data_meta.is_dir() {
-            return Err(error::Error::context(
-                "settings.data is not a directory"
-            ));
+            return Err(error::Error::context("settings.data is not a directory"));
         }
 
-        let storage_meta = metadata(&settings.storage).context(
-            "failed to retrieve metadata for settings.storage"
-        )?.context(
-            format!("settings.storage was not found: {}", settings.storage.display())
-        )?;
+        let storage_meta = metadata(&settings.storage)
+            .context("failed to retrieve metadata for settings.storage")?
+            .context(format!(
+                "settings.storage was not found: {}",
+                settings.storage.display()
+            ))?;
 
         if !storage_meta.is_dir() {
-            return Err(error::Error::context(
-                "settings.storage is not a directory"
-            ));
+            return Err(error::Error::context("settings.storage is not a directory"));
         }
 
         if settings.listeners.is_empty() {
             return Err(error::Error::context(
-                "no server listeners have been specified in config files"
+                "no server listeners have been specified in config files",
             ));
         }
 
-        Ok(Config {
-            settings
-        })
+        Ok(Config { settings })
     }
 
     /// attempts to load a specified config file
@@ -167,7 +160,8 @@ impl Config {
     /// is capable of parsing JSON, YAML, and TOML files
     fn load_file(path: &PathBuf) -> Result<SettingsShape, error::Error> {
         let ext = path.extension().context(format!(
-            "failed to retrieve the file extension from the config specified: \"{}\"", path.display()
+            "failed to retrieve the file extension from the config specified: \"{}\"",
+            path.display()
         ))?;
 
         let ext = ext.to_ascii_lowercase();
@@ -175,26 +169,35 @@ impl Config {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .open(path)
-            .context(format!("failed to open config file: \"{}\"", path.display()))?;
+            .context(format!(
+                "failed to open config file: \"{}\"",
+                path.display()
+            ))?;
 
-        file.read_to_string(&mut contents)
-            .context(format!("failed to read contents of config file: \"{}\"", path.display()))?;
+        file.read_to_string(&mut contents).context(format!(
+            "failed to read contents of config file: \"{}\"",
+            path.display()
+        ))?;
 
         if ext.eq("json") {
             serde_json::from_str(&contents).context(format!(
-                "failed to parse json config file: \"{}\"", path.display()
+                "failed to parse json config file: \"{}\"",
+                path.display()
             ))
         } else if ext.eq("yaml") || ext.eq("yml") {
             serde_yml::from_str(&contents).context(format!(
-                "failed to parse yaml config file: \"{}\"", path.display()
+                "failed to parse yaml config file: \"{}\"",
+                path.display()
             ))
         } else if ext.eq("toml") {
             toml::from_str(&contents).context(format!(
-                "failed to parse toml config file: \"{}\"", path.display()
+                "failed to parse toml config file: \"{}\"",
+                path.display()
             ))
         } else {
             Err(error::Error::context(format!(
-                "unknown type of config file: \"{}\"", path.display()
+                "unknown type of config file: \"{}\"",
+                path.display()
             )))
         }
     }
@@ -256,7 +259,12 @@ pub struct Settings {
 
 impl Settings {
     /// merges the given SettingsShape into the final Settings struct
-    fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, settings: SettingsShape) -> Result<(), error::Error> {
+    fn merge(
+        &mut self,
+        src: &SrcFile<'_>,
+        dot: DotPath<'_>,
+        settings: SettingsShape,
+    ) -> Result<(), error::Error> {
         if let Some(data) = settings.data {
             self.data = src.normalize(data);
 
@@ -311,7 +319,8 @@ impl Settings {
         }
 
         if let Some(templates) = settings.templates {
-            self.templates.merge(src, dot.push(&"templates"), templates)?;
+            self.templates
+                .merge(src, dot.push(&"templates"), templates)?;
         }
 
         if let Some(db) = settings.db {
@@ -334,7 +343,7 @@ impl TryDefault for Settings {
             listeners: Vec::new(),
             assets: Assets::default(),
             templates: Templates::try_default()?,
-            db: Db::default()
+            db: Db::default(),
         })
     }
 }
@@ -361,18 +370,27 @@ pub struct Listener {
 
 impl Listener {
     /// merges the given ListenerShape into the final Listener struct
-    fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, listener: ListenerShape) -> Result<(), error::Error> {
+    fn merge(
+        &mut self,
+        src: &SrcFile<'_>,
+        dot: DotPath<'_>,
+        listener: ListenerShape,
+    ) -> Result<(), error::Error> {
         self.addr = match SocketAddr::from_str(&listener.addr) {
             Ok(valid) => valid,
             Err(_) => match IpAddr::from_str(&listener.addr) {
                 Ok(valid) => SocketAddr::from((valid, 8080)),
-                Err(_) => return Err(error::Error::context(format!(
-                    "{dot}.addr invalid: \"{}\" file: {src}", listener.addr
-                )))
-            }
+                Err(_) => {
+                    return Err(error::Error::context(format!(
+                        "{dot}.addr invalid: \"{}\" file: {src}",
+                        listener.addr
+                    )))
+                }
+            },
         };
 
-        #[cfg(feature = "rustls")] {
+        #[cfg(feature = "rustls")]
+        {
             if let Some(tls) = listener.tls {
                 let mut base = tls::Tls::default();
 
@@ -402,8 +420,8 @@ pub mod tls {
 
     use serde::Deserialize;
 
+    use super::meta::{check_path, DotPath, SrcFile};
     use crate::error;
-    use super::meta::{SrcFile, DotPath, check_path};
 
     /// the structure of a tls listener from a config file
     #[derive(Debug, Deserialize)]
@@ -424,7 +442,12 @@ pub mod tls {
 
     impl Tls {
         /// merges a given TlsShape into a Tls structure
-        pub(super) fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, tls: TlsShape) -> Result<(), error::Error> {
+        pub(super) fn merge(
+            &mut self,
+            src: &SrcFile<'_>,
+            dot: DotPath<'_>,
+            tls: TlsShape,
+        ) -> Result<(), error::Error> {
             self.key = src.normalize(tls.key);
             self.cert = src.normalize(tls.cert);
 
@@ -464,7 +487,12 @@ pub struct Assets {
 
 impl Assets {
     /// merges a given AssetsShape into an Assets structure
-    fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, assets: AssetsShape) -> Result<(), error::Error> {
+    fn merge(
+        &mut self,
+        src: &SrcFile<'_>,
+        dot: DotPath<'_>,
+        assets: AssetsShape,
+    ) -> Result<(), error::Error> {
         if let Some(files) = assets.files {
             let files_dot = dot.push(&"files");
 
@@ -510,7 +538,7 @@ impl Assets {
 /// the structure of a templates config
 #[derive(Debug, Deserialize)]
 pub struct TemplatesShape {
-    directory: Option<PathBuf>
+    directory: Option<PathBuf>,
 }
 
 /// the list of available options when configuring the templates for a server
@@ -520,12 +548,17 @@ pub struct Templates {
     /// the directory that contains all templates for the server to load
     ///
     /// defaults to "{CWD}/templates"
-    pub directory: PathBuf
+    pub directory: PathBuf,
 }
 
 impl Templates {
     /// merges a given TemplatesShape into a Templates structure
-    fn merge(&mut self, src: &SrcFile<'_>, dot: DotPath<'_>, templates: TemplatesShape) -> Result<(), error::Error> {
+    fn merge(
+        &mut self,
+        src: &SrcFile<'_>,
+        dot: DotPath<'_>,
+        templates: TemplatesShape,
+    ) -> Result<(), error::Error> {
         if let Some(directory) = templates.directory {
             self.directory = src.normalize(directory);
 
@@ -541,7 +574,7 @@ impl TryDefault for Templates {
 
     fn try_default() -> Result<Self, Self::Error> {
         Ok(Templates {
-            directory: get_cwd()?.join("templates")
+            directory: get_cwd()?.join("templates"),
         })
     }
 }
@@ -587,7 +620,12 @@ pub struct Db {
 
 impl Db {
     /// merges a given DbShape into a Db structure
-    fn merge(&mut self, _src: &SrcFile<'_>, _dot: DotPath<'_>, db: DbShape) -> Result<(), error::Error> {
+    fn merge(
+        &mut self,
+        _src: &SrcFile<'_>,
+        _dot: DotPath<'_>,
+        db: DbShape,
+    ) -> Result<(), error::Error> {
         if let Some(user) = db.user {
             self.user = user;
         }

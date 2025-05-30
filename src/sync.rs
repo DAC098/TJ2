@@ -1,10 +1,10 @@
 use axum::http::StatusCode;
 use crypto_box::ChaChaBox;
-use tj2_lib::sec::pki::{PrivateKey, PublicKey, PrivateKeyError};
+use tj2_lib::sec::pki::{PrivateKey, PrivateKeyError, PublicKey};
 
 use crate::api;
-use crate::sec::pki;
 use crate::sec::authn::ApiSession;
+use crate::sec::pki;
 use crate::state::Storage;
 use crate::user::peer::UserPeer;
 
@@ -14,7 +14,7 @@ static CLIENT_USER_AGENT: &str = "tj2-sync-client/0.0.1";
 
 fn origin_url<P>(origin: &str, path: P) -> String
 where
-    P: AsRef<str>
+    P: AsRef<str>,
 {
     let mut url = origin.to_owned();
     url.push_str(path.as_ref());
@@ -92,28 +92,28 @@ impl PeerClient {
 
     pub fn get<P>(&self, path: P) -> reqwest::RequestBuilder
     where
-        P: AsRef<str>
+        P: AsRef<str>,
     {
         self.client.get(origin_url(&self.origin, path))
     }
 
     pub fn post<P>(&self, path: P) -> reqwest::RequestBuilder
     where
-        P: AsRef<str>
+        P: AsRef<str>,
     {
         self.client.post(origin_url(&self.origin, path))
     }
 
     pub fn patch<P>(&self, path: P) -> reqwest::RequestBuilder
     where
-        P: AsRef<str>
+        P: AsRef<str>,
     {
         self.client.patch(origin_url(&self.origin, path))
     }
 
     pub fn put<P>(&self, path: P) -> reqwest::RequestBuilder
     where
-        P: AsRef<str>
+        P: AsRef<str>,
     {
         self.client.put(origin_url(&self.origin, path))
     }
@@ -132,7 +132,9 @@ impl PeerClientBuilder {
             challenge,
             result,
             token,
-        } = self.get_challenge(&user_box, &data, private_key.public_key()).await?;
+        } = self
+            .get_challenge(&user_box, &data, private_key.public_key())
+            .await?;
 
         if result != data {
             return Err(ConnectError::InvalidPeerData);
@@ -143,12 +145,15 @@ impl PeerClientBuilder {
         // attempt to decrypt the peer challenge to verify that we are who we say
         // we are
         let authn_response = api::authn::AuthnResponse {
-            result: challenge.into_data(&user_box).map_err(|err| ConnectError::DecryptChallenge(err))?,
+            result: challenge
+                .into_data(&user_box)
+                .map_err(|err| ConnectError::DecryptChallenge(err))?,
         };
 
         let authz_value = ApiSession::authorization_value(&token);
 
-        let res = self.patch("/api/authn")
+        let res = self
+            .patch("/api/authn")
             .header("authorization", authz_value.clone())
             .json(&authn_response)
             .send()
@@ -171,7 +176,7 @@ impl PeerClientBuilder {
             Ok(PeerClient {
                 origin: self.origin,
                 peer: self.peer,
-                client
+                client,
             })
         }
     }
@@ -188,17 +193,16 @@ impl PeerClientBuilder {
         data: &pki::Data,
         public_key: PublicKey,
     ) -> Result<api::authn::AuthnChallenge, ConnectError> {
-        let challenge = data.into_challenge(user_box).map_err(|e| ConnectError::EncryptData(e))?;
+        let challenge = data
+            .into_challenge(user_box)
+            .map_err(|e| ConnectError::EncryptData(e))?;
 
         let get_authn = api::authn::GetAuthn {
             public_key,
             challenge,
         };
 
-        let res = self.post("/api/authn")
-            .json(&get_authn)
-            .send()
-            .await?;
+        let res = self.post("/api/authn").json(&get_authn).send().await?;
 
         if res.status() != StatusCode::OK {
             return Err(ConnectError::FailedAuthnChallenge);
@@ -213,14 +217,14 @@ impl PeerClientBuilder {
 
     fn post<P>(&self, path: P) -> reqwest::RequestBuilder
     where
-        P: AsRef<str>
+        P: AsRef<str>,
     {
         self.client.post(origin_url(&self.origin, path))
     }
 
     fn patch<P>(&self, path: P) -> reqwest::RequestBuilder
     where
-        P: AsRef<str>
+        P: AsRef<str>,
     {
         self.client.patch(origin_url(&self.origin, path))
     }

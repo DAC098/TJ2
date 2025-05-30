@@ -1,40 +1,36 @@
 use axum::extract::Query;
-use axum::http::{StatusCode, HeaderMap};
-use axum::response::{Response, IntoResponse};
-use serde::{Serialize, Deserialize};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::error::{self, Context};
 use crate::router::{body, macros};
-use crate::state::{self, Security};
 use crate::sec::authn::Initiator;
 use crate::sec::otp;
+use crate::state::{self, Security};
 use crate::user::User;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum AuthSettings {
-    Totp {
-        enabled: bool
-    }
+    Totp { enabled: bool },
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AuthQuery {
-    kind: Option<AuthKind>
+    kind: Option<AuthKind>,
 }
 
 #[derive(Debug, Deserialize)]
 pub enum AuthKind {
-    Totp
+    Totp,
 }
 
 pub async fn get(
     state: state::SharedState,
     initiator: Initiator,
-    Query(AuthQuery {
-        kind
-    }): Query<AuthQuery>,
+    Query(AuthQuery { kind }): Query<AuthQuery>,
     headers: HeaderMap,
 ) -> Result<Response, error::Error> {
     macros::res_if_html!(state.templates(), &headers);
@@ -43,7 +39,8 @@ pub async fn get(
         return Ok(body::Json("okay").into_response());
     };
 
-    let conn = state.db()
+    let conn = state
+        .db()
         .get()
         .await
         .context("failed to retrieve database connection")?;
@@ -52,8 +49,8 @@ pub async fn get(
         AuthKind::Totp => AuthSettings::Totp {
             enabled: otp::Totp::exists(&conn, &initiator.user.id)
                 .await
-                .context("failed to check totp")?
-        }
+                .context("failed to check totp")?,
+        },
     };
 
     Ok(body::Json(result).into_response())
@@ -64,9 +61,7 @@ pub async fn get(
 pub enum UpdateAuth {
     EnableTotp,
     DisableTotp,
-    VerifyTotp {
-        code: String
-    },
+    VerifyTotp { code: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -124,15 +119,10 @@ impl IntoResponse for UpdateAuthError {
         error::log_prefix_error("response error", &self);
 
         match self {
-            Self::AlreadyExists |
-            Self::InvalidTotpCode => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self),
-            ).into_response(),
-            Self::TotpNotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self),
-            ).into_response(),
+            Self::AlreadyExists | Self::InvalidTotpCode => {
+                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
+            }
+            Self::TotpNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
             _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
@@ -141,21 +131,21 @@ impl IntoResponse for UpdateAuthError {
 pub async fn patch(
     state: state::SharedState,
     initiator: Initiator,
-    body::Json(action): body::Json<UpdateAuth>
+    body::Json(action): body::Json<UpdateAuth>,
 ) -> Result<impl IntoResponse, UpdateAuthError> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
     let result = match action {
-        UpdateAuth::EnableTotp => enable_totp(
-            state.security(), &transaction, initiator.user
-        ).await?,
-        UpdateAuth::DisableTotp => disable_totp(
-            state.security(), &transaction, initiator.user
-        ).await?,
-        UpdateAuth::VerifyTotp { code } => verify_totp(
-            state.security(), &transaction, initiator.user, code
-        ).await?
+        UpdateAuth::EnableTotp => {
+            enable_totp(state.security(), &transaction, initiator.user).await?
+        }
+        UpdateAuth::DisableTotp => {
+            disable_totp(state.security(), &transaction, initiator.user).await?
+        }
+        UpdateAuth::VerifyTotp { code } => {
+            verify_totp(state.security(), &transaction, initiator.user, code).await?
+        }
     };
 
     transaction.commit().await?;
@@ -166,7 +156,7 @@ pub async fn patch(
 pub async fn enable_totp(
     security: &Security,
     conn: &impl db::GenericClient,
-    user: User
+    user: User,
 ) -> Result<ResultAuth, UpdateAuthError> {
     if otp::Totp::exists(conn, &user.id).await? {
         return Ok(ResultAuth::Noop);
@@ -183,7 +173,13 @@ pub async fn enable_totp(
         }
     };
 
-    let otp::Totp { algo, step, digits, secret, .. } = totp;
+    let otp::Totp {
+        algo,
+        step,
+        digits,
+        secret,
+        ..
+    } = totp;
 
     Ok(ResultAuth::CreatedTotp(ResultTotp {
         algo,
@@ -204,21 +200,23 @@ pub async fn verify_totp(
     }
 
     match security.vetting.totp.get(&user.id) {
-        Some(record) => if record.verify(code)? {
-            if let Err(err) = record.save(conn).await {
-                return match err {
-                    otp::TotpError::AlreadyExists => Err(UpdateAuthError::AlreadyExists),
-                    otp::TotpError::Db(err) => Err(UpdateAuthError::Db(err)),
-                };
+        Some(record) => {
+            if record.verify(code)? {
+                if let Err(err) = record.save(conn).await {
+                    return match err {
+                        otp::TotpError::AlreadyExists => Err(UpdateAuthError::AlreadyExists),
+                        otp::TotpError::Db(err) => Err(UpdateAuthError::Db(err)),
+                    };
+                }
+
+                security.vetting.totp.invalidate(&user.id);
+
+                Ok(ResultAuth::VerifiedTotp)
+            } else {
+                Err(UpdateAuthError::InvalidTotpCode)
             }
-
-            security.vetting.totp.invalidate(&user.id);
-
-            Ok(ResultAuth::VerifiedTotp)
-        } else {
-            Err(UpdateAuthError::InvalidTotpCode)
-        },
-        None => Err(UpdateAuthError::TotpNotFound)
+        }
+        None => Err(UpdateAuthError::TotpNotFound),
     }
 }
 
@@ -234,6 +232,6 @@ pub async fn disable_totp(
             Ok(_) => Ok(ResultAuth::DeletedTotp),
             Err(err) => Err(UpdateAuthError::Db(err)),
         },
-        None => Ok(ResultAuth::Noop)
+        None => Ok(ResultAuth::Noop),
     }
 }

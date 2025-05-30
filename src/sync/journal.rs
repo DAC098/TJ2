@@ -1,27 +1,17 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use bytes::BytesMut;
-use chrono::{NaiveDate, DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use futures::{Stream, StreamExt};
 use postgres_types as pg_types;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::db::{
-    ParamsArray,
-    GenericClient,
-};
 use crate::db::ids::{
-    JournalId,
-    JournalUid,
-    EntryId,
-    EntryUid,
-    CustomFieldUid,
-    FileEntryUid,
-    UserUid,
-    UserPeerId,
+    CustomFieldUid, EntryId, EntryUid, FileEntryUid, JournalId, JournalUid, UserPeerId, UserUid,
 };
+use crate::db::{GenericClient, ParamsArray};
 use crate::error::{self, BoxDynError, Context};
-use crate::journal::{FileStatus, custom_field};
+use crate::journal::{custom_field, FileStatus};
 use crate::router::body;
 use crate::sec::Hash;
 
@@ -32,36 +22,24 @@ pub enum SyncEntryResult {
     JournalNotFound,
     NotRemoteJournal,
     UserNotFound,
-    CFNotFound {
-        uids: Vec<CustomFieldUid>
-    },
-    CFInvalid {
-        uids: Vec<CustomFieldUid>
-    },
-    FileNotFound {
-        uids: Vec<FileEntryUid>
-    }
+    CFNotFound { uids: Vec<CustomFieldUid> },
+    CFInvalid { uids: Vec<CustomFieldUid> },
+    FileNotFound { uids: Vec<FileEntryUid> },
 }
 
 impl IntoResponse for SyncEntryResult {
     fn into_response(self) -> Response {
         match &self {
-            Self::Synced => (
-                StatusCode::CREATED,
-                body::Json(self)
-            ).into_response(),
-            Self::JournalNotFound |
-            Self::UserNotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self)
-            ).into_response(),
-            Self::NotRemoteJournal |
-            Self::CFNotFound { .. } |
-            Self::CFInvalid { .. } |
-            Self::FileNotFound { .. } => (
-                StatusCode::BAD_REQUEST,
-                body::Json(self)
-            ).into_response()
+            Self::Synced => (StatusCode::CREATED, body::Json(self)).into_response(),
+            Self::JournalNotFound | Self::UserNotFound => {
+                (StatusCode::NOT_FOUND, body::Json(self)).into_response()
+            }
+            Self::NotRemoteJournal
+            | Self::CFNotFound { .. }
+            | Self::CFInvalid { .. }
+            | Self::FileNotFound { .. } => {
+                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
+            }
         }
     }
 }
@@ -76,14 +54,8 @@ pub enum SyncJournalResult {
 impl IntoResponse for SyncJournalResult {
     fn into_response(self) -> Response {
         match &self {
-            Self::Synced => (
-                StatusCode::CREATED,
-                body::Json(self)
-            ).into_response(),
-            Self::UserNotFound => (
-                StatusCode::NOT_FOUND,
-                body::Json(self)
-            ).into_response(),
+            Self::Synced => (StatusCode::CREATED, body::Json(self)).into_response(),
+            Self::UserNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
         }
     }
 }
@@ -132,7 +104,11 @@ impl<'a> pg_types::FromSql<'a> for SyncStatus {
 }
 
 impl pg_types::ToSql for SyncStatus {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let v: i16 = self.into();
 
         v.to_sql(ty, w)
@@ -186,7 +162,13 @@ impl EntrySync {
         sync_date: &DateTime<Utc>,
         batch_size: i64,
     ) -> Result<impl Stream<Item = Result<(EntryId, Self), error::Error>>, error::Error> {
-        let params: ParamsArray<5> = [journals_id, user_peers_id, prev_entry, sync_date, &batch_size];
+        let params: ParamsArray<5> = [
+            journals_id,
+            user_peers_id,
+            prev_entry,
+            sync_date,
+            &batch_size,
+        ];
         let query = "\
             select entries.id, \
                    entries.uid, \
@@ -223,28 +205,32 @@ impl EntrySync {
             order by entries.id \
             limit $5";
 
-        let stream = conn.query_raw(query, params)
+        let stream = conn
+            .query_raw(query, params)
             .await
             .context("failed to retrieve entries batch")?;
 
         Ok(stream.map(|try_record| match try_record {
-            Ok(record) => Ok((record.get(0), Self {
-                uid: record.get(1),
-                journals_uid: record.get(2),
-                users_uid: record.get(3),
-                date: record.get(4),
-                title: record.get(5),
-                contents: record.get(6),
-                created: record.get(7),
-                updated: record.get(8),
-                tags: Vec::new(),
-                custom_fields: Vec::new(),
-                files: Vec::new()
-            })),
+            Ok(record) => Ok((
+                record.get(0),
+                Self {
+                    uid: record.get(1),
+                    journals_uid: record.get(2),
+                    users_uid: record.get(3),
+                    date: record.get(4),
+                    title: record.get(5),
+                    contents: record.get(6),
+                    created: record.get(7),
+                    updated: record.get(8),
+                    tags: Vec::new(),
+                    custom_fields: Vec::new(),
+                    files: Vec::new(),
+                },
+            )),
             Err(err) => Err(error::Error::context_source(
                 "failed to retrieve entry record",
-                err
-            ))
+                err,
+            )),
         }))
     }
 }
@@ -260,19 +246,20 @@ pub struct EntryTagSync {
 impl EntryTagSync {
     pub async fn retrieve(
         conn: &impl GenericClient,
-        entries_id: &EntryId
+        entries_id: &EntryId,
     ) -> Result<Vec<Self>, error::Error> {
         let params: ParamsArray<1> = [entries_id];
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select entry_tags.key, \
                    entry_tags.value, \
                    entry_tags.created, \
                    entry_tags.updated \
             from entry_tags \
             where entry_tags.entries_id = $1",
-            params,
-        )
+                params,
+            )
             .await
             .context("failed to retrieve entry tags")?;
 
@@ -306,11 +293,12 @@ pub struct EntryCFSync {
 impl EntryCFSync {
     pub async fn retrieve(
         conn: &impl GenericClient,
-        entries_id: &EntryId
+        entries_id: &EntryId,
     ) -> Result<Vec<Self>, error::Error> {
         let params: ParamsArray<1> = [entries_id];
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select custom_fields.uid, \
                    custom_field_entries.value, \
                    custom_field_entries.created, \
@@ -319,8 +307,8 @@ impl EntryCFSync {
                 left join custom_fields on \
                     custom_field_entries.custom_fields_id = custom_fields.id \
             where custom_field_entries.entries_id = $1",
-            params,
-        )
+                params,
+            )
             .await
             .context("failed to retrieve entry custom fields")?;
 
@@ -359,12 +347,13 @@ pub struct EntryFileSync {
 impl EntryFileSync {
     pub async fn retrieve(
         conn: &impl GenericClient,
-        entries_id: &EntryId
+        entries_id: &EntryId,
     ) -> Result<Vec<Self>, error::Error> {
         let status = FileStatus::Received;
         let params: ParamsArray<2> = [entries_id, &status];
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select file_entries.uid, \
                    file_entries.name, \
                    file_entries.mime_type, \
@@ -377,8 +366,8 @@ impl EntryFileSync {
             from file_entries \
             where file_entries.entries_id = $1 and \
                   file_entries.status = $2",
-            params
-        )
+                params,
+            )
             .await
             .context("failed to retrieve entry files")?;
 

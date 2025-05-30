@@ -2,34 +2,34 @@ use std::net::{SocketAddr, TcpListener};
 
 use axum::Router;
 use clap::Parser;
-use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use tokio::runtime::Builder;
-use tracing_subscriber::{FmtSubscriber, EnvFilter};
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
-mod serde;
-mod error;
-mod path;
-mod fs;
 mod config;
 mod db;
-mod templates;
-mod sec;
-mod state;
-mod sync;
+mod error;
+mod fs;
 mod jobs;
 mod net;
+mod path;
+mod sec;
+mod serde;
+mod state;
+mod sync;
+mod templates;
 
 mod cookie;
 mod header;
 
-mod user;
 mod journal;
+mod user;
 
 mod api;
 mod router;
 
-use error::{Error, Context};
+use error::{Context, Error};
 
 fn main() {
     let args = config::CliArgs::parse();
@@ -50,7 +50,8 @@ fn main() {
     if let Err(err) = FmtSubscriber::builder()
         .with_env_filter(filter)
         .try_init()
-        .context("failed to initialize stdout logging") {
+        .context("failed to initialize stdout logging")
+    {
         error::log_error(&err);
 
         std::process::exit(1);
@@ -82,7 +83,8 @@ fn setup(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
         Builder::new_multi_thread()
     };
 
-    let rt = builder.enable_io()
+    let rt = builder
+        .enable_io()
         .enable_time()
         .max_blocking_threads(config.settings.blocking_pool)
         .build()
@@ -115,7 +117,11 @@ async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error
         let local_handle = handle.clone();
 
         server_handles.push(handle);
-        all_futs.push(tokio::spawn(start_server(listener, local_router, local_handle)));
+        all_futs.push(tokio::spawn(start_server(
+            listener,
+            local_router,
+            local_handle,
+        )));
     }
 
     all_futs.push(tokio::spawn(handle_signal(server_handles)));
@@ -124,8 +130,7 @@ async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error
 
     tracing::info!("closing database connections");
 
-    state.db()
-        .close();
+    state.db().close();
 
     Ok(())
 }
@@ -136,7 +141,8 @@ fn create_listener(addr: &SocketAddr) -> Result<TcpListener, error::Error> {
         .context(format!("failed binding to listener address {addr}"))?;
 
     if addr.port() == 0 {
-        let local_addr = listener.local_addr()
+        let local_addr = listener
+            .local_addr()
             .expect("expected to retrieve a valid ipv4/v6 address for the listener socket");
 
         tracing::info!("listening on: {local_addr}");
@@ -161,7 +167,7 @@ async fn start_server(listener: config::Listener, router: Router, handle: axum_s
 async fn create_server(
     listener: config::Listener,
     router: Router,
-    handle: axum_server::Handle
+    handle: axum_server::Handle,
 ) -> Result<(), error::Error> {
     let listener = create_listener(&listener.addr)?;
 
@@ -180,14 +186,17 @@ async fn create_server(
 async fn create_server(
     listener: config::Listener,
     router: Router,
-    handle: axum_server::Handle
+    handle: axum_server::Handle,
 ) -> Result<(), error::Error> {
     use axum_server::tls_rustls::RustlsConfig;
 
     if let Some(tls) = listener.tls {
         let tls_config = RustlsConfig::from_pem_file(tls.cert, tls.key)
             .await
-            .context(format!("failed to load pem files for listener {}", listener.addr))?;
+            .context(format!(
+                "failed to load pem files for listener {}",
+                listener.addr
+            ))?;
 
         let listener = create_listener(&listener.addr)?;
 

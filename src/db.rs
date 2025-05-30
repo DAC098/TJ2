@@ -4,18 +4,18 @@ use axum::http::request::Parts;
 use bytes::BytesMut;
 use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
 use postgres_types as pg_types;
-use tokio_postgres::{Config as PgConfig, NoTls};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::ToSql;
+use tokio_postgres::{Config as PgConfig, NoTls};
 
 use crate::config::Config;
-use crate::error::{Error, Context, BoxDynError};
-use crate::sec::authz::{Scope, Ability, Role};
+use crate::error::{BoxDynError, Context, Error};
+use crate::sec::authz::{Ability, Role, Scope};
 use crate::sec::password;
 use crate::state;
 use crate::user::{User, UserBuilderError};
 
-pub use deadpool_postgres::{Pool, GenericClient, Object, Transaction, PoolError};
+pub use deadpool_postgres::{GenericClient, Object, Pool, PoolError, Transaction};
 pub use tokio_postgres::Error as PgError;
 
 mod test_data;
@@ -32,7 +32,11 @@ pub type ParamsArray<'a, const N: usize> = [&'a (dyn ToSql + Sync); N];
 pub struct U16toI32<'a>(pub &'a u16);
 
 impl<'a> pg_types::ToSql for U16toI32<'a> {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let casted: i32 = (*self.0).into();
 
         casted.to_sql(ty, w)
@@ -49,7 +53,11 @@ impl<'a> pg_types::ToSql for U16toI32<'a> {
 pub struct U8toI16<'a>(pub &'a u8);
 
 impl<'a> pg_types::ToSql for U8toI16<'a> {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         let casted: i16 = (*self.0).into();
 
         casted.to_sql(ty, w)
@@ -69,9 +77,13 @@ where
 
 impl<'a, T> pg_types::ToSql for ToBytea<'a, T>
 where
-    T: AsRef<[u8]> + std::fmt::Debug
+    T: AsRef<[u8]> + std::fmt::Debug,
 {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
         self.0.as_ref().to_sql(ty, w)
     }
 
@@ -91,7 +103,7 @@ where
 
 pub fn try_from_int<T>(given: i32) -> Result<T, T::Error>
 where
-    T: TryFrom<i32>
+    T: TryFrom<i32>,
 {
     given.try_into()
 }
@@ -112,7 +124,7 @@ pub async fn from_config(config: &Config) -> Result<Pool, Error> {
     }
 
     let manager_config = ManagerConfig {
-        recycling_method: RecyclingMethod::Fast
+        recycling_method: RecyclingMethod::Fast,
     };
 
     let manager = Manager::from_config(pg_config, NoTls, manager_config);
@@ -131,7 +143,8 @@ pub async fn from_config(config: &Config) -> Result<Pool, Error> {
 /// user exists then the role will as well.
 pub async fn check_database(state: &state::SharedState) -> Result<(), Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create transaction")?;
 
@@ -146,26 +159,29 @@ pub async fn check_database(state: &state::SharedState) -> Result<(), Error> {
 
         let user_dir = state.storage().user_dir(admin.id);
 
-        user_dir.create()
+        user_dir
+            .create()
             .await
             .context("failed to create admin user directory")?;
 
-        let private_key = tj2_lib::sec::pki::PrivateKey::generate()
-            .context("failed to generate private key")?;
+        let private_key =
+            tj2_lib::sec::pki::PrivateKey::generate().context("failed to generate private key")?;
 
-        private_key.save(user_dir.private_key(), false)
+        private_key
+            .save(user_dir.private_key(), false)
             .await
             .context("failed to save private key")?;
 
-        let admin_role = create_default_roles(&transaction)
-            .await?;
+        let admin_role = create_default_roles(&transaction).await?;
 
-        admin_role.assign_user(&transaction, admin.id)
+        admin_role
+            .assign_user(&transaction, admin.id)
             .await
             .context("failed to assign admin to admin role")?;
     }
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction")?;
 
@@ -174,17 +190,18 @@ pub async fn check_database(state: &state::SharedState) -> Result<(), Error> {
 
 /// creates the default admin user
 async fn create_admin_user(conn: &impl GenericClient) -> Result<Option<User>, Error> {
-    let hash = password::create("password")
-        .context("failed to create admin password")?;
+    let hash = password::create("password").context("failed to create admin password")?;
 
     match User::create(conn, "admin", &hash, 0).await {
         Ok(user) => Ok(Some(user)),
         Err(err) => match err {
             UserBuilderError::UsernameExists => Ok(None),
             UserBuilderError::UidExists => Err(Error::context("user uid collision")),
-            UserBuilderError::Db(db_err) => Err(Error::context_source("failed to create admin", db_err)),
+            UserBuilderError::Db(db_err) => {
+                Err(Error::context_source("failed to create admin", db_err))
+            }
             _ => unreachable!(),
-        }
+        },
     }
 }
 
@@ -196,39 +213,55 @@ async fn create_default_roles(conn: &impl GenericClient) -> Result<Role, Error> 
         .context("admin role already exists")?;
 
     let permissions = vec![
-        (Scope::Users, vec![
-            Ability::Create,
-            Ability::Read,
-            Ability::Update,
-            Ability::Delete
-        ]),
-        (Scope::Journals, vec![
-            Ability::Create,
-            Ability::Read,
-            Ability::Update,
-            Ability::Delete,
-        ]),
-        (Scope::Entries, vec![
-            Ability::Create,
-            Ability::Read,
-            Ability::Update,
-            Ability::Delete,
-        ]),
-        (Scope::Groups, vec![
-            Ability::Create,
-            Ability::Read,
-            Ability::Update,
-            Ability::Delete,
-        ]),
-        (Scope::Roles, vec![
-            Ability::Create,
-            Ability::Read,
-            Ability::Update,
-            Ability::Delete,
-        ])
+        (
+            Scope::Users,
+            vec![
+                Ability::Create,
+                Ability::Read,
+                Ability::Update,
+                Ability::Delete,
+            ],
+        ),
+        (
+            Scope::Journals,
+            vec![
+                Ability::Create,
+                Ability::Read,
+                Ability::Update,
+                Ability::Delete,
+            ],
+        ),
+        (
+            Scope::Entries,
+            vec![
+                Ability::Create,
+                Ability::Read,
+                Ability::Update,
+                Ability::Delete,
+            ],
+        ),
+        (
+            Scope::Groups,
+            vec![
+                Ability::Create,
+                Ability::Read,
+                Ability::Update,
+                Ability::Delete,
+            ],
+        ),
+        (
+            Scope::Roles,
+            vec![
+                Ability::Create,
+                Ability::Read,
+                Ability::Update,
+                Ability::Delete,
+            ],
+        ),
     ];
 
-    admin_role.assign_permissions(conn, &permissions)
+    admin_role
+        .assign_permissions(conn, &permissions)
         .await
         .context("failed to create default permissions")?;
 
@@ -240,7 +273,8 @@ pub async fn gen_test_data(state: &state::SharedState) -> Result<(), Error> {
     let mut rng = rand::thread_rng();
     let mut conn = state.db_conn().await?;
 
-    let transaction = conn.transaction()
+    let transaction = conn
+        .transaction()
         .await
         .context("failed to create database transaction")?;
 
@@ -249,26 +283,20 @@ pub async fn gen_test_data(state: &state::SharedState) -> Result<(), Error> {
         .context("failed to check if admin user was found")?;
 
     if let Some(admin) = maybe_admin {
-        let check = transaction.execute(
-            "select * from journals where id = $1",
-            &[&admin.id]
-        )
+        let check = transaction
+            .execute("select * from journals where id = $1", &[&admin.id])
             .await
             .context("failed to retrieve journals for admin")?;
 
         if check == 0 {
-            test_data::create_journal(
-                state,
-                &transaction,
-                &mut rng,
-                admin.id
-            ).await?;
+            test_data::create_journal(state, &transaction, &mut rng, admin.id).await?;
         }
     }
 
     test_data::create(state, &transaction, &mut rng).await?;
 
-    transaction.commit()
+    transaction
+        .commit()
         .await
         .context("failed to commit transaction for test data")?;
 
@@ -280,7 +308,7 @@ pub async fn gen_test_data(state: &state::SharedState) -> Result<(), Error> {
 /// used for query parameters when dynmaically creating sql queries
 pub fn push_param<'a, T>(params: &mut ParamsVec<'a>, v: &'a T) -> usize
 where
-    T: ToSql + Sync
+    T: ToSql + Sync,
 {
     params.push(v);
     params.len()
@@ -306,17 +334,21 @@ impl<'a> ErrorKind<'a> {
         };
 
         match *db_error.code() {
-            SqlState::UNIQUE_VIOLATION => if let Some(name) = db_error.constraint() {
-                Some(Self::Unique(name))
-            } else {
-                None
+            SqlState::UNIQUE_VIOLATION => {
+                if let Some(name) = db_error.constraint() {
+                    Some(Self::Unique(name))
+                } else {
+                    None
+                }
             }
-            SqlState::FOREIGN_KEY_VIOLATION => if let Some(name) = db_error.constraint() {
-                Some(Self::ForeignKey(name))
-            } else {
-                None
+            SqlState::FOREIGN_KEY_VIOLATION => {
+                if let Some(name) = db_error.constraint() {
+                    Some(Self::ForeignKey(name))
+                } else {
+                    None
+                }
             }
-            _ => None
+            _ => None,
         }
     }
 }
@@ -330,7 +362,8 @@ impl Conn {
     /// attempts to retrieve a database transaction from the current
     /// connection
     pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
-        self.0.transaction()
+        self.0
+            .transaction()
             .await
             .context("failed to create transaction")
     }
@@ -342,9 +375,10 @@ impl FromRequestParts<state::SharedState> for Conn {
 
     async fn from_request_parts(
         _parts: &mut Parts,
-        state: &state::SharedState
+        state: &state::SharedState,
     ) -> Result<Self, Self::Rejection> {
-        let conn = state.db()
+        let conn = state
+            .db()
             .get()
             .await
             .context("failed to retrieve database connection")?;
@@ -357,10 +391,7 @@ impl FromRequestParts<state::SharedState> for Conn {
 impl FromRequestParts<()> for Conn {
     type Rejection = Error;
 
-    async fn from_request_parts(
-        _parts: &mut Parts,
-        _state: &()
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(_parts: &mut Parts, _state: &()) -> Result<Self, Self::Rejection> {
         Err(Error::context("no state"))
     }
 }

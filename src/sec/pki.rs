@@ -1,6 +1,6 @@
-use crypto_box::{ChaChaBox, Nonce};
 use crypto_box::aead::{Aead, AeadCore, OsRng};
-use serde::{Serialize, Deserialize};
+use crypto_box::{ChaChaBox, Nonce};
+use serde::{Deserialize, Serialize};
 
 use crate::sec::sized_rand_bytes;
 
@@ -56,7 +56,9 @@ impl Challenge {
     pub fn into_data(self, user_box: &ChaChaBox) -> Result<Data, ChallengeError> {
         let bytes = decrypt(user_box, self.0)?;
 
-        Ok(Data(bytes.try_into().map_err(|_| ChallengeError::InvalidData)?))
+        Ok(Data(
+            bytes.try_into().map_err(|_| ChallengeError::InvalidData)?,
+        ))
     }
 }
 
@@ -76,23 +78,25 @@ pub fn decrypt(user_box: &ChaChaBox, cipher: Vec<u8>) -> Result<Vec<u8>, Decrypt
 
     let nonce = Nonce::from(TryInto::<[u8; 24]>::try_into(nonce).unwrap());
 
-    user_box.decrypt(&nonce, encrypted)
+    user_box
+        .decrypt(&nonce, encrypted)
         .map_err(|_| DecryptError::Failed)
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncryptError {
     #[error("failed to encrypt data")]
-    Failed
+    Failed,
 }
 
 pub fn encrypt<T>(user_box: &ChaChaBox, data: T) -> Result<Vec<u8>, EncryptError>
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     let nonce = ChaChaBox::generate_nonce(&mut OsRng);
 
-    let encrypted = user_box.encrypt(&nonce, data.as_ref())
+    let encrypted = user_box
+        .encrypt(&nonce, data.as_ref())
         .map_err(|_| EncryptError::Failed)?;
 
     let mut rtn = Vec::with_capacity(24 + encrypted.len());

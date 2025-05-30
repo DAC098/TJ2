@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
 use bytes::BytesMut;
 use postgres_types as pg_types;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::error::BoxDynError;
 
@@ -11,7 +11,7 @@ pub struct Hash(pub blake3::Hash);
 impl Hash {
     pub fn from_hex<T>(given: T) -> Result<Self, blake3::HexError>
     where
-        T: AsRef<[u8]>
+        T: AsRef<[u8]>,
     {
         Ok(Self(blake3::Hash::from_hex(given)?))
     }
@@ -36,10 +36,12 @@ impl PartialEq for Hash {
 }
 
 impl pg_types::ToSql for Hash {
-    fn to_sql(&self, ty: &pg_types::Type, w: &mut BytesMut) -> Result<pg_types::IsNull, BoxDynError> {
-        self.0.to_hex()
-            .as_str()
-            .to_sql(ty, w)
+    fn to_sql(
+        &self,
+        ty: &pg_types::Type,
+        w: &mut BytesMut,
+    ) -> Result<pg_types::IsNull, BoxDynError> {
+        self.0.to_hex().as_str().to_sql(ty, w)
     }
 
     fn accepts(ty: &pg_types::Type) -> bool {
@@ -93,9 +95,7 @@ impl HashCheck {
         if x_hash_str == "at_end" {
             Ok(HashCheck::AtEnd)
         } else {
-            Ok(HashCheck::Given(
-                Hash::from_hex(x_hash_str)?
-            ))
+            Ok(HashCheck::Given(Hash::from_hex(x_hash_str)?))
         }
     }
 }

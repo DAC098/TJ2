@@ -2,15 +2,15 @@ use std::iter::Iterator;
 use std::str::FromStr;
 
 use axum::body::Body;
-use axum::http::{Uri, StatusCode, HeaderMap, HeaderValue};
-use axum::http::header::{ToStrError, InvalidHeaderValue};
-use axum::response::{Response, ResponseParts, IntoResponse, IntoResponseParts};
+use axum::http::header::{InvalidHeaderValue, ToStrError};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 
 use crate::error::{self, Context};
 
 /// an iterator over all values found in the "accept" header
 pub struct AcceptIter<'a> {
-    iter: std::str::Split<'a, &'static str>
+    iter: std::str::Split<'a, &'static str>,
 }
 
 impl<'a> AcceptIter<'a> {
@@ -20,7 +20,7 @@ impl<'a> AcceptIter<'a> {
             let accept_str = accept.to_str()?;
 
             Ok(Some(Self {
-                iter: accept_str.split(",")
+                iter: accept_str.split(","),
             }))
         } else {
             Ok(None)
@@ -67,7 +67,7 @@ impl Location {
     /// creates the Location for a given value
     pub fn to<T>(location: T) -> Self
     where
-        T: Into<String>
+        T: Into<String>,
     {
         Self(location.into())
     }
@@ -82,7 +82,7 @@ impl Location {
     /// valid [`Uri`]
     pub fn login<U>(maybe_prev: Option<U>) -> Self
     where
-        Uri: TryFrom<U>
+        Uri: TryFrom<U>,
     {
         if let Some(prev) = maybe_prev {
             let Ok(uri): Result<Uri, _> = prev.try_into() else {
@@ -119,7 +119,8 @@ impl IntoResponseParts for Location {
     type Error = error::Error;
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
-        let value = self.into_header_value()
+        let value = self
+            .into_header_value()
             .context("failed to change Redirect into HeaderValue")?;
 
         res.headers_mut().insert("location", value);

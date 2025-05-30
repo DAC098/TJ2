@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::fs::read_dir;
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 
 use tera::Tera;
 
-use crate::error::{self, Context};
 use crate::config;
+use crate::error::{self, Context};
 use crate::path::metadata;
 
 pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
@@ -15,18 +15,13 @@ pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
     load_dir(
         &mut files,
         &config.settings.templates.directory,
-        &config.settings.templates.directory
+        &config.settings.templates.directory,
     )?;
 
     tera.add_template_files(files)
         .context("failed to add template files")?;
 
-    let mut required = HashSet::from([
-        "pages/index",
-        "pages/login",
-        "pages/entries",
-        "pages/spa",
-    ]);
+    let mut required = HashSet::from(["pages/index", "pages/login", "pages/entries", "pages/spa"]);
 
     for name in tera.get_template_names() {
         tracing::debug!("template name: {name}");
@@ -48,18 +43,29 @@ pub fn initialize(config: &config::Config) -> Result<Tera, error::Error> {
     Ok(tera)
 }
 
-fn load_dir(files: &mut Vec<(PathBuf, Option<String>)>, root: &Path, dir: &Path) -> Result<(), error::Error> {
-    let reader = read_dir(dir)
-        .context(format!("failed to read directory: \"{}\"", dir.display()))?;
+fn load_dir(
+    files: &mut Vec<(PathBuf, Option<String>)>,
+    root: &Path,
+    dir: &Path,
+) -> Result<(), error::Error> {
+    let reader =
+        read_dir(dir).context(format!("failed to read directory: \"{}\"", dir.display()))?;
 
-    tracing::debug!("traversing: \"{}\" root: \"{}\"", dir.display(), root.display());
+    tracing::debug!(
+        "traversing: \"{}\" root: \"{}\"",
+        dir.display(),
+        root.display()
+    );
 
     for result_entry in reader {
         let entry = result_entry.context("failed to retrieve directory entry")?;
         let entry_path = entry.path();
 
         let meta = metadata(&entry_path)
-            .context(format!("failed to read metadata for directory entry: \"{}\"", entry_path.display()))?
+            .context(format!(
+                "failed to read metadata for directory entry: \"{}\"",
+                entry_path.display()
+            ))?
             .unwrap();
 
         if meta.is_file() {
@@ -77,7 +83,7 @@ fn load_dir(files: &mut Vec<(PathBuf, Option<String>)>, root: &Path, dir: &Path)
                 files.push((entry_path, Some(name)));
 
                 //tera.add_template_file(&entry_path, Some(&name))
-                    //.context(format!("failed to add template file: \"{}\"", entry_path.display()))?;
+                //.context(format!("failed to add template file: \"{}\"", entry_path.display()))?;
             }
         } else if meta.is_dir() {
             load_dir(files, root, &entry_path)?;
@@ -88,19 +94,25 @@ fn load_dir(files: &mut Vec<(PathBuf, Option<String>)>, root: &Path, dir: &Path)
 }
 
 fn get_template_name(root: &Path, path: &Path) -> Result<Option<String>, error::Error> {
-    let parent_name = path.strip_prefix(root)
+    let parent_name = path
+        .strip_prefix(root)
         .unwrap()
         .parent()
         .unwrap()
         .to_str()
-        .context(format!("failed to convert parent path name to UTF-8 string: \"{}\"", path.display()))?;
+        .context(format!(
+            "failed to convert parent path name to UTF-8 string: \"{}\"",
+            path.display()
+        ))?;
 
     let Some(stem) = path.file_stem() else {
         return Ok(None);
     };
 
-    let stem_str = stem.to_str()
-        .context(format!("failed to convert file stem to UTF-8 string: \"{}\"", path.display()))?;
+    let stem_str = stem.to_str().context(format!(
+        "failed to convert file stem to UTF-8 string: \"{}\"",
+        path.display()
+    ))?;
 
     Ok(Some(format!("{parent_name}/{stem_str}")))
 }
