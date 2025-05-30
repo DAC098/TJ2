@@ -5,8 +5,8 @@
   "scripts": {
     "build-css": "npx tailwindcss -i ./frontend/styles/input.css -o ./frontend/assets/stylesheet.css",
     "watch-css": "npx tailwindcss -w -i ./frontend/styles/input.css -o ./frontend/assets/stylesheet.css",
-    "build-tsx": "rollup --config ./rollup.config.mjs",
-    "watch-tsx": "rollup --config ./rollup.config.mjs --watch"
+    "build-tsx": "npx rspack build",
+    "watch-tsx": "npx rspack build --watch"
   },
   "type": "module",
   "dependencies": {
