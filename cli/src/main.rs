@@ -7,13 +7,13 @@ mod sec;
 #[derive(Debug, Parser)]
 struct AppCli {
     #[command(subcommand)]
-    cmd: AppCmd
+    cmd: AppCmd,
 }
 
 #[derive(Debug, Subcommand)]
 enum AppCmd {
     /// commands specific to security related features of the server
-    Sec(sec::SecArg)
+    Sec(sec::SecArg),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -28,6 +28,6 @@ fn main() -> anyhow::Result<()> {
 
 async fn run(args: AppCli) -> anyhow::Result<()> {
     match args.cmd {
-        AppCmd::Sec(sec) => sec::handle(sec).await
+        AppCmd::Sec(sec) => sec::handle(sec).await,
     }
 }

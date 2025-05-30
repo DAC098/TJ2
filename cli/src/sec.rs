@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 #[derive(Debug, Args)]
 pub struct SecArg {
     #[command(subcommand)]
-    cmd: SecCmd
+    cmd: SecCmd,
 }
 
 #[derive(Debug, Subcommand)]
@@ -15,7 +15,7 @@ enum SecCmd {
     PkiCreate(PkiCreateArg),
 
     /// handles reading private key data
-    PkiRead(PkiReadArg)
+    PkiRead(PkiReadArg),
 }
 
 pub async fn handle(sec: SecArg) -> anyhow::Result<()> {
@@ -32,12 +32,11 @@ struct PkiCreateArg {
     overwrite: bool,
 
     /// the output directory to send the public/private keys to
-    output: PathBuf
+    output: PathBuf,
 }
 
 async fn handle_pki_create(pk: PkiCreateArg) -> anyhow::Result<()> {
-    let cwd = std::env::current_dir()
-        .context("failed to retrieve current working directory")?;
+    let cwd = std::env::current_dir().context("failed to retrieve current working directory")?;
 
     let normalized = tj2_lib::path::normalize_from(&cwd, &pk.output);
     let metadata = tj2_lib::path::metadata(&normalized)
@@ -49,10 +48,11 @@ async fn handle_pki_create(pk: PkiCreateArg) -> anyhow::Result<()> {
     }
 
     let private_key_path = normalized.join(format!("private.key"));
-    let private_key = tj2_lib::sec::pki::PrivateKey::generate()
-        .context("failed to generate private key")?;
+    let private_key =
+        tj2_lib::sec::pki::PrivateKey::generate().context("failed to generate private key")?;
 
-    private_key.save(&private_key_path, pk.overwrite)
+    private_key
+        .save(&private_key_path, pk.overwrite)
         .await
         .context("failed to save private key")?;
 
@@ -62,12 +62,11 @@ async fn handle_pki_create(pk: PkiCreateArg) -> anyhow::Result<()> {
 #[derive(Debug, Args)]
 struct PkiReadArg {
     /// the private key file to read
-    input: PathBuf
+    input: PathBuf,
 }
 
 async fn handle_pki_read(pk: PkiReadArg) -> anyhow::Result<()> {
-    let cwd = std::env::current_dir()
-        .context("failed to retrieve current working directory")?;
+    let cwd = std::env::current_dir().context("failed to retrieve current working directory")?;
 
     let normalized = tj2_lib::path::normalize_from(&cwd, &pk.input);
 
