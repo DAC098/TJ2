@@ -15,14 +15,14 @@ import { getUserMedia } from "@/media";
 import { useObjectUrl } from "@/hooks";
 
 export interface RecordAudioProps {
-    on_created: (Blob) => void,
+    on_created: (data: Blob) => void,
     disabled?: boolean
 }
 
 export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
     let canvas_ref = useRef<{
-        canvas: HTMLCanvasElement,
-        context: CanvasRenderingContext2D,
+        element: HTMLCanvasElement | null,
+        context: CanvasRenderingContext2D | null,
         ready: boolean,
     }>({
         element: null,
@@ -30,10 +30,10 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
         ready: false,
     });
     let media_ref = useRef<{
-        stream: MediaStream,
-        recorder: MediaRecorder,
+        stream: MediaStream | null,
+        recorder: MediaRecorder | null,
         buffer: Blob[],
-        blob: Blob,
+        blob: Blob | null,
     }>({
         stream: null,
         recorder: null,
@@ -42,11 +42,11 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
     });
     // oscillator ref
     let osc_ref = useRef<{
-        audio_context: AudioContext,
-        analyser: AnalyserNode,
+        audio_context: AudioContext | null,
+        analyser: AnalyserNode | null,
         frame_id: number,
         buffer_len: number,
-        buffer: Uint8Array,
+        buffer: Uint8Array | null,
         ready: boolean,
     }>({
         audio_context: null,
@@ -62,8 +62,8 @@ export function RecordAudio({on_created, disabled = false}: RecordAudioProps) {
     let [recording_started, set_recording_started] = useState(false);
     let [recording_paused, set_recording_paused] = useState(false);
 
-    const draw_osc = (ts) => {
-        if (canvas_ref.current.context == null) {
+    const draw_osc = (ts: number) => {
+        if (canvas_ref.current.context == null || canvas_ref.current.element == null) {
             return;
         }
 
