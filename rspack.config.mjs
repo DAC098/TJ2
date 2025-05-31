@@ -1,6 +1,8 @@
 import path from "node:path";
 import { defineConfig } from "@rsbuild/core";
 
+import { TsCheckerRspackPlugin } from "ts-checker-rspack-plugin";
+
 const __dirname = import.meta.dirname;
 
 const node_modules_reg = /[\\/]node_modules[\\/]/;
@@ -120,5 +122,8 @@ export default defineConfig({
             }
         }
     },
+    plugins: [
+        new TsCheckerRspackPlugin(),
+    ],
     stats: "normal",
 });

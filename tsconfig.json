@@ -9,6 +9,7 @@
         "resolveJsonModule": true,
         "useDefineForClassFields": true,
         "moduleResolution": "Bundler",
+        "isolatedModules": true,
         "sourceMap": true,
         "baseUrl": "./frontend/src/",
         "paths": {
