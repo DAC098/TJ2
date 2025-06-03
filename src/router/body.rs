@@ -24,7 +24,7 @@ fn serialize_json(
 
     Ok(Response::builder()
         .status(status)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json; charset=utf-8")
         .header("content-length", froze.len())
         .body(Body::from(froze))
         .unwrap())

@@ -111,7 +111,7 @@ impl<T> Context<T, ()> for std::option::Option<T> {
 pub fn log_prefix_error<D, E>(prefix: &D, err: &E)
 where
     D: Display + ?Sized,
-    E: std::error::Error,
+    E: std::error::Error + ?Sized,
 {
     let mut msg = format!("0) {err}");
     let mut count = 1;
