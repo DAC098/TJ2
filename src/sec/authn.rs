@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::db;
 use crate::error::{self, Context};
-use crate::header::{is_accepting_html, Location};
+use crate::net::header::{is_accepting_html, Location};
 use crate::router::body;
 use crate::state;
 use crate::user;

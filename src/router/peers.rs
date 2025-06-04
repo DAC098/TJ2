@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::ids::UserPeerId;
 use crate::error::{self, Context};
-use crate::header::{is_accepting_html, Location};
+use crate::net::header::{is_accepting_html, Location};
 use crate::router::{body, macros};
 use crate::sec::authn::Initiator;
 use crate::state;

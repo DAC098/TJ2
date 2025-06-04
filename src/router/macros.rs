@@ -15,7 +15,7 @@ macro_rules! require_initiator {
                     }
                 }
 
-                return Ok(crate::header::Location::login($uri).into_response());
+                return Ok(crate::net::header::Location::login($uri).into_response());
             }
         }
     };
@@ -25,7 +25,7 @@ pub(crate) use require_initiator;
 
 macro_rules! res_if_html {
     ($templates:expr, $headers:expr) => {
-        let Ok(is_html) = crate::header::is_accepting_html($headers) else {
+        let Ok(is_html) = crate::net::header::is_accepting_html($headers) else {
             return Ok((
                 axum::http::StatusCode::BAD_REQUEST,
                 "invalid characters in accept header",

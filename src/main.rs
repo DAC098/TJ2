@@ -20,9 +20,6 @@ mod state;
 mod sync;
 mod templates;
 
-mod cookie;
-mod header;
-
 mod journal;
 mod user;
 
