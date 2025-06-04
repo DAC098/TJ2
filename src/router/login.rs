@@ -3,12 +3,12 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::db;
 use crate::error::{self, Context};
 use crate::net::header::{is_accepting_html, Location};
+use crate::net::Error as NetError;
 use crate::router::body;
 use crate::sec;
-use crate::sec::authn::session::{SessionError, SessionOptions};
+use crate::sec::authn::session::SessionOptions;
 use crate::sec::authn::{Initiator, InitiatorError, Session};
 use crate::sec::otp;
 use crate::state;
@@ -47,28 +47,22 @@ pub struct LoginCheck {
     status: LoginStatus,
 }
 
+impl IntoResponse for LoginCheck {
+    fn into_response(self) -> Response {
+        (StatusCode::OK, body::Json(self)).into_response()
+    }
+}
+
 pub async fn get(
     state: state::SharedState,
-    Query(query): Query<LoginQuery>,
     headers: HeaderMap,
-) -> Result<Response, error::Error> {
-    let conn = state
-        .db()
-        .get()
-        .await
-        .context("failed to retrieve database connection")?;
+    Query(query): Query<LoginQuery>,
+) -> Result<Response, NetError> {
+    let conn = state.db().get().await?;
 
     let result = Initiator::from_headers(&conn, &headers).await;
 
-    let Ok(is_html) = is_accepting_html(&headers) else {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            "invalid characters in accept header",
-        )
-            .into_response());
-    };
-
-    if is_html {
+    if is_accepting_html(&headers)? {
         if let Err(err) = result {
             error::log_prefix_error("error when retrieving session id", &err);
 
@@ -83,23 +77,20 @@ pub async fn get(
     } else {
         if let Err(err) = result {
             match err {
-                InitiatorError::DbPg(err) => Err(error::Error::context_source(
-                    "database error when retrieving session",
-                    err,
-                )),
+                InitiatorError::DbPg(err) => Err(err.into()),
                 err => {
                     error::log_prefix_error("error when retrieving session id", &err);
 
-                    Ok(body::Json(LoginCheck {
+                    Ok(LoginCheck {
                         status: LoginStatus::Inactive,
-                    })
+                    }
                     .into_response())
                 }
             }
         } else {
-            Ok(body::Json(LoginCheck {
+            Ok(LoginCheck {
                 status: LoginStatus::Active,
-            })
+            }
             .into_response())
         }
     }
@@ -118,50 +109,25 @@ pub enum LoginResult {
     Verify,
 }
 
-#[derive(Debug, Serialize, thiserror::Error)]
+#[derive(Debug, strum::Display, Serialize)]
 #[serde(tag = "type")]
 pub enum LoginError {
-    #[error("the specified username was not found")]
     UsernameNotFound,
-
-    #[error("invalid password provided")]
     InvalidPassword,
-
-    #[error("user has already been authenticated")]
     AlreadyAuthenticated,
-
     // will have to think about how to handle this later on
-    #[error("invalid session id")]
     InvalidSession,
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Db(#[from] db::PgError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    DbPool(#[from] db::PoolError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Hash(#[from] sec::password::HashError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Error(#[from] error::Error),
 }
 
 impl IntoResponse for LoginError {
     fn into_response(self) -> Response {
-        error::log_prefix_error("response error", &self);
-
         match self {
             Self::AlreadyAuthenticated => {
                 (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
             }
             Self::UsernameNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
             Self::InvalidPassword => (StatusCode::FORBIDDEN, body::Json(self)).into_response(),
-            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Self::InvalidSession => (StatusCode::FORBIDDEN, body::Json(self)).into_response(),
         }
     }
 }
@@ -170,7 +136,7 @@ pub async fn post(
     state: state::SharedState,
     headers: HeaderMap,
     body::Json(login): body::Json<LoginRequest>,
-) -> Result<impl IntoResponse, LoginError> {
+) -> Result<impl IntoResponse, NetError<LoginError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
@@ -179,23 +145,23 @@ pub async fn post(
     tracing::debug!("initiator result: {result:#?}");
 
     match result {
-        Ok(_) => return Err(LoginError::AlreadyAuthenticated),
+        Ok(_) => return Err(NetError::Inner(LoginError::AlreadyAuthenticated)),
         Err(err) => match err {
             InitiatorError::SessionIdNotFound => {}
             InitiatorError::Unverified(session) => {
                 session.delete(&transaction).await?;
             }
-            InitiatorError::DbPg(err) => return Err(LoginError::Db(err)),
-            _ => return Err(LoginError::InvalidSession),
+            InitiatorError::DbPg(err) => return Err(err.into()),
+            _ => return Err(NetError::Inner(LoginError::InvalidSession)),
         },
     }
 
     let user = user::User::retrieve(&transaction, &login.username)
         .await?
-        .ok_or(LoginError::UsernameNotFound)?;
+        .ok_or(NetError::Inner(LoginError::UsernameNotFound))?;
 
     if !sec::password::verify(&user.password, &login.password)? {
-        return Err(LoginError::InvalidPassword);
+        return Err(NetError::Inner(LoginError::InvalidPassword));
     }
 
     let mut options = SessionOptions::new(user.id);

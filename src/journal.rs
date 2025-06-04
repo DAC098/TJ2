@@ -954,6 +954,190 @@ fn get_mime_param(params: mime::Params<'_>) -> Option<String> {
     }
 }
 
+pub struct CustomFieldBuilder {
+    journals_id: JournalId,
+    name: String,
+    order: i32,
+    config: custom_field::Type,
+    description: Option<String>,
+    uid: Option<CustomFieldUid>,
+    created: Option<DateTime<Utc>>,
+}
+
+impl CustomFieldBuilder {
+    pub fn with_order(&mut self, order: i32) {
+        self.order = order;
+    }
+
+    pub fn with_description<T>(&mut self, description: T)
+    where
+        T: Into<String>,
+    {
+        self.description = Some(description.into());
+    }
+
+    pub fn with_uid(&mut self, uid: CustomFieldUid) {
+        self.uid = Some(uid);
+    }
+
+    pub fn with_created(&mut self, created: DateTime<Utc>) {
+        self.created = Some(created);
+    }
+
+    pub async fn build(
+        self,
+        conn: &impl db::GenericClient,
+    ) -> Result<CustomField, CreateCustomFieldError> {
+        let Self {
+            journals_id,
+            name,
+            order,
+            config,
+            description,
+            uid,
+            created,
+        } = self;
+        let uid = uid.unwrap_or(CustomFieldUid::gen());
+        let created = created.unwrap_or(Utc::now());
+
+        let result = conn
+            .query_one(
+                "\
+            insert into custom_fields (\
+                uid, \
+                journals_id, \
+                name, \
+                \"order\", \
+                config, \
+                description, \
+                created \
+            ) values ($1, $2, $3, $4, $5, $6, $7) \
+            returning id",
+                &[
+                    &uid,
+                    &journals_id,
+                    &name,
+                    &order,
+                    &config,
+                    &description,
+                    &created,
+                ],
+            )
+            .await;
+
+        match result {
+            Ok(row) => Ok(CustomField {
+                id: row.get(0),
+                uid,
+                journals_id,
+                name,
+                order,
+                config,
+                description,
+                created,
+                updated: None,
+            }),
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "custom_fields_journals_id_name_key" => {
+                                Err(CreateCustomFieldError::NameExists)
+                            }
+                            "custom_fields_uid_key" => Err(CreateCustomFieldError::UidExists),
+                            _ => Err(CreateCustomFieldError::Db(err)),
+                        },
+                        db::ErrorKind::ForeignKey(constraint) => match constraint {
+                            "custom_fields_journals_id_fkey" => {
+                                Err(CreateCustomFieldError::JournalNotFound)
+                            }
+                            _ => Err(CreateCustomFieldError::Db(err)),
+                        },
+                    }
+                } else {
+                    Err(CreateCustomFieldError::Db(err))
+                }
+            }
+        }
+    }
+
+    pub async fn build_many(
+        conn: &impl db::GenericClient,
+        mut cfs: Vec<Self>,
+    ) -> Result<Option<impl Stream<Item = Result<CustomField, PgError>>>, PgError> {
+        if cfs.is_empty() {
+            return Ok(None);
+        }
+
+        let mut query = String::from(
+            "insert into custom_fields (uid, journals_id, name, \"order\", config, description, created) values"
+        );
+        let mut params: db::ParamsVec<'_> = Vec::new();
+        let created = Utc::now();
+
+        for (index, field) in cfs.iter_mut().enumerate() {
+            if field.uid.is_none() {
+                field.uid = Some(CustomFieldUid::gen());
+            }
+
+            if field.created.is_none() {
+                field.created = Some(created);
+            }
+
+            if index > 0 {
+                query.push_str(", ");
+            }
+
+            let s = format!(
+                "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                db::push_param(&mut params, &field.uid),
+                db::push_param(&mut params, &field.journals_id),
+                db::push_param(&mut params, &field.name),
+                db::push_param(&mut params, &field.order),
+                db::push_param(&mut params, &field.config),
+                db::push_param(&mut params, &field.description),
+                db::push_param(&mut params, &field.created),
+            );
+
+            query.push_str(&s);
+        }
+
+        query.push_str(" returning id");
+
+        Ok(Some(
+            conn.query_raw(&query, params)
+                .await?
+                .zip(futures::stream::iter(cfs))
+                .map(
+                    |(
+                        result_row,
+                        Self {
+                            uid,
+                            journals_id,
+                            name,
+                            order,
+                            config,
+                            description,
+                            created,
+                        },
+                    )| {
+                        result_row.map(|row| CustomField {
+                            id: row.get(0),
+                            uid: uid.unwrap(),
+                            journals_id,
+                            name,
+                            order,
+                            config,
+                            description,
+                            created: created.unwrap(),
+                            updated: None,
+                        })
+                    },
+                ),
+        ))
+    }
+}
+
 pub struct CreateCustomFieldOptions {
     journals_id: JournalId,
     name: String,
@@ -992,6 +1176,25 @@ pub struct CustomField {
 }
 
 impl CustomField {
+    pub fn builder<N>(
+        journals_id: JournalId,
+        name: N,
+        config: custom_field::Type,
+    ) -> CustomFieldBuilder
+    where
+        N: Into<String>,
+    {
+        CustomFieldBuilder {
+            journals_id,
+            name: name.into(),
+            order: 0,
+            config,
+            description: None,
+            uid: None,
+            created: None,
+        }
+    }
+
     pub fn create_options<N>(
         journals_id: JournalId,
         name: N,
@@ -1022,68 +1225,18 @@ impl CustomField {
             description,
             uid,
         } = options;
-        let uid = uid.unwrap_or(CustomFieldUid::gen());
-        let created = Utc::now();
+        let mut builder = Self::builder(journals_id, name, config);
+        builder.with_order(order);
 
-        let result = conn
-            .query_one(
-                "\
-            insert into custom_fields (\
-                uid, \
-                journals_id, \
-                name, \
-                \"order\", \
-                config, \
-                description, \
-                created \
-            ) values ($1, $2, $3, $4, $5, $6, $7) \
-            returning id",
-                &[
-                    &uid,
-                    &journals_id,
-                    &name,
-                    &order,
-                    &config,
-                    &description,
-                    &created,
-                ],
-            )
-            .await;
-
-        match result {
-            Ok(row) => Ok(Self {
-                id: row.get(0),
-                uid,
-                journals_id,
-                name,
-                order,
-                config,
-                description,
-                created,
-                updated: None,
-            }),
-            Err(err) => {
-                if let Some(kind) = db::ErrorKind::check(&err) {
-                    match kind {
-                        db::ErrorKind::Unique(constraint) => match constraint {
-                            "custom_fields_journals_id_name_key" => {
-                                Err(CreateCustomFieldError::NameExists)
-                            }
-                            "custom_fields_uid_key" => Err(CreateCustomFieldError::UidExists),
-                            _ => Err(CreateCustomFieldError::Db(err)),
-                        },
-                        db::ErrorKind::ForeignKey(constraint) => match constraint {
-                            "custom_fields_journals_id_fkey" => {
-                                Err(CreateCustomFieldError::JournalNotFound)
-                            }
-                            _ => Err(CreateCustomFieldError::Db(err)),
-                        },
-                    }
-                } else {
-                    Err(CreateCustomFieldError::Db(err))
-                }
-            }
+        if let Some(desc) = description {
+            builder.with_description(desc);
         }
+
+        if let Some(uid) = uid {
+            builder.with_uid(uid);
+        }
+
+        builder.build(conn).await
     }
 
     pub async fn retrieve_journal_stream(

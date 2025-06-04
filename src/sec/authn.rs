@@ -1,14 +1,13 @@
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, Method, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
-use serde::Serialize;
+use axum::http::{HeaderMap, Method, Uri};
+use axum::response::IntoResponse;
 
 use crate::db;
-use crate::error::{self, Context};
+use crate::net::body;
+use crate::net::error::Error as NetError;
 use crate::net::header::{is_accepting_html, Location};
-use crate::router::body;
 use crate::state;
 use crate::user;
 
@@ -166,118 +165,78 @@ impl ApiInitiator {
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum FromReqPartsJsonError {
-    InvalidSession,
-    InvalidRequest,
-}
-
-impl IntoResponse for FromReqPartsJsonError {
-    fn into_response(self) -> Response {
-        match &self {
-            Self::InvalidSession => (StatusCode::UNAUTHORIZED, body::Json(self)).into_response(),
-            Self::InvalidRequest => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-        }
-    }
-}
-
-pub enum FromReqPartsError {
-    Login(Option<Uri>),
-    Json(FromReqPartsJsonError),
-    Error(error::Error),
-}
-
-impl IntoResponse for FromReqPartsError {
-    fn into_response(self) -> Response {
-        match self {
-            Self::Login(redir) => Location::login(redir).into_response(),
-            Self::Json(json) => json.into_response(),
-            Self::Error(err) => err.into_response(),
-        }
-    }
-}
-
-impl From<error::Error> for FromReqPartsError {
-    fn from(err: error::Error) -> Self {
-        Self::Error(err)
-    }
-}
-
-#[async_trait]
-impl FromRequestParts<state::SharedState> for Initiator {
-    type Rejection = FromReqPartsError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &state::SharedState,
-    ) -> Result<Self, Self::Rejection> {
-        let is_html = is_accepting_html(&parts.headers).unwrap_or(false);
-        let login_uri = if parts.method == Method::GET {
-            Some(parts.uri.clone())
-        } else {
-            None
-        };
-
-        let conn = state
-            .db()
-            .get()
-            .await
-            .context("failed to retrieve database connection")?;
-
-        match Self::from_headers(&conn, &parts.headers).await {
-            Ok(session) => Ok(session),
-            Err(err) => match err {
+pub async fn initiator_redirect<U, E>(
+    conn: &impl db::GenericClient,
+    headers: &HeaderMap,
+    maybe_uri: Option<U>,
+) -> Result<Initiator, NetError<E>>
+where
+    Uri: TryFrom<U>,
+{
+    match Initiator::from_headers(conn, headers).await {
+        Ok(session) => Ok(session),
+        Err(err) => {
+            if is_accepting_html(headers).unwrap_or(false) {
+                match err {
                 InitiatorError::Token(_)
                 | InitiatorError::SessionIdNotFound
                 | InitiatorError::SessionNotFound
                 | InitiatorError::UserNotFound(_)
                 | InitiatorError::Unauthenticated(_)
                 | InitiatorError::Unverified(_)
-                | InitiatorError::SessionExpired(_) => {
-                    if is_html {
-                        Err(FromReqPartsError::Login(login_uri))
-                    } else {
-                        Err(FromReqPartsError::Json(
-                            FromReqPartsJsonError::InvalidSession,
-                        ))
-                    }
-                }
-                InitiatorError::HeaderStr(_) => {
-                    if is_html {
-                        Err(FromReqPartsError::Login(login_uri))
-                    } else {
-                        Err(FromReqPartsError::Json(
-                            FromReqPartsJsonError::InvalidRequest,
-                        ))
-                    }
-                }
-                InitiatorError::DbPg(err) => Err(error::Error::context_source(
-                    "database error when retrieving session",
-                    err,
-                )
-                .into()),
-            },
+                | InitiatorError::SessionExpired(_) => Err(NetError::Defined {
+                    response: Location::login(maybe_uri).into_response(),
+                    msg: None,
+                    src: None,
+                }),
+                InitiatorError::HeaderStr(err) => Err(NetError::Defined {
+                    response: body::error_html(Some("There was a problem with information sent in the request. Make sure that your request is properly formatted")).into_response(),
+                    msg: None,
+                    src: Some(err.into())
+                }),
+                InitiatorError::DbPg(err) => Err(NetError::Defined {
+                    response: body::error_html(None::<&str>).into_response(),
+                    msg: None,
+                    src: Some(err.into())
+                }),
+            }
+            } else {
+                Err(err.into())
+            }
         }
     }
 }
 
 #[async_trait]
-impl FromRequestParts<state::SharedState> for ApiInitiator {
-    type Rejection = error::Error;
+impl FromRequestParts<state::SharedState> for Initiator {
+    type Rejection = NetError;
 
     async fn from_request_parts(
         parts: &mut Parts,
         state: &state::SharedState,
     ) -> Result<Self, Self::Rejection> {
-        let conn = state
-            .db()
-            .get()
-            .await
-            .context("failed to get db connection")?;
+        let login_uri = if parts.method == Method::GET {
+            Some(parts.uri.clone())
+        } else {
+            None
+        };
 
-        ApiInitiator::from_headers(&conn, &parts.headers)
-            .await
-            .context("failed to retrieve initiator")
+        let conn = state.db().get().await?;
+
+        initiator_redirect(&conn, &parts.headers, login_uri).await
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<state::SharedState> for ApiInitiator {
+    type Rejection = NetError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &state::SharedState,
+    ) -> Result<Self, Self::Rejection> {
+        let conn = state.db().get().await?;
+
+        Ok(ApiInitiator::from_headers(&conn, &parts.headers).await?)
     }
 }

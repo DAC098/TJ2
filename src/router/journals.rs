@@ -13,8 +13,11 @@ use crate::db;
 use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserId, UserPeerId};
 use crate::error::{self, Context};
 use crate::jobs;
-use crate::journal::{custom_field, CustomField, Journal, JournalCreateError, JournalUpdateError};
-use crate::router::body;
+use crate::journal::{
+    custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError, JournalUpdateError,
+};
+use crate::net::body;
+use crate::net::Error as NetError;
 use crate::router::macros;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Ability, Scope};
@@ -61,23 +64,14 @@ pub struct JournalPartial {
 
 async fn retrieve_journals(
     state: state::SharedState,
-    uri: Uri,
+    initiator: Initiator,
     headers: HeaderMap,
-) -> Result<Response, error::Error> {
-    let conn = state.db_conn().await?;
+) -> Result<Response, NetError> {
+    body::assert_html(state.templates(), &headers)?;
 
-    let initiator = macros::require_initiator!(&conn, &headers, Some(uri.clone()));
+    let conn = state.db().get().await?;
 
-    macros::res_if_html!(state.templates(), &headers);
-
-    let perm_check =
-        authz::has_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read)
-            .await
-            .context("failed to retrieve permission for user")?;
-
-    if !perm_check {
-        return Ok(StatusCode::UNAUTHORIZED.into_response());
-    }
+    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read).await?;
 
     let params: db::ParamsArray<'_, 1> = [&initiator.user.id];
     let journals = conn
@@ -105,15 +99,14 @@ async fn retrieve_journals(
         order by journals.name",
             params,
         )
-        .await
-        .context("failed to retrieve journals")?;
+        .await?;
 
     futures::pin_mut!(journals);
 
     let mut found = Vec::new();
 
     while let Some(try_record) = journals.next().await {
-        let record = try_record.context("failed to retrieve journal")?;
+        let record = try_record?;
 
         found.push(JournalPartial {
             id: record.get(0),
@@ -152,6 +145,33 @@ pub struct CustomFieldFull {
     pub updated: Option<DateTime<Utc>>,
 }
 
+impl From<CustomField> for CustomFieldFull {
+    fn from(
+        CustomField {
+            id,
+            uid,
+            name,
+            order,
+            config,
+            description,
+            created,
+            updated,
+            ..
+        }: CustomField,
+    ) -> Self {
+        Self {
+            id,
+            uid,
+            name,
+            order,
+            config,
+            description,
+            created,
+            updated,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct JournalPeer {
     user_peers_id: UserPeerId,
@@ -160,7 +180,6 @@ pub struct JournalPeer {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
 pub struct JournalFull {
     id: JournalId,
     uid: JournalUid,
@@ -191,49 +210,48 @@ impl From<(Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)> for JournalFull {
     }
 }
 
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum RetrieveJournalError {
+    JournalNotFound,
+    InvalidJournalId,
+}
+
+impl IntoResponse for RetrieveJournalError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::InvalidJournalId => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+        }
+    }
+}
+
 async fn retrieve_journal(
     state: state::SharedState,
-    uri: Uri,
+    initiator: Initiator,
     headers: HeaderMap,
     Path(MaybeJournalPath { journals_id }): Path<MaybeJournalPath>,
-) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), &headers);
+) -> Result<body::Json<JournalFull>, NetError<RetrieveJournalError>> {
+    body::assert_html(state.templates(), &headers)?;
 
-    let Some(journals_id) = journals_id else {
-        return Ok(StatusCode::BAD_REQUEST.into_response());
-    };
+    let journals_id = journals_id.ok_or(NetError::Inner(RetrieveJournalError::InvalidJournalId))?;
 
-    let conn = state.db_conn().await?;
+    let conn = state.db().get().await?;
 
-    let initiator = macros::require_initiator!(&conn, &headers, Some(uri));
+    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read).await?;
 
-    let perm_check =
-        authz::has_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read)
-            .await
-            .context("failed to retrieve permission for user")?;
+    let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
+        .await?
+        .ok_or(NetError::Inner(RetrieveJournalError::JournalNotFound))?;
 
-    if !perm_check {
-        return Ok(StatusCode::UNAUTHORIZED.into_response());
-    }
-
-    let result = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
-        .await
-        .context("failed to retrieve journal")?;
-
-    let Some(journal) = result else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
-
-    let mut custom_fields = Vec::new();
-
-    let fields = CustomField::retrieve_journal_stream(&conn, &journals_id)
-        .await
-        .context("failed to retrieve custom fields")?;
+    let fields = CustomField::retrieve_journal_stream(&conn, &journals_id).await?;
 
     futures::pin_mut!(fields);
 
+    let mut custom_fields = Vec::new();
+
     while let Some(try_record) = fields.next().await {
-        let record = try_record.context("failed to retrieve custom field record")?;
+        let record = try_record?;
 
         custom_fields.push(CustomFieldFull {
             id: record.id,
@@ -248,16 +266,14 @@ async fn retrieve_journal(
     }
 
     let peers = {
-        let mut rtn = Vec::new();
-
-        let peers = UserPeer::retrieve_many(&conn, &journals_id)
-            .await
-            .context("failed to retrieve journal peers")?;
+        let peers = UserPeer::retrieve_many(&conn, &journals_id).await?;
 
         futures::pin_mut!(peers);
 
+        let mut rtn = Vec::new();
+
         while let Some(maybe) = peers.next().await {
-            let record = maybe.context("failed to retrieve journal peer record")?;
+            let record = maybe?;
 
             rtn.push(JournalPeer {
                 user_peers_id: record.id,
@@ -269,7 +285,11 @@ async fn retrieve_journal(
         rtn
     };
 
-    Ok(body::Json(JournalFull::from((journal, custom_fields, peers))).into_response())
+    Ok(body::Json(JournalFull::from((
+        journal,
+        custom_fields,
+        peers,
+    ))))
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,40 +308,39 @@ pub struct NewJournal {
     peers: Vec<UserPeerId>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum NewJournalResult {
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum CreateJournalError {
     NameExists,
     DuplicateCustomFields { duplicates: Vec<String> },
     PeersNotFound { ids: Vec<UserPeerId> },
-    Created(JournalFull),
+}
+
+impl IntoResponse for CreateJournalError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::NameExists | Self::DuplicateCustomFields { .. } | Self::PeersNotFound { .. } => {
+                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
+            }
+        }
+    }
 }
 
 async fn create_journal(
     state: state::SharedState,
-    headers: HeaderMap,
+    initiator: Initiator,
     body::Json(json): body::Json<NewJournal>,
-) -> Result<Response, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+) -> Result<(StatusCode, body::Json<JournalFull>), NetError<CreateJournalError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
-
-    let perm_check = authz::has_permission(
+    authz::assert_permission(
         &transaction,
         initiator.user.id,
         Scope::Journals,
         Ability::Create,
     )
-    .await
-    .context("failed to retrieve permission for user")?;
-
-    if !perm_check {
-        return Ok(StatusCode::UNAUTHORIZED.into_response());
-    }
+    .await?;
 
     let mut options = Journal::create_options(initiator.user.id, json.name);
 
@@ -335,58 +354,20 @@ async fn create_journal(
         Ok(journal) => journal,
         Err(err) => match err {
             JournalCreateError::NameExists => {
-                return Ok((
-                    StatusCode::BAD_REQUEST,
-                    body::Json(NewJournalResult::NameExists),
-                )
-                    .into_response())
+                return Err(NetError::Inner(CreateJournalError::NameExists))
             }
-            JournalCreateError::UidExists => {
-                return Err(error::Error::context("uid already exists"))
-            }
-            JournalCreateError::UserNotFound => {
-                return Err(error::Error::context("specified user does not exist"))
-            }
-            JournalCreateError::Db(err) => {
-                return Err(error::Error::context_source(
-                    "failed to create journal",
-                    err,
-                ))
-            }
+            JournalCreateError::UidExists => return Err(NetError::general().with_source(err)),
+            JournalCreateError::UserNotFound => return Err(NetError::general().with_source(err)),
+            JournalCreateError::Db(err) => return Err(err.into()),
         },
     };
 
-    let (custom_fields, duplicates) =
-        create_custom_fields(&transaction, &journal, json.custom_fields).await?;
-
-    if !duplicates.is_empty() {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            body::Json(NewJournalResult::DuplicateCustomFields { duplicates }),
-        )
-            .into_response());
-    }
-
-    let peers =
-        match upsert_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers)
-            .await?
-        {
-            UpsertJournalPeers::Valid(valid) => valid,
-            UpsertJournalPeers::NotFound(ids) => {
-                return Ok((
-                    StatusCode::BAD_REQUEST,
-                    body::Json(NewJournalResult::PeersNotFound { ids }),
-                )
-                    .into_response());
-            }
-        };
+    let custom_fields = create_custom_fields(&transaction, &journal, json.custom_fields).await?;
+    let peers = create_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers).await?;
 
     let journal_dir = state.storage().journal_dir(journal.id);
 
-    let root_dir = journal_dir
-        .create_root_dir()
-        .await
-        .context("failed to create root journal directory")?;
+    let root_dir = journal_dir.create_root_dir().await?;
 
     let files_dir = match journal_dir.create_files_dir().await {
         Ok(files) => files,
@@ -395,10 +376,7 @@ async fn create_journal(
                 error::log_prefix_error("failed to remove journal root dir", &root_err);
             }
 
-            return Err(error::Error::context_source(
-                "failed to create journal files dir",
-                err,
-            ));
+            return Err(err.into());
         }
     };
 
@@ -409,18 +387,14 @@ async fn create_journal(
             error::log_prefix_error("failed to remove journal root dir", &root_err);
         }
 
-        return Err(error::Error::context_source(
-            "failed to commit transaction",
-            err,
-        ));
+        return Err(err.into());
     }
 
-    Ok(body::Json(NewJournalResult::Created(JournalFull::from((
+    Ok((StatusCode::CREATED, body::Json(JournalFull::from((
         journal,
         custom_fields,
         peers,
-    ))))
-    .into_response())
+    )))))
 }
 
 #[derive(Debug, Deserialize)]
@@ -573,14 +547,14 @@ async fn create_custom_fields(
     conn: &impl db::GenericClient,
     journal: &Journal,
     new_fields: Vec<NewCustomField>,
-) -> Result<(Vec<CustomFieldFull>, Vec<String>), error::Error> {
+) -> Result<Vec<CustomFieldFull>, NetError<CreateJournalError>> {
     if new_fields.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
 
     let created = Utc::now();
 
-    let mut records = Vec::new();
+    let mut builders = Vec::new();
     let mut duplicates = Vec::new();
     let mut existing_names = HashSet::new();
 
@@ -595,26 +569,37 @@ async fn create_custom_fields(
             continue;
         }
 
-        records.push(CustomField {
-            id: CustomFieldId::zero(),
-            uid: CustomFieldUid::gen(),
-            journals_id: journal.id,
-            name: field.name,
-            order: field.order,
-            config: field.config,
-            description: field.description,
-            created,
-            updated: None,
-        });
+        let mut builder = CustomField::builder(journal.id, field.name, field.config);
+        builder.with_uid(CustomFieldUid::gen());
+        builder.with_order(field.order);
+        builder.with_created(created);
+
+        if let Some(desc) = field.description {
+            builder.with_description(desc);
+        }
+
+        builders.push(builder);
     }
 
     if !duplicates.is_empty() {
-        return Ok((Vec::new(), duplicates));
+        return Err(NetError::Inner(CreateJournalError::DuplicateCustomFields {
+            duplicates,
+        }));
     }
 
-    let rtn = insert_custom_fields(conn, records).await?;
+    if let Some(stream) = CustomFieldBuilder::build_many(conn, builders).await? {
+        futures::pin_mut!(stream);
 
-    Ok((rtn, Vec::new()))
+        let mut rtn = Vec::new();
+
+        while let Some(record) = stream.next().await {
+            rtn.push(CustomFieldFull::from(record?));
+        }
+
+        Ok(rtn)
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 struct UpdateResults {
@@ -845,6 +830,76 @@ async fn insert_custom_fields(
             updated: field.updated,
         });
     }
+
+    Ok(rtn)
+}
+
+async fn create_journal_peers(
+    conn: &impl db::GenericClient,
+    users_id: &UserId,
+    journals_id: &JournalId,
+    list: Vec<UserPeerId>,
+) -> Result<Vec<JournalPeer>, NetError<CreateJournalError>> {
+    if list.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let peers: HashMap<UserPeerId, UserPeer> = {
+        let mut rtn = HashMap::new();
+        let stream = UserPeer::retrieve_many(conn, users_id).await?;
+
+        futures::pin_mut!(stream);
+
+        while let Some(maybe) = stream.next().await {
+            let record = maybe?;
+
+            rtn.insert(record.id, record);
+        }
+
+        rtn
+    };
+
+    let mut rtn = Vec::with_capacity(list.len());
+    let mut collected: HashSet<UserPeerId> = HashSet::new();
+    let mut not_found = Vec::new();
+    let mut params: db::ParamsVec<'_> = vec![journals_id];
+    let mut query = String::from(
+        "insert into journal_peers (journals_id, user_peers_id) values ",
+    );
+
+    for (index, id) in list.iter().enumerate() {
+        if let Some(peer) = peers.get(id) {
+            if !collected.insert(*id) {
+                continue;
+            }
+
+            rtn.push(JournalPeer {
+                user_peers_id: *id,
+                name: peer.name.clone(),
+                synced: None,
+            });
+        } else {
+            not_found.push(*id);
+
+            continue;
+        }
+
+        if index != 0 {
+            query.push_str(", ");
+        }
+
+        let s = format!("($1, ${})", db::push_param(&mut params, id));
+
+        query.push_str(&s);
+    }
+
+    if !not_found.is_empty() {
+        return Err(NetError::Inner(CreateJournalError::PeersNotFound {
+            ids: not_found
+        }));
+    }
+
+    conn.execute(&query, params.as_slice()).await?;
 
     Ok(rtn)
 }

@@ -384,6 +384,15 @@ pub async fn has_permission(
     Ok(result > 0)
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PermissionError {
+    #[error("the specified user does not have permission to access this resource")]
+    Denied,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+}
+
 pub async fn has_permission_ref<'a, T>(
     conn: &impl db::GenericClient,
     users_id: UserId,
@@ -420,6 +429,19 @@ where
         .await?;
 
     Ok(result > 0)
+}
+
+pub async fn assert_permission(
+    conn: &impl db::GenericClient,
+    users_id: UserId,
+    scope: Scope,
+    ability: Ability,
+) -> Result<(), PermissionError> {
+    if !has_permission(conn, users_id, scope, ability).await? {
+        Ok(())
+    } else {
+        Err(PermissionError::Denied)
+    }
 }
 
 pub async fn assign_user_role(

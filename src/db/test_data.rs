@@ -103,31 +103,30 @@ pub async fn create_journal(
         .await
         .context("failed to create journal for test user")?;
 
+    let mood_builder = CustomField::builder(
+        journal.id,
+        "mood",
+        (custom_field::IntegerType {
+            minimum: Some(1),
+            maximum: Some(10),
+        })
+        .into(),
+    );
+    let sleep_builder = CustomField::builder(
+        journal.id,
+        "sleep",
+        (custom_field::TimeRangeType { show_diff: true }).into(),
+    );
+
     let custom_fields = vec![
-        CustomField::create(
-            conn,
-            CustomField::create_options(
-                journal.id,
-                "mood",
-                (custom_field::IntegerType {
-                    minimum: Some(1),
-                    maximum: Some(10),
-                })
-                .into(),
-            ),
-        )
-        .await
-        .context("failed to create mood field for journal")?,
-        CustomField::create(
-            conn,
-            CustomField::create_options(
-                journal.id,
-                "sleep",
-                (custom_field::TimeRangeType { show_diff: true }).into(),
-            ),
-        )
-        .await
-        .context("failed to create sleep field for journal")?,
+        mood_builder
+            .build(conn)
+            .await
+            .context("failed to create mood field for journal")?,
+        sleep_builder
+            .build(conn)
+            .await
+            .context("failed to create sleep field for journal")?,
     ];
 
     let journal_dir = state.storage().journal_dir(journal.id);
