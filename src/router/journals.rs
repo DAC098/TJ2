@@ -363,7 +363,8 @@ async fn create_journal(
     };
 
     let custom_fields = create_custom_fields(&transaction, &journal, json.custom_fields).await?;
-    let peers = create_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers).await?;
+    let peers =
+        create_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers).await?;
 
     let journal_dir = state.storage().journal_dir(journal.id);
 
@@ -390,11 +391,10 @@ async fn create_journal(
         return Err(err.into());
     }
 
-    Ok((StatusCode::CREATED, body::Json(JournalFull::from((
-        journal,
-        custom_fields,
-        peers,
-    )))))
+    Ok((
+        StatusCode::CREATED,
+        body::Json(JournalFull::from((journal, custom_fields, peers))),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -863,9 +863,7 @@ async fn create_journal_peers(
     let mut collected: HashSet<UserPeerId> = HashSet::new();
     let mut not_found = Vec::new();
     let mut params: db::ParamsVec<'_> = vec![journals_id];
-    let mut query = String::from(
-        "insert into journal_peers (journals_id, user_peers_id) values ",
-    );
+    let mut query = String::from("insert into journal_peers (journals_id, user_peers_id) values ");
 
     for (index, id) in list.iter().enumerate() {
         if let Some(peer) = peers.get(id) {
@@ -895,7 +893,7 @@ async fn create_journal_peers(
 
     if !not_found.is_empty() {
         return Err(NetError::Inner(CreateJournalError::PeersNotFound {
-            ids: not_found
+            ids: not_found,
         }));
     }
 
