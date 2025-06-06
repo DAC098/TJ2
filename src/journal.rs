@@ -16,8 +16,26 @@ use crate::db::ids::{
 use crate::db::{self, GenericClient, PgError};
 use crate::error::BoxDynError;
 use crate::sec::Hash;
+use crate::sec::authn::Initiator;
+use crate::sec::authz;
 
 pub mod custom_field;
+
+pub async fn assert_permission(
+    conn: &impl db::GenericClient,
+    initiator: &Initiator,
+    journal: &Journal,
+    scope: authz::Scope,
+    ability: authz::Ability
+) -> Result<(), authz::PermissionError> {
+    if journal.users_id == initiator.user.id {
+        tracing::debug!("assert permission");
+        authz::assert_permission(conn, initiator.user.id, scope, ability).await
+    } else {
+        tracing::debug!("assert permission ref");
+        authz::assert_permission_ref(conn, initiator.user.id, scope, ability, journal.id).await
+    }
+}
 
 /// the potential errors when creating a journal
 #[derive(Debug, thiserror::Error)]

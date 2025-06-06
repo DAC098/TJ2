@@ -14,11 +14,11 @@ use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserI
 use crate::error::{self, Context};
 use crate::jobs;
 use crate::journal::{
-    custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError, JournalUpdateError,
+    assert_permission, custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError, JournalUpdateError,
 };
 use crate::net::body;
 use crate::net::Error as NetError;
-use crate::router::macros;
+use crate::router::{handles, macros};
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Ability, Scope};
 use crate::state;
@@ -29,7 +29,7 @@ mod entries;
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
         .route("/", get(retrieve_journals).post(create_journal))
-        .route("/new", get(retrieve_journal))
+        .route("/new", get(handles::send_html))
         .route("/:journals_id", get(retrieve_journal).patch(update_journal))
         .route(
             "/:journals_id/entries",
@@ -230,40 +230,42 @@ async fn retrieve_journal(
     state: state::SharedState,
     initiator: Initiator,
     headers: HeaderMap,
-    Path(MaybeJournalPath { journals_id }): Path<MaybeJournalPath>,
+    Path(JournalPath { journals_id }): Path<JournalPath>,
 ) -> Result<body::Json<JournalFull>, NetError<RetrieveJournalError>> {
     body::assert_html(state.templates(), &headers)?;
 
-    let journals_id = journals_id.ok_or(NetError::Inner(RetrieveJournalError::InvalidJournalId))?;
-
     let conn = state.db().get().await?;
-
-    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read).await?;
 
     let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
         .await?
         .ok_or(NetError::Inner(RetrieveJournalError::JournalNotFound))?;
 
-    let fields = CustomField::retrieve_journal_stream(&conn, &journals_id).await?;
+    assert_permission(&conn, &initiator, &journal, Scope::Journals, Ability::Read).await?;
 
-    futures::pin_mut!(fields);
+    let custom_fields = {
+        let fields = CustomField::retrieve_journal_stream(&conn, &journals_id).await?;
 
-    let mut custom_fields = Vec::new();
+        futures::pin_mut!(fields);
 
-    while let Some(try_record) = fields.next().await {
-        let record = try_record?;
+        let mut rtn = Vec::new();
 
-        custom_fields.push(CustomFieldFull {
-            id: record.id,
-            uid: record.uid,
-            name: record.name,
-            order: record.order,
-            config: record.config,
-            description: record.description,
-            created: record.created,
-            updated: record.updated,
-        });
-    }
+        while let Some(try_record) = fields.next().await {
+            let record = try_record?;
+
+            rtn.push(CustomFieldFull {
+                id: record.id,
+                uid: record.uid,
+                name: record.name,
+                order: record.order,
+                config: record.config,
+                description: record.description,
+                created: record.created,
+                updated: record.updated,
+            });
+        }
+
+        rtn
+    };
 
     let peers = {
         let peers = UserPeer::retrieve_many(&conn, &journals_id).await?;

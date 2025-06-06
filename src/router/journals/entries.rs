@@ -13,7 +13,7 @@ use crate::db::ids::{CustomFieldId, EntryId, EntryUid, FileEntryId, FileEntryUid
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
 use crate::journal::{
-    custom_field, CustomField, Entry, EntryCreateError, FileEntry, FileStatus, Journal, JournalDir,
+    assert_permission, custom_field, CustomField, Entry, EntryCreateError, FileEntry, FileStatus, Journal, JournalDir,
     ReceivedFile,
 };
 use crate::router::body;
@@ -21,7 +21,6 @@ use crate::router::macros;
 use crate::sec::authz::{Ability, Scope};
 use crate::state;
 
-mod auth;
 mod search;
 
 pub mod files;
@@ -676,7 +675,7 @@ pub async fn retrieve_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    auth::perm_check!(&conn, initiator, journal, Scope::Entries, Ability::Read);
+    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read).await.context("invalid permission")?;
 
     if let Some(entries_id) = entries_id {
         let result = EntryForm::retrieve_entry(&conn, &journal.id, &entries_id)
@@ -829,13 +828,13 @@ pub async fn create_entry(
         journal
     };
 
-    auth::perm_check!(
+    assert_permission(
         &transaction,
-        initiator,
-        journal,
+        &initiator,
+        &journal,
         Scope::Entries,
         Ability::Create
-    );
+    ).await.context("invalid permission")?;
 
     let entry = {
         let mut options = Entry::create_options(journal.id, initiator.user.id, json.date);
@@ -996,13 +995,13 @@ pub async fn update_entry(
         journal
     };
 
-    auth::perm_check!(
+    assert_permission(
         &transaction,
-        initiator,
-        journal,
+        &initiator,
+        &journal,
         Scope::Entries,
         Ability::Update
-    );
+    ).await.context("invalid permission")?;
 
     let result = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
         .await
@@ -1205,13 +1204,13 @@ pub async fn delete_entry(
         journal
     };
 
-    auth::perm_check!(
+    assert_permission(
         &transaction,
-        initiator,
-        journal,
+        &initiator,
+        &journal,
         Scope::Entries,
         Ability::Delete
-    );
+    ).await.context("invalid permission")?;
 
     let result = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
         .await

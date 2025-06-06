@@ -22,6 +22,7 @@ mod layer;
 
 pub mod body;
 pub mod macros;
+pub mod handles;
 
 mod admin;
 mod api;

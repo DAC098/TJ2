@@ -10,15 +10,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::{CustomFieldId, EntryId, EntryUid, JournalId, UserId};
-use crate::error::{self, Context};
-use crate::journal::{custom_field, CustomField, Journal};
-use crate::router::body;
-use crate::router::macros;
+use crate::journal::{assert_permission, custom_field, CustomField, Journal};
+use crate::net::body;
+use crate::net::Error;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{Ability, Scope};
 use crate::state;
-
-use super::auth;
 
 #[derive(Debug, Deserialize)]
 pub struct JournalPath {
@@ -72,54 +69,49 @@ struct CFValueRow {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum RetrieveResults {
-    JournalNotFound,
-    Successful {
-        total: u64,
-        entries: Vec<EntryPartial>,
-        custom_fields: Option<Vec<CustomFieldPartial>>,
-    },
+pub struct SearchResults {
+    total: u64,
+    entries: Vec<EntryPartial>,
+    custom_fields: Option<Vec<CustomFieldPartial>>,
 }
 
-impl IntoResponse for RetrieveResults {
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum SearchEntriesError {
+    JournalNotFound
+}
+
+impl IntoResponse for SearchEntriesError {
     fn into_response(self) -> Response {
-        match &self {
+        match self {
             Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
-            Self::Successful { .. } => (StatusCode::OK, body::Json(self)).into_response(),
         }
     }
 }
 
+#[axum::debug_handler]
 pub async fn retrieve_entries(
     state: state::SharedState,
     initiator: Initiator,
     headers: HeaderMap,
     Path(JournalPath { journals_id }): Path<JournalPath>,
-) -> Result<Response, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create database transaction")?;
+) -> Result<body::Json<SearchResults>, Error<SearchEntriesError>> {
+    body::assert_html(state.templates(), &headers)?;
 
-    macros::res_if_html!(state.templates(), &headers);
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-        .await
-        .context("failed to retrieve default journal")?;
+    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+        .await?
+        .ok_or(Error::Inner(SearchEntriesError::JournalNotFound))?;
 
-    let Some(journal) = result else {
-        return Ok(RetrieveResults::JournalNotFound.into_response());
-    };
-
-    auth::perm_check!(
+    assert_permission(
         &transaction,
-        initiator,
-        journal,
+        &initiator,
+        &journal,
         Scope::Entries,
         Ability::Read
-    );
+    ).await?;
 
     let custom_fields = if true {
         Some(retrieve_journal_cfs(&transaction, &journal.id).await?)
@@ -129,26 +121,20 @@ pub async fn retrieve_entries(
 
     let rtn = multi_query_search(&transaction, &journal.id, 75).await?;
 
-    transaction
-        .rollback()
-        .await
-        .context("failed to rollback journal entries search transaction")?;
+    transaction.rollback().await?;
 
-    Ok(RetrieveResults::Successful {
+    Ok(body::Json(SearchResults {
         total: rtn.len() as u64,
         entries: rtn,
         custom_fields,
-    }
-    .into_response())
+    }))
 }
 
 async fn retrieve_journal_cfs(
     conn: &impl db::GenericClient,
     journals_id: &JournalId,
-) -> Result<Vec<CustomFieldPartial>, error::Error> {
-    let stream = CustomField::retrieve_journal_stream(conn, journals_id)
-        .await
-        .context("failed to retrieve journal custom fields")?;
+) -> Result<Vec<CustomFieldPartial>, Error<SearchEntriesError>> {
+    let stream = CustomField::retrieve_journal_stream(conn, journals_id).await?;
 
     futures::pin_mut!(stream);
 
@@ -161,7 +147,7 @@ async fn retrieve_journal_cfs(
             description,
             config,
             ..
-        } = try_record.context("failed to retrieve journal custom field record")?;
+        } = try_record?;
 
         rtn.push(CustomFieldPartial {
             id,
@@ -178,7 +164,7 @@ async fn multi_query_search(
     conn: &Transaction<'_>,
     journals_id: &JournalId,
     batch_size: i32,
-) -> Result<Vec<EntryPartial>, error::Error> {
+) -> Result<Vec<EntryPartial>, Error<SearchEntriesError>> {
     let params: db::ParamsArray<'_, 1> = [journals_id];
 
     let portal = conn
@@ -197,32 +183,24 @@ async fn multi_query_search(
         order by entries.entry_date desc",
             params,
         )
-        .await
-        .context("failed to retrieve journal entries")?;
+        .await?;
 
     let mut rtn = Vec::new();
 
     loop {
         let stream = conn
             .query_portal_raw(&portal, batch_size)
-            .await
-            .context("failed to retrieve journal entries portal chunk")?
-            .map(|result| match result {
-                Ok(row) => Ok(EntryRow {
-                    id: row.get(0),
-                    uid: row.get(1),
-                    journals_id: row.get(2),
-                    users_id: row.get(3),
-                    title: row.get(4),
-                    date: row.get(5),
-                    created: row.get(6),
-                    updated: row.get(7),
-                }),
-                Err(err) => Err(error::Error::context_source(
-                    "failed to retrieve entry record",
-                    err,
-                )),
-            });
+            .await?
+            .map(|result| result.map(|row| EntryRow {
+                id: row.get(0),
+                uid: row.get(1),
+                journals_id: row.get(2),
+                users_id: row.get(3),
+                title: row.get(4),
+                date: row.get(5),
+                created: row.get(6),
+                updated: row.get(7),
+            }));
 
         futures::pin_mut!(stream);
 
@@ -261,7 +239,7 @@ async fn multi_query_search(
 async fn multi_query_tags(
     conn: &impl db::GenericClient,
     entries_id: &EntryId,
-) -> Result<BTreeMap<String, Option<String>>, error::Error> {
+) -> Result<BTreeMap<String, Option<String>>, Error<SearchEntriesError>> {
     let params: db::ParamsArray<'_, 1> = [entries_id];
     let stream = conn
         .query_raw(
@@ -275,18 +253,11 @@ async fn multi_query_tags(
         order by entry_tags.key",
             params,
         )
-        .await
-        .context("failed to retrieve entry tags")?
-        .map(|result| match result {
-            Ok(row) => Ok(TagRow {
-                key: row.get(0),
-                value: row.get(1),
-            }),
-            Err(err) => Err(error::Error::context_source(
-                "failed to retrieve tag record",
-                err,
-            )),
-        });
+        .await?
+        .map(|result| result.map(|row| TagRow {
+            key: row.get(0),
+            value: row.get(1),
+        }));
 
     futures::pin_mut!(stream);
 
@@ -304,7 +275,7 @@ async fn multi_query_tags(
 async fn multi_query_cfs(
     conn: &impl db::GenericClient,
     entries_id: &EntryId,
-) -> Result<HashMap<CustomFieldId, custom_field::Value>, error::Error> {
+) -> Result<HashMap<CustomFieldId, custom_field::Value>, Error<SearchEntriesError>> {
     let params: db::ParamsArray<'_, 1> = [entries_id];
     let stream = conn
         .query_raw(
@@ -318,18 +289,11 @@ async fn multi_query_cfs(
         order by entries.entry_date desc",
             params,
         )
-        .await
-        .context("failed to retrieve entry custom_fields")?
-        .map(|result| match result {
-            Ok(row) => Ok(CFValueRow {
-                custom_fields_id: row.get(0),
-                value: row.get(1),
-            }),
-            Err(err) => Err(error::Error::context_source(
-                "failed to retrieve cf value record",
-                err,
-            )),
-        });
+        .await?
+        .map(|result| result.map(|row| CFValueRow {
+            custom_fields_id: row.get(0),
+            value: row.get(1),
+        }));
 
     futures::pin_mut!(stream);
 
