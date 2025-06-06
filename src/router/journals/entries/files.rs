@@ -15,7 +15,9 @@ use crate::db;
 use crate::db::ids::{EntryId, FileEntryId, JournalId};
 use crate::error::{self, Context};
 use crate::fs::FileCreater;
-use crate::journal::{assert_permission, FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile};
+use crate::journal::{
+    assert_permission, FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile,
+};
 use crate::router::body;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{Ability, Scope};
@@ -57,7 +59,9 @@ pub async fn retrieve_file(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read).await.context("invalid permission")?;
+    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read)
+        .await
+        .context("invalid permission")?;
 
     let result = FileEntry::retrieve_file_entry(&conn, &entries_id, &file_entry_id)
         .await
@@ -157,8 +161,10 @@ pub async fn upload_file(
         &initiator,
         &journal,
         Scope::Entries,
-        Ability::Update
-    ).await.context("invalid permission")?;
+        Ability::Update,
+    )
+    .await
+    .context("invalid permission")?;
 
     let result = FileEntry::retrieve_file_entry(&transaction, &entries_id, &file_entry_id)
         .await

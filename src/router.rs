@@ -21,8 +21,8 @@ mod assets;
 mod layer;
 
 pub mod body;
-pub mod macros;
 pub mod handles;
+pub mod macros;
 
 mod admin;
 mod api;

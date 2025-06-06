@@ -13,8 +13,8 @@ use crate::db::ids::{CustomFieldId, EntryId, EntryUid, FileEntryId, FileEntryUid
 use crate::error::{self, Context};
 use crate::fs::RemovedFiles;
 use crate::journal::{
-    assert_permission, custom_field, CustomField, Entry, EntryCreateError, FileEntry, FileStatus, Journal, JournalDir,
-    ReceivedFile,
+    assert_permission, custom_field, CustomField, Entry, EntryCreateError, FileEntry, FileStatus,
+    Journal, JournalDir, ReceivedFile,
 };
 use crate::net::Error;
 use crate::router::body;
@@ -677,7 +677,9 @@ pub async fn retrieve_entry(
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
 
-    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read).await.context("invalid permission")?;
+    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read)
+        .await
+        .context("invalid permission")?;
 
     if let Some(entries_id) = entries_id {
         let result = EntryForm::retrieve_entry(&conn, &journal.id, &entries_id)
@@ -835,8 +837,10 @@ pub async fn create_entry(
         &initiator,
         &journal,
         Scope::Entries,
-        Ability::Create
-    ).await.context("invalid permission")?;
+        Ability::Create,
+    )
+    .await
+    .context("invalid permission")?;
 
     let entry = {
         let mut options = Entry::create_options(journal.id, initiator.user.id, json.date);
@@ -1002,8 +1006,10 @@ pub async fn update_entry(
         &initiator,
         &journal,
         Scope::Entries,
-        Ability::Update
-    ).await.context("invalid permission")?;
+        Ability::Update,
+    )
+    .await
+    .context("invalid permission")?;
 
     let result = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
         .await
@@ -1214,8 +1220,9 @@ pub async fn delete_entry(
         &initiator,
         &journal,
         Scope::Entries,
-        Ability::Delete
-    ).await?;
+        Ability::Delete,
+    )
+    .await?;
 
     let entry = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
         .await?
@@ -1235,7 +1242,7 @@ pub async fn delete_entry(
     let _synced_entries = transaction
         .execute(
             "delete from synced_entries where entries_id = $1",
-            &[&entry.id]
+            &[&entry.id],
         )
         .await?;
 
@@ -1264,7 +1271,10 @@ pub async fn delete_entry(
         }
     }
 
-    if let Err(err) = transaction.execute("delete from entries where id = $1", &[&entry.id]).await {
+    if let Err(err) = transaction
+        .execute("delete from entries where id = $1", &[&entry.id])
+        .await
+    {
         if !marked_files.is_empty() {
             marked_files.log_rollback().await;
         }

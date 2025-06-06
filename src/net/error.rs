@@ -205,7 +205,7 @@ impl<T> From<RemovedFileError> for Error<T> {
                 response: json_server_error(),
                 msg: None,
                 src: Some(err.into()),
-            }
+            },
         }
     }
 }

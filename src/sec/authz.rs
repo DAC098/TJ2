@@ -452,7 +452,7 @@ pub async fn assert_permission_ref<T>(
     ref_id: T,
 ) -> Result<(), PermissionError>
 where
-    T: AsRef<i64>
+    T: AsRef<i64>,
 {
     if has_permission_ref(conn, users_id, scope, ability, ref_id).await? {
         Ok(())

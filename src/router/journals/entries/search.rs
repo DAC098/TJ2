@@ -78,7 +78,7 @@ pub struct SearchResults {
 #[derive(Debug, strum::Display, Serialize)]
 #[serde(tag = "error")]
 pub enum SearchEntriesError {
-    JournalNotFound
+    JournalNotFound,
 }
 
 impl IntoResponse for SearchEntriesError {
@@ -110,8 +110,9 @@ pub async fn retrieve_entries(
         &initiator,
         &journal,
         Scope::Entries,
-        Ability::Read
-    ).await?;
+        Ability::Read,
+    )
+    .await?;
 
     let custom_fields = if true {
         Some(retrieve_journal_cfs(&transaction, &journal.id).await?)
@@ -191,16 +192,18 @@ async fn multi_query_search(
         let stream = conn
             .query_portal_raw(&portal, batch_size)
             .await?
-            .map(|result| result.map(|row| EntryRow {
-                id: row.get(0),
-                uid: row.get(1),
-                journals_id: row.get(2),
-                users_id: row.get(3),
-                title: row.get(4),
-                date: row.get(5),
-                created: row.get(6),
-                updated: row.get(7),
-            }));
+            .map(|result| {
+                result.map(|row| EntryRow {
+                    id: row.get(0),
+                    uid: row.get(1),
+                    journals_id: row.get(2),
+                    users_id: row.get(3),
+                    title: row.get(4),
+                    date: row.get(5),
+                    created: row.get(6),
+                    updated: row.get(7),
+                })
+            });
 
         futures::pin_mut!(stream);
 
@@ -254,10 +257,12 @@ async fn multi_query_tags(
             params,
         )
         .await?
-        .map(|result| result.map(|row| TagRow {
-            key: row.get(0),
-            value: row.get(1),
-        }));
+        .map(|result| {
+            result.map(|row| TagRow {
+                key: row.get(0),
+                value: row.get(1),
+            })
+        });
 
     futures::pin_mut!(stream);
 
@@ -290,10 +295,12 @@ async fn multi_query_cfs(
             params,
         )
         .await?
-        .map(|result| result.map(|row| CFValueRow {
-            custom_fields_id: row.get(0),
-            value: row.get(1),
-        }));
+        .map(|result| {
+            result.map(|row| CFValueRow {
+                custom_fields_id: row.get(0),
+                value: row.get(1),
+            })
+        });
 
     futures::pin_mut!(stream);
 

@@ -87,10 +87,7 @@ impl FromRequestParts<SharedState> for SharedState {
 impl FromRequestParts<()> for SharedState {
     type Rejection = Infallible;
 
-    async fn from_request_parts(
-        _: &mut Parts,
-        _: &()
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(_: &mut Parts, _: &()) -> Result<Self, Self::Rejection> {
         panic!("no shared state available");
     }
 }

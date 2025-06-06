@@ -15,9 +15,9 @@ use crate::db::ids::{
 };
 use crate::db::{self, GenericClient, PgError};
 use crate::error::BoxDynError;
-use crate::sec::Hash;
 use crate::sec::authn::Initiator;
 use crate::sec::authz;
+use crate::sec::Hash;
 
 pub mod custom_field;
 
@@ -26,7 +26,7 @@ pub async fn assert_permission(
     initiator: &Initiator,
     journal: &Journal,
     scope: authz::Scope,
-    ability: authz::Ability
+    ability: authz::Ability,
 ) -> Result<(), authz::PermissionError> {
     if journal.users_id == initiator.user.id {
         tracing::debug!("assert permission");

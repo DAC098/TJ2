@@ -14,7 +14,8 @@ use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserI
 use crate::error::{self, Context};
 use crate::jobs;
 use crate::journal::{
-    assert_permission, custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError, JournalUpdateError,
+    assert_permission, custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError,
+    JournalUpdateError,
 };
 use crate::net::body;
 use crate::net::Error as NetError;
