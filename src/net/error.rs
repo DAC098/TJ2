@@ -195,6 +195,21 @@ impl<T> From<ApiInitiatorError> for Error<T> {
     }
 }
 
+use crate::fs::RemovedFileError;
+
+impl<T> From<RemovedFileError> for Error<T> {
+    fn from(err: RemovedFileError) -> Self {
+        match err {
+            RemovedFileError::Io(err) => Self::from(err),
+            _ => Self::Defined {
+                response: json_server_error(),
+                msg: None,
+                src: Some(err.into()),
+            }
+        }
+    }
+}
+
 impl<T> From<Response> for Error<T> {
     fn from(response: Response) -> Self {
         Self::Defined {

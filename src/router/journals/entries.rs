@@ -16,8 +16,10 @@ use crate::journal::{
     assert_permission, custom_field, CustomField, Entry, EntryCreateError, FileEntry, FileStatus, Journal, JournalDir,
     ReceivedFile,
 };
+use crate::net::Error;
 use crate::router::body;
 use crate::router::macros;
+use crate::sec::authn::Initiator;
 use crate::sec::authz::{Ability, Scope};
 use crate::state;
 
@@ -1176,33 +1178,36 @@ pub async fn update_entry(
     Ok(body::Json(UpdateEntryResult::Updated(entry)).into_response())
 }
 
+#[derive(Debug, strum::Display, Serialize)]
+pub enum DeleteEntryError {
+    JournalNotFound,
+    EntryNotFound,
+}
+
+impl IntoResponse for DeleteEntryError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::EntryNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+        }
+    }
+}
+
 pub async fn delete_entry(
     state: state::SharedState,
+    initiator: Initiator,
     headers: HeaderMap,
     Path(EntryPath {
         journals_id,
         entries_id,
     }): Path<EntryPath>,
-) -> Result<Response, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+) -> Result<StatusCode, Error<DeleteEntryError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
-
-    let journal = {
-        let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-            .await
-            .context("failed to retrieve default journal")?;
-
-        let Some(journal) = result else {
-            return Ok(StatusCode::NOT_FOUND.into_response());
-        };
-
-        journal
-    };
+    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+        .await?
+        .ok_or(Error::Inner(DeleteEntryError::JournalNotFound))?;
 
     assert_permission(
         &transaction,
@@ -1210,36 +1215,36 @@ pub async fn delete_entry(
         &journal,
         Scope::Entries,
         Ability::Delete
-    ).await.context("invalid permission")?;
+    ).await?;
 
-    let result = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
-        .await
-        .context("failed to retrieve journal entry by date")?;
-
-    let Some(entry) = result else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
+    let entry = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
+        .await?
+        .ok_or(Error::Inner(DeleteEntryError::EntryNotFound))?;
 
     let _tags = transaction
         .execute("delete from entry_tags where entries_id = $1", &[&entry.id])
-        .await
-        .context("failed to delete tags for journal entry")?;
+        .await?;
 
     let _custom_fields = transaction
         .execute(
             "delete from custom_field_entries where entries_id = $1",
             &[&entry.id],
         )
-        .await
-        .context("failed to delete custom field entries for journal entry")?;
+        .await?;
+
+    let _synced_entries = transaction
+        .execute(
+            "delete from synced_entries where entries_id = $1",
+            &[&entry.id]
+        )
+        .await?;
 
     let stream = transaction
         .query_raw(
             "delete from file_entries where entries_id = $1 returning id",
             &[&entry.id],
         )
-        .await
-        .context("failed to delete files for journal entry")?;
+        .await?;
 
     futures::pin_mut!(stream);
 
@@ -1247,7 +1252,7 @@ pub async fn delete_entry(
     let journal_dir = state.storage().journal_dir(journal.id);
 
     while let Some(try_row) = stream.next().await {
-        let row = try_row.context("failed to retrieve file entry row")?;
+        let row = try_row?;
         let id: FileEntryId = row.get(0);
 
         let entry_path = journal_dir.file_path(&id);
@@ -1255,33 +1260,16 @@ pub async fn delete_entry(
         if let Err(err) = marked_files.add(entry_path).await {
             marked_files.log_rollback().await;
 
-            return Err(error::Error::context_source(
-                "failed to mark files for removal",
-                err,
-            ));
+            return Err(Error::from(err));
         }
     }
 
-    let entry_result = transaction
-        .execute("delete from entries where id = $1", &[&entry.id])
-        .await;
-
-    match entry_result {
-        Ok(execed) => {
-            if execed != 1 {
-                tracing::warn!("did not find journal entry?");
-            }
+    if let Err(err) = transaction.execute("delete from entries where id = $1", &[&entry.id]).await {
+        if !marked_files.is_empty() {
+            marked_files.log_rollback().await;
         }
-        Err(err) => {
-            if !marked_files.is_empty() {
-                marked_files.log_rollback().await;
-            }
 
-            return Err(error::Error::context_source(
-                "failed to delete entry for journal",
-                err,
-            ));
-        }
+        return Err(Error::from(err));
     }
 
     if let Err(err) = transaction.commit().await {
@@ -1289,16 +1277,13 @@ pub async fn delete_entry(
             marked_files.log_rollback().await;
         }
 
-        Err(error::Error::context_source(
-            "failed to commit changes to journal",
-            err,
-        ))
+        Err(Error::from(err))
     } else {
         if !marked_files.is_empty() {
             marked_files.log_clean().await;
         }
 
-        Ok(StatusCode::OK.into_response())
+        Ok(StatusCode::OK)
     }
 }
 
