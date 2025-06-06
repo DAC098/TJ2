@@ -83,6 +83,18 @@ impl FromRequestParts<SharedState> for SharedState {
     }
 }
 
+#[async_trait]
+impl FromRequestParts<()> for SharedState {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        _: &mut Parts,
+        _: &()
+    ) -> Result<Self, Self::Rejection> {
+        panic!("no shared state available");
+    }
+}
+
 #[derive(Debug)]
 pub struct State {
     db_pool: db::Pool,

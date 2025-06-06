@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use async_trait::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -228,6 +230,18 @@ impl FromRequestParts<state::SharedState> for Initiator {
 }
 
 #[async_trait]
+impl FromRequestParts<()> for Initiator {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        _: &mut Parts,
+        _: &(),
+    ) -> Result<Self, Self::Rejection> {
+        panic!("no shared state available");
+    }
+}
+
+#[async_trait]
 impl FromRequestParts<state::SharedState> for ApiInitiator {
     type Rejection = NetError;
 
@@ -238,5 +252,17 @@ impl FromRequestParts<state::SharedState> for ApiInitiator {
         let conn = state.db().get().await?;
 
         Ok(ApiInitiator::from_headers(&conn, &parts.headers).await?)
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<()> for ApiInitiator {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        _: &mut Parts,
+        _: &(),
+    ) -> Result<Self, Self::Rejection> {
+        panic!("no shared state available");
     }
 }
