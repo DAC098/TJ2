@@ -26,6 +26,17 @@ impl<T> Error<T> {
         }
     }
 
+    pub fn source<E>(src: E) -> Self
+    where
+        E: Into<BoxDynError>,
+    {
+        Self::Defined {
+            response: json_server_error(),
+            msg: None,
+            src: Some(src.into()),
+        }
+    }
+
     pub fn with_source<E>(self, src: E) -> Self
     where
         E: Into<BoxDynError>,
@@ -113,6 +124,8 @@ simple_from!(crate::error::Error);
 simple_from!(crate::sec::otp::UnixTimestampError);
 simple_from!(crate::sec::password::HashError);
 
+simple_from!(axum::Error);
+simple_from!(axum::http::Error);
 simple_from!(std::io::Error);
 
 impl<T> From<axum::http::header::ToStrError> for Error<T> {
@@ -201,11 +214,18 @@ impl<T> From<RemovedFileError> for Error<T> {
     fn from(err: RemovedFileError) -> Self {
         match err {
             RemovedFileError::Io(err) => Self::from(err),
-            _ => Self::Defined {
-                response: json_server_error(),
-                msg: None,
-                src: Some(err.into()),
-            },
+            _ => Self::source(err),
+        }
+    }
+}
+
+use crate::fs::FileCreaterError;
+
+impl<T> From<FileCreaterError> for Error<T> {
+    fn from(err: FileCreaterError) -> Self {
+        match err {
+            FileCreaterError::Io(err) => Self::from(err),
+            _ => Self::source(err),
         }
     }
 }

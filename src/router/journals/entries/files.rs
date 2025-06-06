@@ -13,12 +13,12 @@ use tokio_util::io::ReaderStream;
 
 use crate::db;
 use crate::db::ids::{EntryId, FileEntryId, JournalId};
-use crate::error::{self, Context};
 use crate::fs::FileCreater;
 use crate::journal::{
     assert_permission, FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile,
 };
-use crate::router::body;
+use crate::net::body;
+use crate::net::Error;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{Ability, Scope};
 use crate::sec::hash::HashCheck;
@@ -39,6 +39,22 @@ pub struct FileEntryQuery {
     download: Option<bool>,
 }
 
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum RetrieveError {
+    JournalNotFound,
+    FileNotFound,
+}
+
+impl IntoResponse for RetrieveError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::FileNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+        }
+    }
+}
+
 pub async fn retrieve_file(
     state: state::SharedState,
     initiator: Initiator,
@@ -48,32 +64,22 @@ pub async fn retrieve_file(
         file_entry_id,
     }): Path<FileEntryPath>,
     Query(FileEntryQuery { download }): Query<FileEntryQuery>,
-) -> Result<Response, error::Error> {
+) -> Result<Response, Error<RetrieveError>> {
     let conn = state.db_conn().await?;
 
-    let result = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
-        .await
-        .context("failed to retrieve default journal")?;
+    let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
+        .await?
+        .ok_or(Error::Inner(RetrieveError::JournalNotFound))?;
 
-    let Some(journal) = result else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
+    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read).await?;
 
-    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read)
-        .await
-        .context("invalid permission")?;
+    let file_entry = FileEntry::retrieve_file_entry(&conn, &entries_id, &file_entry_id)
+        .await?
+        .ok_or(Error::Inner(RetrieveError::FileNotFound))?;
 
-    let result = FileEntry::retrieve_file_entry(&conn, &entries_id, &file_entry_id)
-        .await
-        .context("failed to retrieve journal entry file")?;
-
-    let Some(file_entry) = result else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
-
-    let Ok(received_file) = file_entry.into_received() else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
+    let received_file = file_entry
+        .into_received()
+        .map_err(|_| Error::Inner(RetrieveError::FileNotFound))?;
 
     let file_path = state
         .storage()
@@ -81,8 +87,7 @@ pub async fn retrieve_file(
     let file = tokio::fs::OpenOptions::new()
         .read(true)
         .open(&file_path)
-        .await
-        .context("failed to open file for journal file entry")?;
+        .await?;
     let reader = ReaderStream::new(file);
 
     let mime = received_file.get_mime();
@@ -101,28 +106,32 @@ pub async fn retrieve_file(
         );
     }
 
-    builder
-        .body(Body::from_stream(reader))
-        .context("failed to create file response")
+    Ok(builder.body(Body::from_stream(reader))?)
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-enum UploadResult {
-    Successful(EntryFileForm),
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum UploadError {
     JournalNotFound,
     FileNotFound,
     NotRequestedFile,
+    InvalidContentType,
+    InvalidHash,
+    TooLarge,
+    TooSmall,
 }
 
-impl IntoResponse for UploadResult {
+impl IntoResponse for UploadError {
     fn into_response(self) -> Response {
         match &self {
-            Self::Successful(_) => (StatusCode::OK, body::Json(self)).into_response(),
             Self::JournalNotFound | Self::FileNotFound => {
                 (StatusCode::NOT_FOUND, body::Json(self)).into_response()
             }
-            Self::NotRequestedFile => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::NotRequestedFile
+            | Self::InvalidContentType
+            | Self::InvalidHash
+            | Self::TooLarge
+            | Self::TooSmall => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
         }
     }
 }
@@ -137,24 +146,13 @@ pub async fn upload_file(
         file_entry_id,
     }): Path<FileEntryPath>,
     stream: Body,
-) -> Result<Response, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+) -> Result<body::Json<EntryFileForm>, Error<UploadError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    let journal = {
-        let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-            .await
-            .context("failed to retrieve default journal")?;
-
-        let Some(journal) = result else {
-            return Ok(UploadResult::JournalNotFound.into_response());
-        };
-
-        journal
-    };
+    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+        .await?
+        .ok_or(Error::Inner(UploadError::JournalNotFound))?;
 
     assert_permission(
         &transaction,
@@ -163,23 +161,19 @@ pub async fn upload_file(
         Scope::Entries,
         Ability::Update,
     )
-    .await
-    .context("invalid permission")?;
+    .await?;
 
-    let result = FileEntry::retrieve_file_entry(&transaction, &entries_id, &file_entry_id)
-        .await
-        .context("failed to retrieve journal entry file")?;
-
-    let Some(file_entry) = result else {
-        return Ok(UploadResult::FileNotFound.into_response());
-    };
+    let file_entry = FileEntry::retrieve_file_entry(&transaction, &entries_id, &file_entry_id)
+        .await?
+        .ok_or(Error::Inner(UploadError::FileNotFound))?;
 
     let mime = get_mime(&headers)?;
-    let hash_check = HashCheck::from_headers(&headers).context("error retrieving x-hash header")?;
+    let hash_check =
+        HashCheck::from_headers(&headers).map_err(|_| Error::Inner(UploadError::InvalidHash))?;
 
-    let Ok(requested) = file_entry.into_requested() else {
-        return Ok(UploadResult::NotRequestedFile.into_response());
-    };
+    let requested = file_entry
+        .into_requested()
+        .map_err(|_| Error::Inner(UploadError::NotRequestedFile))?;
 
     let record = create_file(
         state.storage(),
@@ -190,10 +184,9 @@ pub async fn upload_file(
         hash_check,
         stream,
     )
-    .await
-    .context("failed to create file")?;
+    .await?;
 
-    Ok(UploadResult::Successful(record.into()).into_response())
+    Ok(body::Json(record.into()))
 }
 
 async fn create_file(
@@ -204,21 +197,22 @@ async fn create_file(
     mime: mime::Mime,
     hash_check: HashCheck,
     stream: Body,
-) -> Result<ReceivedFile, error::Error> {
+) -> Result<ReceivedFile, Error<UploadError>> {
     let file_path = storage.journal_file_entry(journal.id, requested.id);
-    let mut creater = FileCreater::new(file_path)
-        .await
-        .context("failed to init file creater")?;
+    let mut creater = FileCreater::new(file_path).await?;
 
     let (written, hash) = match write_body(stream, &mut creater, hash_check).await {
         Ok(rtn) => rtn,
         Err(err) => {
             creater.log_clean().await;
 
-            return Err(error::Error::context_source(
-                "failed to write request body to file",
-                err,
-            ));
+            return Err(match err {
+                WriteError::InvalidHash => Error::Inner(UploadError::InvalidHash),
+                WriteError::TooLarge => Error::Inner(UploadError::TooLarge),
+                WriteError::TooSmall => Error::Inner(UploadError::TooSmall),
+                WriteError::Io(err) => Error::from(err),
+                WriteError::Axum(err) => Error::from(err),
+            });
         }
     };
 
@@ -234,10 +228,7 @@ async fn create_file(
         Err((_, err)) => {
             creater.log_clean().await;
 
-            return Err(error::Error::context_source(
-                "failed to promote requested file entry",
-                err,
-            ));
+            return Err(Error::from(err));
         }
     };
 
@@ -246,10 +237,7 @@ async fn create_file(
     if let Err(err) = conn.commit().await {
         created.log_rollback().await;
 
-        Err(error::Error::context_source(
-            "failed to commit changes to file entry",
-            err,
-        ))
+        Err(Error::from(err))
     } else {
         Ok(received)
     }
@@ -443,14 +431,14 @@ where
     Ok((size, hash.into(), given.into()))
 }
 
-fn get_mime(headers: &HeaderMap) -> Result<mime::Mime, error::Error> {
+fn get_mime(headers: &HeaderMap) -> Result<mime::Mime, Error<UploadError>> {
     let content_type = headers
         .get("content-type")
-        .context("missing content-type header")?
+        .ok_or(Error::Inner(UploadError::InvalidContentType))?
         .to_str()
-        .context("contet-type contains invalid utf8 characters")?;
+        .map_err(|_| Error::Inner(UploadError::InvalidContentType))?;
 
-    mime::Mime::from_str(&content_type).context("content-type is not a valid mime format")
+    mime::Mime::from_str(&content_type).map_err(|_| Error::Inner(UploadError::InvalidContentType))
 }
 
 #[cfg(test)]
