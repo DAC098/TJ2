@@ -1180,6 +1180,18 @@ pub enum CreateCustomFieldError {
     Db(#[from] PgError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateCustomFieldError {
+    #[error("the specified custom field was not found")]
+    NotFound,
+
+    #[error("the given name already exists for this journal")]
+    NameExists,
+
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+}
+
 #[derive(Debug)]
 pub struct CustomField {
     pub id: CustomFieldId,
@@ -1333,6 +1345,57 @@ impl CustomField {
         }
 
         Ok(rtn)
+    }
+
+    pub async fn update(
+        &self,
+        conn: &impl db::GenericClient,
+    ) -> Result<(), UpdateCustomFieldError> {
+        let params: db::ParamsArray<'_, 5> = [
+            &self.id,
+            &self.name,
+            &self.order,
+            &self.description,
+            &self.updated,
+        ];
+
+        let result = conn
+            .execute(
+                "\
+            update custom_fields \
+            set name = $2, \
+                \"order\" = $3, \
+                description = $4, \
+                updated = $5 \
+            where id = $1",
+                &params,
+            )
+            .await;
+
+        match result {
+            Ok(executed) => {
+                if executed == 1 {
+                    Err(UpdateCustomFieldError::NotFound)
+                } else {
+                    Ok(())
+                }
+            }
+            Err(err) => {
+                if let Some(kind) = db::ErrorKind::check(&err) {
+                    match kind {
+                        db::ErrorKind::Unique(constraint) => match constraint {
+                            "custom_fields_journals_id_name_key" => {
+                                Err(UpdateCustomFieldError::NameExists)
+                            }
+                            _ => Err(UpdateCustomFieldError::Db(err)),
+                        },
+                        _ => Err(UpdateCustomFieldError::Db(err)),
+                    }
+                } else {
+                    Err(UpdateCustomFieldError::Db(err))
+                }
+            }
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use axum::extract::Path;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserId, UserPeerId};
-use crate::error::{self, Context};
+use crate::error;
 use crate::jobs;
 use crate::journal::{
     assert_permission, custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError,
@@ -19,7 +19,7 @@ use crate::journal::{
 };
 use crate::net::body;
 use crate::net::Error as NetError;
-use crate::router::{handles, macros};
+use crate::router::handles;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Ability, Scope};
 use crate::state;
@@ -125,11 +125,6 @@ async fn retrieve_journals(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct MaybeJournalPath {
-    journals_id: Option<JournalId>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct JournalPath {
     journals_id: JournalId,
 }
@@ -215,14 +210,12 @@ impl From<(Journal, Vec<CustomFieldFull>, Vec<JournalPeer>)> for JournalFull {
 #[serde(tag = "error")]
 pub enum RetrieveJournalError {
     JournalNotFound,
-    InvalidJournalId,
 }
 
 impl IntoResponse for RetrieveJournalError {
     fn into_response(self) -> Response {
         match self {
             Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
-            Self::InvalidJournalId => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
         }
     }
 }
@@ -423,127 +416,74 @@ pub struct UpdateJournal {
     peers: Vec<UserPeerId>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum UpdateJournalResult {
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum UpdateJournalError {
+    JournalNotFound,
     NameExists,
     CustomFieldNotFound { ids: Vec<CustomFieldId> },
     DuplicateCustomFields { duplicates: Vec<String> },
     PeersNotFound { ids: Vec<UserPeerId> },
-    Updated(JournalFull),
+}
+
+impl IntoResponse for UpdateJournalError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::NameExists
+            | Self::CustomFieldNotFound { .. }
+            | Self::DuplicateCustomFields { .. }
+            | Self::PeersNotFound { .. } => {
+                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
+            }
+        }
+    }
 }
 
 async fn update_journal(
     state: state::SharedState,
-    headers: HeaderMap,
+    initiator: Initiator,
     Path(JournalPath { journals_id }): Path<JournalPath>,
     body::Json(json): body::Json<UpdateJournal>,
-) -> Result<Response, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+) -> Result<body::Json<JournalFull>, NetError<UpdateJournalError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    let initiator = macros::require_initiator!(&transaction, &headers, None::<Uri>);
-
-    let perm_check = authz::has_permission(
+    authz::assert_permission(
         &transaction,
         initiator.user.id,
         Scope::Journals,
         Ability::Update,
     )
-    .await
-    .context("failed to retrieve permission for user")?;
+    .await?;
 
-    if !perm_check {
-        return Ok(StatusCode::UNAUTHORIZED.into_response());
-    }
-
-    let mut journal = {
-        let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-            .await
-            .context("failed to retrieve journal")?;
-
-        let Some(journal) = result else {
-            return Ok(StatusCode::NOT_FOUND.into_response());
-        };
-
-        journal
-    };
+    let mut journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+        .await?
+        .ok_or(NetError::Inner(UpdateJournalError::JournalNotFound))?;
 
     journal.name = json.name;
     journal.description = json.description;
     journal.updated = Some(Utc::now());
 
     if let Err(err) = journal.update(&transaction).await {
-        match err {
-            JournalUpdateError::NameExists => {
-                return Ok((
-                    StatusCode::BAD_REQUEST,
-                    body::Json(UpdateJournalResult::NameExists),
-                )
-                    .into_response())
-            }
-            JournalUpdateError::NotFound => {
-                return Err(error::Error::context(
-                    "attempted to update journal that no longer exists",
-                ))
-            }
-            JournalUpdateError::Db(err) => {
-                return Err(error::Error::context_source(
-                    "failed to update journal",
-                    err,
-                ))
-            }
-        }
+        return Err(match err {
+            JournalUpdateError::NameExists => NetError::Inner(UpdateJournalError::NameExists),
+            JournalUpdateError::NotFound => NetError::Inner(UpdateJournalError::JournalNotFound),
+            JournalUpdateError::Db(err) => err.into(),
+        });
     }
 
-    let UpdateResults {
-        valid,
-        not_found,
-        duplicates,
-    } = update_custom_fields(&transaction, &journal, json.custom_fields).await?;
-
-    if !duplicates.is_empty() {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            body::Json(UpdateJournalResult::DuplicateCustomFields { duplicates }),
-        )
-            .into_response());
-    }
-
-    if !not_found.is_empty() {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            body::Json(UpdateJournalResult::CustomFieldNotFound { ids: not_found }),
-        )
-            .into_response());
-    }
-
+    let custom_fields = update_custom_fields(&transaction, &journal, json.custom_fields).await?;
     let peers =
-        match upsert_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers)
-            .await?
-        {
-            UpsertJournalPeers::Valid(valid) => valid,
-            UpsertJournalPeers::NotFound(ids) => {
-                return Ok((
-                    StatusCode::BAD_REQUEST,
-                    body::Json(UpdateJournalResult::PeersNotFound { ids }),
-                )
-                    .into_response())
-            }
-        };
+        upsert_journal_peers(&transaction, &initiator.user.id, &journal.id, json.peers).await?;
 
-    transaction
-        .commit()
-        .await
-        .context("failed to commit transaction")?;
+    transaction.commit().await?;
 
-    Ok(body::Json(UpdateJournalResult::Updated(JournalFull::from((
-        journal, valid, peers,
+    Ok(body::Json(JournalFull::from((
+        journal,
+        custom_fields,
+        peers,
     ))))
-    .into_response())
 }
 
 async fn create_custom_fields(
@@ -605,28 +545,18 @@ async fn create_custom_fields(
     }
 }
 
-struct UpdateResults {
-    valid: Vec<CustomFieldFull>,
-    not_found: Vec<CustomFieldId>,
-    duplicates: Vec<String>,
-}
-
 async fn update_custom_fields(
     conn: &impl db::GenericClient,
     journal: &Journal,
     update_fields: Vec<UpdateCustomField>,
-) -> Result<UpdateResults, error::Error> {
+) -> Result<Vec<CustomFieldFull>, NetError<UpdateJournalError>> {
     let mut existing: HashMap<CustomFieldId, CustomField> = HashMap::new();
-    let stream = CustomField::retrieve_journal_stream(conn, &journal.id)
-        .await
-        .context("failed to retrieve current custom fields")?;
+    let stream = CustomField::retrieve_journal_stream(conn, &journal.id).await?;
 
     futures::pin_mut!(stream);
 
-    while let Some(try_record) = stream.next().await {
-        let record = try_record.context("failed to retrieve custom_field record")?;
-
-        tracing::debug!("existing record: {record:#?}");
+    while let Some(maybe) = stream.next().await {
+        let record = maybe?;
 
         existing.insert(record.id, record);
     }
@@ -684,154 +614,72 @@ async fn update_custom_fields(
                     continue;
                 }
 
-                insert_records.push(CustomField {
-                    id: CustomFieldId::zero(),
-                    uid: CustomFieldUid::gen(),
-                    journals_id: journal.id,
-                    name: new_field.name,
-                    order: new_field.order,
-                    config: new_field.config,
-                    description: new_field.description,
-                    created,
-                    updated: None,
-                });
+                let mut builder =
+                    CustomField::builder(journal.id, new_field.name, new_field.config);
+                builder.with_order(new_field.order);
+                builder.with_uid(CustomFieldUid::gen());
+                builder.with_created(created);
+
+                if let Some(desc) = new_field.description {
+                    builder.with_description(desc);
+                }
+
+                insert_records.push(builder);
             }
         }
     }
 
-    if !duplicates.is_empty() || !not_found.is_empty() {
-        return Ok(UpdateResults {
-            valid: Vec::new(),
-            not_found,
+    if !duplicates.is_empty() {
+        return Err(NetError::Inner(UpdateJournalError::DuplicateCustomFields {
             duplicates,
-        });
+        }));
     }
 
-    if !insert_records.is_empty() {
-        rtn.extend(insert_custom_fields(conn, insert_records).await?);
+    if !not_found.is_empty() {
+        return Err(NetError::Inner(UpdateJournalError::CustomFieldNotFound {
+            ids: not_found,
+        }));
     }
-
-    {
-        let mut await_list = futures::stream::FuturesUnordered::new();
-
-        for existing in &update_records {
-            let params: db::ParamsArray<'_, 5> = [
-                &existing.id,
-                &existing.name,
-                &existing.order,
-                &existing.description,
-                &existing.updated,
-            ];
-
-            await_list.push(conn.execute_raw(
-                "\
-                update custom_fields \
-                set name = $2, \
-                    \"order\" = $3, \
-                    description = $4, \
-                    updated = $5 \
-                where id = $1",
-                params,
-            ));
-        }
-
-        let mut failed = false;
-
-        while let Some(result) = await_list.next().await {
-            if let Err(err) = result {
-                error::log_prefix_error("failed to update custom_field", &err);
-
-                failed = true;
-            }
-        }
-
-        if failed {
-            return Err(error::Error::context("error when updating custom_fields"));
-        }
-    }
-
-    rtn.extend(update_records.into_iter().map(|record| CustomFieldFull {
-        id: record.id,
-        uid: record.uid,
-        name: record.name,
-        order: record.order,
-        config: record.config,
-        description: record.description,
-        created: record.created,
-        updated: record.updated,
-    }));
 
     if !existing.is_empty() {
         let ids: Vec<CustomFieldId> = existing.into_keys().collect();
 
-        tracing::debug!("deleting ids: {ids:#?}");
-
         conn.execute("delete from custom_fields where id = any($1)", &[&ids])
-            .await
-            .context("failed to delete custom fields")?;
+            .await?;
     }
 
-    Ok(UpdateResults {
-        valid: rtn,
-        not_found: Vec::new(),
-        duplicates: Vec::new(),
-    })
-}
+    if let Some(stream) = CustomFieldBuilder::build_many(conn, insert_records).await? {
+        futures::pin_mut!(stream);
 
-async fn insert_custom_fields(
-    conn: &impl db::GenericClient,
-    records: Vec<CustomField>,
-) -> Result<Vec<CustomFieldFull>, error::Error> {
-    let mut rtn = Vec::with_capacity(records.len());
-    let mut query = String::from(
-        "insert into custom_fields (uid, journals_id, name, \"order\", config, description, created) values"
-    );
-    let mut params: db::ParamsVec<'_> = Vec::new();
+        while let Some(maybe) = stream.next().await {
+            rtn.push(CustomFieldFull::from(maybe?));
+        }
+    }
 
-    for (index, field) in records.iter().enumerate() {
-        if index > 0 {
-            query.push_str(", ");
+    if !update_records.is_empty() {
+        {
+            let mut await_list = futures::stream::FuturesUnordered::new();
+
+            for existing in &update_records {
+                await_list.push(existing.update(conn));
+            }
+
+            let mut failed = false;
+
+            while let Some(result) = await_list.next().await {
+                if let Err(err) = result {
+                    error::log_prefix_error("failed to update custom_field", &err);
+
+                    failed = true;
+                }
+            }
+
+            if failed {
+                return Err(NetError::general());
+            }
         }
 
-        let s = format!(
-            "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
-            db::push_param(&mut params, &field.uid),
-            db::push_param(&mut params, &field.journals_id),
-            db::push_param(&mut params, &field.name),
-            db::push_param(&mut params, &field.order),
-            db::push_param(&mut params, &field.config),
-            db::push_param(&mut params, &field.description),
-            db::push_param(&mut params, &field.created),
-        );
-
-        query.push_str(&s);
-    }
-
-    query.push_str(" returning id");
-
-    let results = conn
-        .query_raw(&query, params)
-        .await
-        .context("failed to insert new custom fields")?;
-
-    futures::pin_mut!(results);
-
-    let mut zipped = results.zip(futures::stream::iter(records));
-
-    while let Some((try_record, field)) = zipped.next().await {
-        let record = try_record.context("failed to retrieve custom field record")?;
-        let id = record.get(0);
-
-        rtn.push(CustomFieldFull {
-            id,
-            uid: field.uid,
-            name: field.name,
-            order: field.order,
-            config: field.config,
-            description: field.description,
-            created: field.created,
-            updated: field.updated,
-        });
+        rtn.extend(update_records.into_iter().map(CustomFieldFull::from));
     }
 
     Ok(rtn)
@@ -905,33 +753,27 @@ async fn create_journal_peers(
     Ok(rtn)
 }
 
-enum UpsertJournalPeers {
-    Valid(Vec<JournalPeer>),
-    NotFound(Vec<UserPeerId>),
-}
-
 async fn upsert_journal_peers(
     conn: &impl db::GenericClient,
     users_id: &UserId,
     journals_id: &JournalId,
     list: Vec<UserPeerId>,
-) -> Result<UpsertJournalPeers, error::Error> {
+) -> Result<Vec<JournalPeer>, NetError<UpdateJournalError>> {
     let mut rtn = Vec::with_capacity(list.len());
 
     if list.is_empty() {
-        return Ok(UpsertJournalPeers::Valid(rtn));
+        return Ok(rtn);
     }
 
     let peers: HashMap<UserPeerId, UserPeer> = {
-        let mut rtn = HashMap::new();
-        let stream = UserPeer::retrieve_many(conn, users_id)
-            .await
-            .context("failed to retrieve user peers")?;
+        let stream = UserPeer::retrieve_many(conn, users_id).await?;
 
         futures::pin_mut!(stream);
 
+        let mut rtn = HashMap::new();
+
         while let Some(maybe) = stream.next().await {
-            let record = maybe.context("failed to retrieve record")?;
+            let record = maybe?;
 
             rtn.insert(record.id, record);
         }
@@ -975,7 +817,9 @@ async fn upsert_journal_peers(
     }
 
     if !not_found.is_empty() {
-        return Ok(UpsertJournalPeers::NotFound(not_found));
+        return Err(NetError::Inner(UpdateJournalError::PeersNotFound {
+            ids: not_found,
+        }));
     }
 
     query.push_str(
@@ -990,13 +834,9 @@ async fn upsert_journal_peers(
               journal_peers.user_peers_id != tmp_insert.user_peers_id",
     );
 
-    tracing::debug!("upsert journal peers query: {query}");
+    conn.execute(&query, params.as_slice()).await?;
 
-    conn.execute(&query, params.as_slice())
-        .await
-        .context("failed to insert journal peers")?;
-
-    Ok(UpsertJournalPeers::Valid(rtn))
+    Ok(rtn)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1005,20 +845,28 @@ pub struct SyncOptions {}
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum SyncResult {
-    Queued { successful: u32, failed: u32 },
+    Queued { successful: Vec<String> },
     Noop,
-    JournalNotFound,
-
-    PermissionDenied,
 }
 
 impl IntoResponse for SyncResult {
     fn into_response(self) -> Response {
         match &self {
-            Self::Noop => (StatusCode::OK, body::Json(self)).into_response(),
-            Self::Queued { .. } => (StatusCode::ACCEPTED, body::Json(self)).into_response(),
-            Self::JournalNotFound => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-            Self::PermissionDenied => (StatusCode::UNAUTHORIZED, body::Json(self)).into_response(),
+            Self::Noop | Self::Queued { .. } => (StatusCode::OK, body::Json(self)).into_response(),
+        }
+    }
+}
+
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum SyncError {
+    JournalNotFound,
+}
+
+impl IntoResponse for SyncError {
+    fn into_response(self) -> Response {
+        match &self {
+            Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
         }
     }
 }
@@ -1027,74 +875,37 @@ async fn sync_with_remote(
     state: state::SharedState,
     initiator: Initiator,
     Path(JournalPath { journals_id }): Path<JournalPath>,
-    body::Json(_json): body::Json<SyncOptions>,
-) -> Result<SyncResult, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+    body::Json(_): body::Json<SyncOptions>,
+) -> Result<SyncResult, NetError<SyncError>> {
+    let conn = state.db_conn().await?;
 
-    let perm_check = authz::has_permission(
-        &transaction,
-        initiator.user.id,
-        Scope::Journals,
-        Ability::Update,
-    )
-    .await
-    .context("failed to retrieve permission for user")?;
+    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Update).await?;
 
-    if !perm_check {
-        return Ok(SyncResult::PermissionDenied);
-    }
+    let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
+        .await?
+        .ok_or(NetError::Inner(SyncError::JournalNotFound))?;
 
-    let journal = {
-        let result = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
-            .await
-            .context("failed to retrieve journal")?;
-
-        let Some(journal) = result else {
-            return Ok(SyncResult::JournalNotFound);
-        };
-
-        journal
-    };
-
-    let peers = UserPeer::retrieve_many(&transaction, &journal.id)
-        .await
-        .context("failed to retrieve journal attached peers")?;
+    let peers = UserPeer::retrieve_many(&conn, &journal.id).await?;
 
     futures::pin_mut!(peers);
 
-    let mut successful = 0;
-    let mut failed = 0;
+    let mut successful = Vec::new();
 
     while let Some(maybe) = peers.next().await {
-        let peer = match maybe.context("failed to retrieve peer record") {
-            Ok(peer) => peer,
-            Err(err) => {
-                error::log_prefix_error("failed to retrieve peer record", &err);
+        let peer = maybe?;
 
-                failed += 1;
-
-                continue;
-            }
-        };
-
-        tracing::debug!("spinning job for peer: {peer:#?}");
+        successful.push(peer.name.clone());
 
         tokio::spawn(jobs::sync::kickoff_send_journal(
             state.clone(),
             peer,
             journal.clone(),
         ));
-
-        successful += 1;
     }
 
-    if successful == 0 && failed == 0 {
+    if successful.is_empty() {
         Ok(SyncResult::Noop)
     } else {
-        Ok(SyncResult::Queued { successful, failed })
+        Ok(SyncResult::Queued { successful })
     }
 }
