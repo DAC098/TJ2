@@ -358,17 +358,6 @@ impl<'a> ErrorKind<'a> {
 /// manually handle the errors
 pub struct Conn(pub Object);
 
-impl Conn {
-    /// attempts to retrieve a database transaction from the current
-    /// connection
-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
-        self.0
-            .transaction()
-            .await
-            .context("failed to create transaction")
-    }
-}
-
 #[async_trait]
 impl FromRequestParts<state::SharedState> for Conn {
     type Rejection = Error;

@@ -14,7 +14,7 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         .route("/", get(send_html))
         .route(
             "/users",
-            get(users::retrieve_users).post(users::create_user),
+            get(users::search_users).post(users::create_user),
         )
         .route("/users/new", get(send_html))
         .route(

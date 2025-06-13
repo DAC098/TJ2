@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::{GroupId, PermissionId, RoleId, RoleUid, UserId};
-use crate::error::{self, BoxDynError, Context};
+use crate::error::BoxDynError;
 use crate::user::group::Group;
 use crate::user::User;
 
@@ -621,38 +621,43 @@ impl AttachedRole {
     pub async fn retrieve<'a, I>(
         conn: &impl db::GenericClient,
         id: I,
-    ) -> Result<Vec<Self>, error::Error>
+    ) -> Result<Vec<Self>, db::PgError>
     where
         I: Into<RefId<'a>>,
     {
-        let stream = Self::retrieve_stream(conn, id)
-            .await
-            .context("failed to retrieve attached roles")?;
+        let stream = Self::retrieve_stream(conn, id).await?;
 
         futures::pin_mut!(stream);
 
         let mut rtn = Vec::new();
 
         while let Some(result) = stream.next().await {
-            let record = result.context("failed to retrieve attached role record")?;
-
-            rtn.push(record);
+            rtn.push(result?);
         }
 
         Ok(rtn)
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AttachedRoleError {
+    #[error("the following role ids where not found")]
+    NotFound(Vec<RoleId>),
+
+    #[error(transparent)]
+    Db(#[from] db::PgError),
+}
+
 pub async fn create_attached_roles<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
     roles: Vec<RoleId>,
-) -> Result<(Vec<AttachedRole>, Vec<RoleId>), error::Error>
+) -> Result<Vec<AttachedRole>, AttachedRoleError>
 where
     I: Into<RefId<'a>>,
 {
     if roles.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
 
     let added = Utc::now();
@@ -681,8 +686,7 @@ where
                         tmp_insert.role_id = authz_roles.id",
                 params,
             )
-            .await
-            .context("failed to add roles to user")?
+            .await?
         }
         RefId::Group(groups_id) => {
             let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
@@ -706,8 +710,7 @@ where
                         tmp_insert.role_id = authz_roles.id",
                 params,
             )
-            .await
-            .context("failed to add roles to group")?
+            .await?
         }
     };
 
@@ -716,7 +719,7 @@ where
     let mut rtn = Vec::new();
 
     while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve added role")?;
+        let record = result?;
         let role_id = record.get(0);
 
         if !requested.remove(&role_id) {
@@ -730,33 +733,37 @@ where
         });
     }
 
-    Ok((rtn, Vec::new()))
+    let not_found = Vec::from_iter(requested);
+
+    if !not_found.is_empty() {
+        Err(AttachedRoleError::NotFound(not_found))
+    } else {
+        Ok(rtn)
+    }
 }
 
 pub async fn update_attached_roles<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
     roles: Option<Vec<RoleId>>,
-) -> Result<(Vec<AttachedRole>, Vec<RoleId>), error::Error>
+) -> Result<Vec<AttachedRole>, AttachedRoleError>
 where
     I: Into<RefId<'a>>,
 {
     let id = id.into();
 
     let Some(roles) = roles else {
-        return Ok((AttachedRole::retrieve(conn, id).await?, Vec::new()));
+        return Ok(AttachedRole::retrieve(conn, id).await?);
     };
 
     let added = Utc::now();
     let mut current: HashMap<RoleId, AttachedRole> = HashMap::new();
-    let stream = AttachedRole::retrieve_stream(conn, id)
-        .await
-        .context("failed to retrieve currently attached roles")?;
+    let stream = AttachedRole::retrieve_stream(conn, id).await?;
 
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve current attached group")?;
+        let record = result?;
 
         current.insert(record.role_id, record);
     }
@@ -790,8 +797,7 @@ where
                             tmp_insert.role_id = authz_roles.id",
                     params,
                 )
-                .await
-                .context("failed to add roles to user")?
+                .await?
             }
             RefId::Group(groups_id) => {
                 let params: db::ParamsArray<'_, 3> = [groups_id, &added, &roles];
@@ -816,15 +822,14 @@ where
                             tmp_insert.role_id = authz_roles.id",
                     params,
                 )
-                .await
-                .context("failed to add roles to group")?
+                .await?
             }
         };
 
         futures::pin_mut!(stream);
 
         while let Some(result) = stream.next().await {
-            let record = result.context("failed to retrieve added role")?;
+            let record = result?;
             let role_id = record.get(0);
 
             if !requested.remove(&role_id) {
@@ -848,19 +853,23 @@ where
                     "delete from user_roles where users_id = $1 and role_id = any($2)",
                     &[users_id, &to_delete],
                 )
-                .await
-                .context("failed to delete from user roles")?;
+                .await?;
             }
             RefId::Group(groups_id) => {
                 conn.execute(
                     "delete from group_roles where groups_id = $1 and role_id = any($2)",
                     &[groups_id, &to_delete],
                 )
-                .await
-                .context("failed to delete from user roles")?;
+                .await?;
             }
         }
     }
 
-    Ok((rtn, Vec::from_iter(requested)))
+    let not_found = Vec::from_iter(requested);
+
+    if !not_found.is_empty() {
+        Err(AttachedRoleError::NotFound(not_found))
+    } else {
+        Ok(rtn)
+    }
 }

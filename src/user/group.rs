@@ -6,7 +6,6 @@ use serde::Serialize;
 
 use crate::db;
 use crate::db::ids::{GroupId, GroupUid, RoleId, UserId};
-use crate::error::{self, Context};
 use crate::sec::authz::Role;
 
 use super::User;
@@ -194,38 +193,43 @@ impl AttachedGroup {
     pub async fn retrieve<'a, I>(
         conn: &impl db::GenericClient,
         id: I,
-    ) -> Result<Vec<Self>, error::Error>
+    ) -> Result<Vec<Self>, db::PgError>
     where
         I: Into<GroupRefId<'a>>,
     {
-        let stream = Self::retrieve_stream(conn, id)
-            .await
-            .context("failed to retrieve attached groups")?;
+        let stream = Self::retrieve_stream(conn, id).await?;
 
         futures::pin_mut!(stream);
 
         let mut rtn = Vec::new();
 
         while let Some(result) = stream.next().await {
-            let record = result.context("failed to retrieve attached group record")?;
-
-            rtn.push(record);
+            rtn.push(result?);
         }
 
         Ok(rtn)
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AttachedGroupError {
+    #[error("the following group ids where not found")]
+    NotFound(Vec<GroupId>),
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
+}
+
 pub async fn create_attached_groups<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
     groups: Vec<GroupId>,
-) -> Result<(Vec<AttachedGroup>, Vec<GroupId>), error::Error>
+) -> Result<Vec<AttachedGroup>, AttachedGroupError>
 where
     I: Into<GroupRefId<'a>>,
 {
     if groups.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
 
     let added = Utc::now();
@@ -254,8 +258,7 @@ where
                         tmp_insert.groups_id = groups.id",
                 params,
             )
-            .await
-            .context("failed to add groups to user")?
+            .await?
         }
         GroupRefId::Role(role_id) => {
             let params: db::ParamsArray<'_, 3> = [role_id, &added, &groups];
@@ -279,8 +282,7 @@ where
                         tmp_insert.groups_id = groups.id",
                 params,
             )
-            .await
-            .context("failed to add groups to role")?
+            .await?
         }
     };
 
@@ -289,7 +291,7 @@ where
     let mut rtn = Vec::new();
 
     while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve added group")?;
+        let record = result?;
         let groups_id = record.get(0);
 
         if !requested.remove(&groups_id) {
@@ -303,33 +305,37 @@ where
         });
     }
 
-    Ok((rtn, Vec::from_iter(requested)))
+    let not_found = Vec::from_iter(requested);
+
+    if !not_found.is_empty() {
+        Err(AttachedGroupError::NotFound(not_found))
+    } else {
+        Ok(rtn)
+    }
 }
 
 pub async fn update_attached_groups<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
     groups: Option<Vec<GroupId>>,
-) -> Result<(Vec<AttachedGroup>, Vec<GroupId>), error::Error>
+) -> Result<Vec<AttachedGroup>, AttachedGroupError>
 where
     I: Into<GroupRefId<'a>>,
 {
     let id = id.into();
 
     let Some(groups) = groups else {
-        return Ok((AttachedGroup::retrieve(conn, id).await?, Vec::new()));
+        return Ok(AttachedGroup::retrieve(conn, id).await?);
     };
 
     let added = Utc::now();
     let mut current: HashMap<GroupId, AttachedGroup> = HashMap::new();
-    let stream = AttachedGroup::retrieve_stream(conn, id)
-        .await
-        .context("failed to retrieve currently attached groups")?;
+    let stream = AttachedGroup::retrieve_stream(conn, id).await?;
 
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve current attached group")?;
+        let record = result?;
 
         current.insert(record.groups_id, record);
     }
@@ -363,8 +369,7 @@ where
                             tmp_insert.groups_id = groups.id",
                     params,
                 )
-                .await
-                .context("failed to add groups to user")?
+                .await?
             }
             GroupRefId::Role(role_id) => {
                 let params: db::ParamsArray<'_, 3> = [role_id, &added, &groups];
@@ -389,15 +394,14 @@ where
                             tmp_insert.groups_id = groups.id",
                     params,
                 )
-                .await
-                .context("failed to add groups to role")?
+                .await?
             }
         };
 
         futures::pin_mut!(stream);
 
         while let Some(result) = stream.next().await {
-            let record = result.context("failed to retrieve added group")?;
+            let record = result?;
             let groups_id = record.get(0);
 
             if !requested.remove(&groups_id) {
@@ -421,21 +425,25 @@ where
                     "delete from group_users where users_id = $1 and groups_id = any($2)",
                     &[users_id, &to_delete],
                 )
-                .await
-                .context("failed to delete from groups users")?;
+                .await?;
             }
             GroupRefId::Role(role_id) => {
                 conn.execute(
                     "delete from group_roles where role_id = $1 and groups_id = any($2)",
                     &[role_id, &to_delete],
                 )
-                .await
-                .context("failed to delete from group roles")?;
+                .await?;
             }
         }
     }
 
-    Ok((rtn, Vec::from_iter(requested)))
+    let not_found = Vec::from_iter(requested);
+
+    if !not_found.is_empty() {
+        Err(AttachedGroupError::NotFound(not_found))
+    } else {
+        Ok(rtn)
+    }
 }
 
 pub async fn assign_user_group(

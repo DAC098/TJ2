@@ -37,6 +37,17 @@ impl<T> Error<T> {
         }
     }
 
+    pub fn message<M>(msg: M) -> Self
+    where
+        M: Into<String>
+    {
+        Self::Defined {
+            response: json_server_error(),
+            msg: Some(msg.into()),
+            src: None
+        }
+    }
+
     pub fn with_source<E>(self, src: E) -> Self
     where
         E: Into<BoxDynError>,
@@ -127,6 +138,7 @@ simple_from!(crate::sec::password::HashError);
 simple_from!(axum::Error);
 simple_from!(axum::http::Error);
 simple_from!(std::io::Error);
+simple_from!(tj2_lib::sec::pki::PrivateKeyError);
 
 impl<T> From<axum::http::header::ToStrError> for Error<T> {
     fn from(err: axum::http::header::ToStrError) -> Self {

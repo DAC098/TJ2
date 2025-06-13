@@ -4,14 +4,11 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use serde::Serialize;
-use tj2_lib::sec::pki::{PrivateKey, PrivateKeyError};
 
 use crate::db;
 use crate::db::ids::{GroupId, RoleId, UserId, UserUid};
-use crate::error::{self, Context};
 use crate::sec;
 use crate::sec::authz::Role;
-use crate::state::Storage;
 
 pub mod client;
 pub mod group;
@@ -32,10 +29,16 @@ pub struct User {
 }
 
 #[derive(Debug, Clone)]
+pub enum PasswordKind {
+    Hashed(String, i64),
+    Unhashed(String),
+}
+
+#[derive(Debug, Clone)]
 pub struct UserBuilder {
     username: String,
-    password: String,
-    version: i64,
+    password: PasswordKind,
+    uid: Option<UserUid>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -228,27 +231,27 @@ impl UserBuilder {
     pub fn new_hash(username: String, hash: String, version: i64) -> Self {
         Self {
             username,
-            password: hash,
-            version,
+            password: PasswordKind::Hashed(hash, version),
+            uid: None,
         }
     }
 
     /// user builder that will generate a argon hash from the given password
-    pub fn new_password(username: String, password: String) -> Result<Self, UserBuilderError> {
-        let hash = sec::password::create(&password)?;
-
-        Ok(Self {
+    pub fn new_password(username: String, password: String) -> Self {
+        Self {
             username,
-            password: hash,
-            version: 0,
-        })
+            password: PasswordKind::Unhashed(password),
+            uid: None,
+        }
     }
 
     pub async fn build(self, conn: &impl db::GenericClient) -> Result<User, UserBuilderError> {
         let username = self.username;
-        let password = self.password;
-        let version = self.version;
-        let uid = UserUid::gen();
+        let (password, version) = match self.password {
+            PasswordKind::Hashed(p, v) => (p, v),
+            PasswordKind::Unhashed(p) => (sec::password::create(p)?, 0),
+        };
+        let uid = self.uid.unwrap_or(UserUid::gen());
         let created = Utc::now();
 
         let result = conn
@@ -287,39 +290,6 @@ impl UserBuilder {
             }
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum UserGenerateError {
-    #[error(transparent)]
-    Builder(#[from] UserBuilderError),
-
-    #[error(transparent)]
-    Pki(#[from] PrivateKeyError),
-
-    #[error(transparent)]
-    Dir(std::io::Error),
-}
-
-pub async fn generate_user(
-    conn: &impl db::GenericClient,
-    storage: &Storage,
-    builder: UserBuilder,
-) -> Result<(User, PrivateKey), UserGenerateError> {
-    let user = builder.build(conn).await?;
-    let user_dir = storage.user_dir(user.id);
-
-    user_dir
-        .create()
-        .await
-        .map_err(|err| UserGenerateError::Dir(err))?;
-
-    let private_key_path = user_dir.private_key();
-    let private_key = PrivateKey::generate()?;
-
-    private_key.save(private_key_path, true).await?;
-
-    Ok((user, private_key))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -402,38 +372,43 @@ impl AttachedUser {
     pub async fn retrieve<'a, I>(
         conn: &impl db::GenericClient,
         id: I,
-    ) -> Result<Vec<Self>, error::Error>
+    ) -> Result<Vec<Self>, db::PgError>
     where
         I: Into<UserRefId<'a>>,
     {
-        let stream = Self::retrieve_stream(conn, id)
-            .await
-            .context("failed to retrieve attached users")?;
+        let stream = Self::retrieve_stream(conn, id).await?;
 
         futures::pin_mut!(stream);
 
         let mut rtn = Vec::new();
 
         while let Some(result) = stream.next().await {
-            let record = result.context("failed to retrieve attached user record")?;
-
-            rtn.push(record);
+            rtn.push(result?);
         }
 
         Ok(rtn)
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AttachedUserError {
+    #[error("the following user ids where not found")]
+    NotFound(Vec<UserId>),
+
+    #[error(transparent)]
+    Db(#[from] db::PgError)
+}
+
 pub async fn create_attached_users<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
     users: Vec<UserId>,
-) -> Result<(Vec<AttachedUser>, Vec<UserId>), error::Error>
+) -> Result<Vec<AttachedUser>, AttachedUserError>
 where
     I: Into<UserRefId<'a>>,
 {
     if users.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
 
     let added = Utc::now();
@@ -462,8 +437,7 @@ where
                         tmp_insert.users_id = users.id",
                 params,
             )
-            .await
-            .context("failed to add users to group")?
+            .await?
         }
         UserRefId::Role(role_id) => {
             let params: db::ParamsArray<'_, 3> = [role_id, &added, &users];
@@ -487,8 +461,7 @@ where
                         tmp_insert.users_id = users.id",
                 params,
             )
-            .await
-            .context("failed to add users to role")?
+            .await?
         }
     };
 
@@ -497,7 +470,7 @@ where
     let mut rtn = Vec::new();
 
     while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve added user")?;
+        let record = result?;
         let users_id = record.get(0);
 
         if !requested.remove(&users_id) {
@@ -511,33 +484,37 @@ where
         });
     }
 
-    Ok((rtn, Vec::from_iter(requested)))
+    let not_found = Vec::from_iter(requested);
+
+    if !not_found.is_empty() {
+        Err(AttachedUserError::NotFound(not_found))
+    } else {
+        Ok(rtn)
+    }
 }
 
 pub async fn update_attached_users<'a, I>(
     conn: &impl db::GenericClient,
     id: I,
     users: Option<Vec<UserId>>,
-) -> Result<(Vec<AttachedUser>, Vec<UserId>), error::Error>
+) -> Result<Vec<AttachedUser>, AttachedUserError>
 where
     I: Into<UserRefId<'a>>,
 {
     let id = id.into();
 
     let Some(users) = users else {
-        return Ok((AttachedUser::retrieve(conn, id).await?, Vec::new()));
+        return Ok(AttachedUser::retrieve(conn, id).await?);
     };
 
     let added = Utc::now();
     let mut current: HashMap<UserId, AttachedUser> = HashMap::new();
-    let stream = AttachedUser::retrieve_stream(conn, id)
-        .await
-        .context("failed to retrieve currently attached users")?;
+    let stream = AttachedUser::retrieve_stream(conn, id).await?;
 
     futures::pin_mut!(stream);
 
     while let Some(result) = stream.next().await {
-        let record = result.context("failed to retrieve current attached user")?;
+        let record = result?;
 
         current.insert(record.users_id, record);
     }
@@ -575,8 +552,7 @@ where
                             tmp_insert.users_id = users.id",
                     params,
                 )
-                .await
-                .context("failed to add users to group")?
+                .await?
             }
             UserRefId::Role(role_id) => {
                 let params: db::ParamsArray<'_, 3> = [role_id, &added, &users];
@@ -601,18 +577,15 @@ where
                             tmp_insert.users_id = users.id",
                     params,
                 )
-                .await
-                .context("failed to add users to role")?
+                .await?
             }
         };
 
         futures::pin_mut!(stream);
 
         while let Some(result) = stream.next().await {
-            let record = result.context("failed to retrieve added user")?;
+            let record = result?;
             let users_id = record.get(0);
-
-            tracing::debug!("result users_id: {users_id}");
 
             if !requested.remove(&users_id) {
                 tracing::warn!("a user was added that was not requested");
@@ -635,21 +608,25 @@ where
                     "delete from group_users where groups_id = $1 and users_id = any($2)",
                     &[groups_id, &to_delete],
                 )
-                .await
-                .context("failed to delete from group users")?;
+                .await?;
             }
             UserRefId::Role(role_id) => {
                 conn.execute(
                     "delete from user_roles where role_id = $1 and users_id = any($2)",
                     &[role_id, &to_delete],
                 )
-                .await
-                .context("failed to delete from user roles")?;
+                .await?;
             }
         }
     }
 
-    Ok((rtn, Vec::from_iter(requested)))
+    let not_found = Vec::from_iter(requested);
+
+    if !not_found.is_empty() {
+        Err(AttachedUserError::NotFound(not_found))
+    } else {
+        Ok(rtn)
+    }
 }
 
 #[derive(Debug)]

@@ -145,13 +145,7 @@ async fn register_user(
         return Err(RegisterError::InvalidConfirm);
     }
 
-    let builder = match UserBuilder::new_password(username, password) {
-        Ok(b) => b,
-        Err(err) => match err {
-            UserBuilderError::Argon(argon_err) => return Err(argon_err.into()),
-            _ => unreachable!(),
-        },
-    };
+    let builder = UserBuilder::new_password(username, password);
     let user = match builder.build(conn).await {
         Ok(u) => u,
         Err(err) => match err {
@@ -160,7 +154,7 @@ async fn register_user(
                 return Err(error::Error::context("user uid collision").into())
             }
             UserBuilderError::Db(db_err) => return Err(db_err.into()),
-            _ => unreachable!(),
+            UserBuilderError::Argon(argon_err) => return Err(argon_err.into()),
         },
     };
 
