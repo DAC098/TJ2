@@ -72,16 +72,6 @@ pub struct InvitePath {
     token: InviteToken,
 }
 
-pub async fn new_invite(
-    state: state::SharedState,
-    _initiator: Initiator,
-    headers: HeaderMap,
-) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), &headers);
-
-    Ok(body::Json("Ok").into_response())
-}
-
 #[derive(Debug, Serialize)]
 pub struct InviteForm {
     token: InviteToken,
