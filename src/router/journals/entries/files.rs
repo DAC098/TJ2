@@ -25,7 +25,7 @@ use crate::sec::hash::HashCheck;
 use crate::sec::Hash;
 use crate::state::{self, Storage};
 
-use super::EntryFileForm;
+use crate::router::journals::entries::form::EntryFileForm;
 
 #[derive(Debug, Deserialize)]
 pub struct FileEntryPath {

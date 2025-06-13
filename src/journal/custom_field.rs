@@ -43,16 +43,12 @@ pub struct IntegerType {
 pub type IntegerValue = SimpleValue<i32>;
 
 impl IntegerType {
-    pub fn validate(
-        &self,
-        IntegerValue { value }: IntegerValue,
-    ) -> Result<IntegerValue, IntegerValue> {
+    pub fn validate(&self, IntegerValue { value }: &IntegerValue) -> bool {
         match (&self.minimum, &self.maximum) {
-            (Some(min), Some(max)) if value >= *min && value <= *max => Ok(IntegerValue { value }),
-            (Some(min), None) if value >= *min => Ok(IntegerValue { value }),
-            (None, Some(max)) if value <= *max => Ok(IntegerValue { value }),
-            (None, None) => Ok(IntegerValue { value }),
-            _ => Err(IntegerValue { value }),
+            (Some(min), Some(max)) => *value >= *min && *value <= *max,
+            (Some(min), None) => *value >= *min,
+            (None, Some(max)) => *value <= *max,
+            (None, None) => true,
         }
     }
 
@@ -72,18 +68,12 @@ pub struct IntegerRangeType {
 pub type IntegerRangeValue = RangeValue<i32>;
 
 impl IntegerRangeType {
-    pub fn validate(
-        &self,
-        IntegerRangeValue { low, high }: IntegerRangeValue,
-    ) -> Result<IntegerRangeValue, IntegerRangeValue> {
+    pub fn validate(&self, IntegerRangeValue { low, high }: &IntegerRangeValue) -> bool {
         match (&self.minimum, &self.maximum) {
-            (Some(min), Some(max)) if low >= *min && low < high && high <= *max => {
-                Ok(IntegerRangeValue { low, high })
-            }
-            (Some(min), None) if low >= *min && low < high => Ok(IntegerRangeValue { low, high }),
-            (None, Some(max)) if low < high && high <= *max => Ok(IntegerRangeValue { low, high }),
-            (None, None) if low < high => Ok(IntegerRangeValue { low, high }),
-            _ => Err(IntegerRangeValue { low, high }),
+            (Some(min), Some(max)) => *low >= *min && *low < *high && *high <= *max,
+            (Some(min), None) => *low >= *min && *low < *high,
+            (None, Some(max)) => *low < *high && *high <= *max,
+            (None, None) => *low < *high,
         }
     }
 
@@ -121,13 +111,12 @@ pub struct FloatType {
 pub type FloatValue = SimpleValue<f32>;
 
 impl FloatType {
-    pub fn validate(&self, FloatValue { value }: FloatValue) -> Result<FloatValue, FloatValue> {
+    pub fn validate(&self, FloatValue { value }: &FloatValue) -> bool {
         match (&self.minimum, &self.maximum) {
-            (Some(min), Some(max)) if value >= *min && value <= *max => Ok(FloatValue { value }),
-            (Some(min), None) if value >= *min => Ok(FloatValue { value }),
-            (None, Some(max)) if value <= *max => Ok(FloatValue { value }),
-            (None, None) => Ok(FloatValue { value }),
-            _ => Err(FloatValue { value }),
+            (Some(min), Some(max)) => *value >= *min && *value <= *max,
+            (Some(min), None) => *value >= *min,
+            (None, Some(max)) => *value <= *max,
+            (None, None) => true,
         }
     }
 
@@ -153,18 +142,12 @@ pub struct FloatRangeType {
 pub type FloatRangeValue = RangeValue<f32>;
 
 impl FloatRangeType {
-    pub fn validate(
-        &self,
-        FloatRangeValue { low, high }: FloatRangeValue,
-    ) -> Result<FloatRangeValue, FloatRangeValue> {
+    pub fn validate(&self, FloatRangeValue { low, high }: &FloatRangeValue) -> bool {
         match (&self.minimum, &self.maximum) {
-            (Some(min), Some(max)) if low >= *min && low < high && high <= *max => {
-                Ok(FloatRangeValue { low, high })
-            }
-            (Some(min), None) if low >= *min && low < high => Ok(FloatRangeValue { low, high }),
-            (None, Some(max)) if low < high && high <= *max => Ok(FloatRangeValue { low, high }),
-            (None, None) if low < high => Ok(FloatRangeValue { low, high }),
-            _ => Err(FloatRangeValue { low, high }),
+            (Some(min), Some(max)) => *low >= *min && *low < *high && *high <= *max,
+            (Some(min), None) => *low >= *min && *low < *high,
+            (None, Some(max)) => *low < *high && *high <= *max,
+            (None, None) => *low < *high,
         }
     }
 
@@ -196,8 +179,8 @@ pub struct TimeType {}
 pub type TimeValue = SimpleValue<DateTime<Utc>>;
 
 impl TimeType {
-    pub fn validate(&self, TimeValue { value }: TimeValue) -> Result<TimeValue, TimeValue> {
-        Ok(TimeValue { value })
+    pub fn validate(&self, TimeValue { .. }: &TimeValue) -> bool {
+        true
     }
 
     pub fn make_value(&self) -> TimeValue {
@@ -214,15 +197,8 @@ pub struct TimeRangeType {
 pub type TimeRangeValue = RangeValue<DateTime<Utc>>;
 
 impl TimeRangeType {
-    pub fn validate(
-        &self,
-        TimeRangeValue { low, high }: TimeRangeValue,
-    ) -> Result<TimeRangeValue, TimeRangeValue> {
-        if low > high {
-            Err(TimeRangeValue { low, high })
-        } else {
-            Ok(TimeRangeValue { low, high })
-        }
+    pub fn validate(&self, TimeRangeValue { low, high }: &TimeRangeValue) -> bool {
+        *low < *high
     }
 
     pub fn make_value(&self) -> TimeRangeValue {
@@ -247,6 +223,78 @@ pub enum Type {
 
     Time(TimeType),
     TimeRange(TimeRangeType),
+}
+
+pub enum ValidationError {
+    Mismatched,
+    Invalid,
+}
+
+impl Type {
+    pub fn validate(&self, value: &Value) -> Result<(), ValidationError> {
+        match self {
+            Self::Integer(ty) => match value {
+                Value::Integer(check) => {
+                    if !ty.validate(check) {
+                        Err(ValidationError::Invalid)
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err(ValidationError::Mismatched),
+            },
+            Self::IntegerRange(ty) => match value {
+                Value::IntegerRange(check) => {
+                    if !ty.validate(check) {
+                        Err(ValidationError::Invalid)
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err(ValidationError::Mismatched),
+            },
+            Self::Float(ty) => match value {
+                Value::Float(check) => {
+                    if !ty.validate(check) {
+                        Err(ValidationError::Invalid)
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err(ValidationError::Mismatched),
+            },
+            Self::FloatRange(ty) => match value {
+                Value::FloatRange(check) => {
+                    if !ty.validate(check) {
+                        Err(ValidationError::Invalid)
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err(ValidationError::Mismatched),
+            },
+            Self::Time(ty) => match value {
+                Value::Time(check) => {
+                    if !ty.validate(check) {
+                        Err(ValidationError::Invalid)
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err(ValidationError::Mismatched),
+            },
+            Self::TimeRange(ty) => match value {
+                Value::TimeRange(check) => {
+                    if !ty.validate(check) {
+                        Err(ValidationError::Invalid)
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err(ValidationError::Mismatched),
+            },
+        }
+    }
 }
 
 impl From<IntegerType> for Type {

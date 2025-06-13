@@ -90,7 +90,7 @@ impl IntoResponse for SearchEntriesError {
 }
 
 #[axum::debug_handler]
-pub async fn retrieve_entries(
+pub async fn search_entries(
     state: state::SharedState,
     initiator: Initiator,
     headers: HeaderMap,

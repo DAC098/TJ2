@@ -34,9 +34,9 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         .route("/:journals_id", get(retrieve_journal).patch(update_journal))
         .route(
             "/:journals_id/entries",
-            get(entries::retrieve_entries).post(entries::create_entry),
+            get(entries::search_entries).post(entries::create_entry),
         )
-        .route("/:journals_id/entries/new", get(entries::retrieve_entry))
+        .route("/:journals_id/entries/new", get(entries::retrieve_blank))
         .route(
             "/:journals_id/entries/:entries_id",
             get(entries::retrieve_entry)

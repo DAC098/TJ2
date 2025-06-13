@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -644,6 +645,14 @@ pub struct RequestedFile {
     pub updated: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug)]
+pub struct RequestedFileBuilder {
+    entries_id: EntryId,
+    name: Option<String>,
+    uid: Option<FileEntryUid>,
+    created: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ReceivedFile {
     pub id: FileEntryId,
@@ -804,25 +813,6 @@ impl FileEntry {
         Self::retrieve(conn, (entries_id, file_entry_id)).await
     }
 
-    pub async fn retrieve_file_entries(
-        conn: &impl GenericClient,
-        entries_id: &EntryId,
-    ) -> Result<Vec<Self>, PgError> {
-        let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
-
-        futures::pin_mut!(stream);
-
-        let mut rtn = Vec::new();
-
-        while let Some(try_record) = stream.next().await {
-            let record = try_record?;
-
-            rtn.push(record);
-        }
-
-        Ok(rtn)
-    }
-
     pub async fn retrieve_uid_map(
         conn: &impl GenericClient,
         entries_id: &EntryId,
@@ -885,7 +875,111 @@ pub struct PromoteOptions {
     pub created: DateTime<Utc>,
 }
 
+impl RequestedFileBuilder {
+    pub fn with_name<T>(&mut self, name: T)
+    where
+        T: Into<String>,
+    {
+        self.name = Some(name.into());
+    }
+
+    pub fn with_uid(&mut self, uid: FileEntryUid) {
+        self.uid = Some(uid);
+    }
+
+    pub fn with_created(&mut self, created: DateTime<Utc>) {
+        self.created = Some(created);
+    }
+
+    pub async fn build_many(
+        conn: &impl db::GenericClient,
+        mut files: Vec<Self>,
+    ) -> Result<Option<impl Stream<Item = Result<RequestedFile, PgError>>>, PgError> {
+        if files.is_empty() {
+            return Ok(None);
+        }
+
+        let status = FileStatus::Requested;
+        let created = Utc::now();
+        let mut params: db::ParamsVec<'_> = vec![&status];
+        let mut query = String::from(
+            "\
+            insert into file_entries ( \
+                uid, \
+                entries_id, \
+                status, \
+                name, \
+                created, \
+                mime_type, \
+                mime_subtype, \
+                hash \
+            ) values ",
+        );
+
+        for (index, file) in files.iter_mut().enumerate() {
+            if file.uid.is_none() {
+                file.uid = Some(FileEntryUid::gen());
+            }
+
+            if file.created.is_none() {
+                file.created = Some(created);
+            }
+
+            if index != 0 {
+                query.push_str(", ");
+            }
+
+            write!(
+                &mut query,
+                "(${}, ${}, $1, ${}, ${}, '', '', '')",
+                db::push_param(&mut params, &file.uid),
+                db::push_param(&mut params, &file.entries_id),
+                db::push_param(&mut params, &file.name),
+                db::push_param(&mut params, &file.created),
+            )
+            .unwrap();
+        }
+
+        query.push_str(" returning id");
+
+        Ok(Some(
+            conn.query_raw(&query, params)
+                .await?
+                .zip(futures::stream::iter(files))
+                .map(
+                    |(
+                        result_row,
+                        Self {
+                            uid,
+                            entries_id,
+                            name,
+                            created,
+                        },
+                    )| {
+                        result_row.map(|row| RequestedFile {
+                            id: row.get(0),
+                            uid: uid.unwrap(),
+                            entries_id,
+                            name,
+                            created: created.unwrap(),
+                            updated: None,
+                        })
+                    },
+                ),
+        ))
+    }
+}
+
 impl RequestedFile {
+    pub fn builder(entries_id: EntryId) -> RequestedFileBuilder {
+        RequestedFileBuilder {
+            entries_id,
+            name: None,
+            uid: None,
+            created: None,
+        }
+    }
+
     pub async fn promote(
         self,
         conn: &impl GenericClient,
