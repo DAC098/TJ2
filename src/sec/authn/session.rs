@@ -7,7 +7,6 @@ use crate::db::ids::{UserClientId, UserId};
 use crate::net::cookie;
 use crate::sec::authn::token::{InvalidBase64, Token};
 
-pub const API_SESSION_ID_KEY: &str = "api_session_id";
 pub const API_SESSION_TOKEN_LEN: usize = 48;
 pub const SESSION_ID_KEY: &str = "session_id";
 pub const SESSION_TOKEN_LEN: usize = 48;

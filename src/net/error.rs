@@ -155,10 +155,12 @@ impl<T> From<axum::http::header::ToStrError> for Error<T> {
     }
 }
 
-impl<T> From<crate::sec::authz::PermissionError> for Error<T> {
-    fn from(err: crate::sec::authz::PermissionError) -> Self {
+use crate::sec::authz::PermissionError;
+
+impl<T> From<PermissionError> for Error<T> {
+    fn from(err: PermissionError) -> Self {
         match err {
-            crate::sec::authz::PermissionError::Denied => Self::Defined {
+            PermissionError::Denied => Self::Defined {
                 response: json_error_response(
                     StatusCode::FORBIDDEN,
                     "PermissionDenied",
@@ -167,7 +169,25 @@ impl<T> From<crate::sec::authz::PermissionError> for Error<T> {
                 msg: None,
                 src: None,
             },
-            crate::sec::authz::PermissionError::Db(err) => err.into(),
+            PermissionError::Db(err) => err.into(),
+        }
+    }
+}
+
+use crate::sec::authn::session::SessionError;
+
+impl<T> From<SessionError> for Error<T> {
+    fn from(err: SessionError) -> Self {
+        match err {
+            SessionError::TokenExists
+            | SessionError::UserNotFound
+            | SessionError::ExpiresOnOverflow => Self::Defined {
+                response: json_server_error(),
+                msg: None,
+                src: Some(err.into()),
+            },
+            SessionError::Db(err) => err.into(),
+            SessionError::Rand(err) => err.into(),
         }
     }
 }

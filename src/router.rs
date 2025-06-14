@@ -81,7 +81,7 @@ pub fn build(state: &state::SharedState) -> Router {
         .route("/login", get(login::get).post(login::post))
         .route("/verify", get(verify::get).post(verify::post))
         .route("/logout", post(logout::post))
-        .route("/register", get(register::get).post(register::post))
+        .route("/register", get(handles::send_html).post(register::post))
         .route("/peers", get(peers::get))
         .nest("/journals", journals::build(state))
         .nest("/settings", settings::build(state))

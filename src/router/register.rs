@@ -1,23 +1,15 @@
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::InviteToken;
-use crate::error::{self, Context};
-use crate::router::{body, macros};
-use crate::sec;
+use crate::net::{Error, body};
 use crate::sec::authn::session::SessionOptions;
 use crate::sec::authn::Session;
 use crate::state;
 use crate::user::invite::{Invite, InviteError};
 use crate::user::{User, UserBuilder, UserBuilderError};
-
-pub async fn get(state: state::SharedState, headers: HeaderMap) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), &headers);
-
-    Ok(body::Json("okay").into_response())
-}
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterBody {
@@ -28,56 +20,24 @@ pub struct RegisterBody {
 }
 
 // going to try something
-#[derive(Debug, thiserror::Error, Serialize)]
-#[serde(tag = "type")]
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
 pub enum RegisterError {
-    #[error("the requested invite was not found")]
     InviteNotFound,
-
-    #[error("the requested invite has already been used")]
     InviteUsed,
-
-    #[error("the requested invite has expired")]
     InviteExpired,
-
-    #[error("the confirm does not equal password")]
     InvalidConfirm,
-
-    #[error("the specified username already exists")]
     UsernameExists,
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Db(#[from] db::PgError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    DbPool(#[from] db::PoolError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Argon(#[from] sec::password::HashError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Error(#[from] error::Error),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
 }
 
 impl IntoResponse for RegisterError {
     fn into_response(self) -> Response {
-        error::log_error(&self);
-
         let status = match &self {
             Self::InviteNotFound => StatusCode::NOT_FOUND,
             Self::UsernameExists
             | Self::InvalidConfirm
             | Self::InviteExpired
             | Self::InviteUsed => StatusCode::BAD_REQUEST,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         (status, body::Json(self)).into_response()
@@ -87,7 +47,7 @@ impl IntoResponse for RegisterError {
 pub async fn post(
     state: state::SharedState,
     body::Json(body): body::Json<RegisterBody>,
-) -> Result<Response, RegisterError> {
+) -> Result<Response, Error<RegisterError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
@@ -97,9 +57,7 @@ pub async fn post(
     options.authenticated = true;
     options.verified = true;
 
-    let session = Session::create(&transaction, options)
-        .await
-        .context("failed to create session record")?;
+    let session = Session::create(&transaction, options).await?;
     let session_cookie = session.build_cookie();
 
     let user_dir = state.storage().user_dir(user.id);
@@ -107,13 +65,9 @@ pub async fn post(
     user_dir.create().await?;
 
     // do this last since we are making changes to the file system
-    let private_key =
-        tj2_lib::sec::pki::PrivateKey::generate().context("failed to generate private key")?;
+    let private_key = tj2_lib::sec::pki::PrivateKey::generate()?;
 
-    private_key
-        .save(user_dir.private_key(), false)
-        .await
-        .context("failed to save private key")?;
+    private_key.save(user_dir.private_key(), false).await?;
 
     transaction.commit().await?;
 
@@ -128,34 +82,32 @@ async fn register_user(
         password,
         confirm,
     }: RegisterBody,
-) -> Result<User, RegisterError> {
+) -> Result<User, Error<RegisterError>> {
     let mut invite = Invite::retrieve(conn, &token)
         .await?
-        .ok_or(RegisterError::InviteNotFound)?;
+        .ok_or(Error::Inner(RegisterError::InviteNotFound))?;
 
     if !invite.status.is_pending() {
-        return Err(RegisterError::InviteUsed);
+        return Err(Error::Inner(RegisterError::InviteUsed));
     }
 
     if invite.is_expired() {
-        return Err(RegisterError::InviteExpired);
+        return Err(Error::Inner(RegisterError::InviteExpired));
     }
 
     if password != confirm {
-        return Err(RegisterError::InvalidConfirm);
+        return Err(Error::Inner(RegisterError::InvalidConfirm));
     }
 
     let builder = UserBuilder::new_password(username, password);
     let user = match builder.build(conn).await {
         Ok(u) => u,
-        Err(err) => match err {
-            UserBuilderError::UsernameExists => return Err(RegisterError::UsernameExists),
-            UserBuilderError::UidExists => {
-                return Err(error::Error::context("user uid collision").into())
-            }
-            UserBuilderError::Db(db_err) => return Err(db_err.into()),
-            UserBuilderError::Argon(argon_err) => return Err(argon_err.into()),
-        },
+        Err(err) => return Err(match err {
+            UserBuilderError::UsernameExists => Error::Inner(RegisterError::UsernameExists),
+            UserBuilderError::UidExists => Error::message("user uid collision"),
+            UserBuilderError::Db(err) => err.into(),
+            UserBuilderError::Argon(err) => err.into(),
+        }),
     };
 
     // we have pre-checked that the invite is pending and the user
@@ -163,7 +115,7 @@ async fn register_user(
     // thing will be the db
     if let Err(err) = invite.mark_accepted(conn, &user.id).await {
         match err {
-            InviteError::Db(db_err) => return Err(db_err.into()),
+            InviteError::Db(err) => return Err(err.into()),
             _ => unreachable!("invite precheck failed {err}"),
         }
     }
