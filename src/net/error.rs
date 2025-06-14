@@ -137,6 +137,7 @@ simple_from!(crate::sec::password::HashError);
 
 simple_from!(axum::Error);
 simple_from!(axum::http::Error);
+simple_from!(rand::Error);
 simple_from!(std::io::Error);
 simple_from!(tj2_lib::sec::pki::PrivateKeyError);
 

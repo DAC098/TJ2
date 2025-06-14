@@ -1,4 +1,3 @@
-use axum::extract::Query;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
@@ -8,10 +7,9 @@ use tj2_lib::sec::pki::PublicKey;
 
 use crate::db;
 use crate::db::ids::{UserClientId, UserPeerId};
-use crate::error::{self, Context};
-use crate::router::{body, macros};
+use crate::net::{Error, body};
 use crate::sec::authn::Initiator;
-use crate::state::{self, Security};
+use crate::state;
 
 #[derive(Debug, Serialize)]
 pub struct UserKeys {
@@ -46,15 +44,13 @@ pub async fn get(
     state: state::SharedState,
     initiator: Initiator,
     headers: HeaderMap,
-) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), &headers);
+) -> Result<body::Json<UserKeys>, Error> {
+    body::assert_html(state.templates(), &headers)?;
 
     let conn = state.db_conn().await?;
 
     let private_key_path = state.storage().user_dir(initiator.user.id).private_key();
-    let private_key = tj2_lib::sec::pki::PrivateKey::load(&private_key_path)
-        .await
-        .context("failed to load private key")?;
+    let private_key = tj2_lib::sec::pki::PrivateKey::load(&private_key_path).await?;
     let public_key = private_key.public_key();
 
     let (res_clients, res_peers) = tokio::join!(
@@ -66,14 +62,13 @@ pub async fn get(
         public_key: tj2_lib::string::to_base64(&public_key),
         clients: res_clients?,
         peers: res_peers?,
-    })
-    .into_response())
+    }))
 }
 
 pub async fn retrieve_user_clients(
     conn: &impl db::GenericClient,
     users_id: &db::ids::UserId,
-) -> Result<Vec<UserClient>, error::Error> {
+) -> Result<Vec<UserClient>, Error> {
     let stream = conn
         .query_raw(
             "\
@@ -87,15 +82,14 @@ pub async fn retrieve_user_clients(
         order by user_clients.name",
             &[users_id],
         )
-        .await
-        .context("failed to retrieve client keys")?;
+        .await?;
 
     futures::pin_mut!(stream);
 
     let mut rtn = Vec::new();
 
     while let Some(try_record) = stream.next().await {
-        let record = try_record.context("failed to retrieve record")?;
+        let record = try_record?;
 
         let key: PublicKey =
             db::try_from_bytea(record.get(2)).expect("invalid public key data from db");
@@ -115,7 +109,7 @@ pub async fn retrieve_user_clients(
 pub async fn retrieve_user_peers(
     conn: &impl db::GenericClient,
     users_id: &db::ids::UserId,
-) -> Result<Vec<UserPeer>, error::Error> {
+) -> Result<Vec<UserPeer>, Error> {
     let stream = conn
         .query_raw(
             "\
@@ -133,15 +127,14 @@ pub async fn retrieve_user_peers(
         order by user_peers.name",
             &[users_id],
         )
-        .await
-        .context("failed to retrieve peer keys")?;
+        .await?;
 
     futures::pin_mut!(stream);
 
     let mut rtn = Vec::new();
 
     while let Some(try_record) = stream.next().await {
-        let record = try_record.context("failed to retrieve record")?;
+        let record = try_record?;
 
         let key: PublicKey =
             db::try_from_bytea(record.get(2)).expect("invalid public key data from db");
@@ -163,36 +156,19 @@ pub async fn retrieve_user_peers(
     Ok(rtn)
 }
 
-#[derive(Debug, thiserror::Error, Serialize)]
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
 pub enum NewClientError {
-    #[error("the provided public key is invalid")]
     InvalidPublicKey,
-
-    #[error("the name already exists")]
     NameAlreadyExists,
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Db(#[from] db::PgError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    DbPool(#[from] db::PoolError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Error(#[from] error::Error),
 }
 
 impl IntoResponse for NewClientError {
     fn into_response(self) -> Response {
-        error::log_prefix_error("error response", &self);
-
         match self {
             Self::InvalidPublicKey | Self::NameAlreadyExists => {
                 (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
             }
-            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
 }
@@ -231,7 +207,7 @@ pub async fn post(
     state: state::SharedState,
     initiator: Initiator,
     body::Json(record): body::Json<NewRecord>,
-) -> Result<impl IntoResponse, NewClientError> {
+) -> Result<(StatusCode, body::Json<CreatedRecord>), Error<NewClientError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
@@ -253,17 +229,17 @@ pub async fn create_client(
     conn: &impl db::GenericClient,
     users_id: &db::ids::UserId,
     NewClient { name, public_key }: NewClient,
-) -> Result<UserClient, NewClientError> {
+) -> Result<UserClient, Error<NewClientError>> {
     let created = Utc::now();
     let updated = None;
 
     let pub_key = {
         let Some(bytes) = tj2_lib::string::from_base64(&public_key) else {
-            return Err(NewClientError::InvalidPublicKey);
+            return Err(Error::Inner(NewClientError::InvalidPublicKey));
         };
 
         let Ok(key) = tj2_lib::sec::pki::PublicKey::from_slice(&bytes) else {
-            return Err(NewClientError::InvalidPublicKey);
+            return Err(Error::Inner(NewClientError::InvalidPublicKey));
         };
 
         key
@@ -285,8 +261,8 @@ pub async fn create_client(
             if let Some(kind) = db::ErrorKind::check(&err) {
                 return match kind {
                     db::ErrorKind::Unique(constraint) => match constraint {
-                        "user_clients_public_key_key" => Err(NewClientError::InvalidPublicKey),
-                        "user_clients_users_id_name_key" => Err(NewClientError::NameAlreadyExists),
+                        "user_clients_public_key_key" => Err(Error::Inner(NewClientError::InvalidPublicKey)),
+                        "user_clients_users_id_name_key" => Err(Error::Inner(NewClientError::NameAlreadyExists)),
                         _ => unreachable!(),
                     },
                     _ => Err(err.into()),
@@ -317,17 +293,17 @@ pub async fn create_peer(
         secure,
         ssc,
     }: NewPeer,
-) -> Result<UserPeer, NewClientError> {
+) -> Result<UserPeer, Error<NewClientError>> {
     let created = Utc::now();
     let updated = None;
 
     let pub_key = {
         let Some(bytes) = tj2_lib::string::from_base64(&public_key) else {
-            return Err(NewClientError::InvalidPublicKey);
+            return Err(Error::Inner(NewClientError::InvalidPublicKey));
         };
 
         let Ok(key) = tj2_lib::sec::pki::PublicKey::from_slice(&bytes) else {
-            return Err(NewClientError::InvalidPublicKey);
+            return Err(Error::Inner(NewClientError::InvalidPublicKey));
         };
 
         key
@@ -347,8 +323,8 @@ pub async fn create_peer(
             if let Some(kind) = db::ErrorKind::check(&err) {
                 return match kind {
                     db::ErrorKind::Unique(constraint) => match constraint {
-                        "user_peers_public_key_key" => Err(NewClientError::InvalidPublicKey),
-                        "user_peers_users_id_name_key" => Err(NewClientError::NameAlreadyExists),
+                        "user_peers_public_key_key" => Err(Error::Inner(NewClientError::InvalidPublicKey)),
+                        "user_peers_users_id_name_key" => Err(Error::Inner(NewClientError::NameAlreadyExists)),
                         _ => unreachable!(),
                     },
                     _ => Err(err.into()),
@@ -372,31 +348,16 @@ pub async fn create_peer(
     })
 }
 
-#[derive(Debug, thiserror::Error, Serialize)]
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
 pub enum DeleteRecordError {
-    #[error("record id was not found")]
     IdNotFound,
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Db(#[from] db::PgError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    DbPool(#[from] db::PoolError),
-
-    #[serde(skip)]
-    #[error(transparent)]
-    Error(#[from] error::Error),
 }
 
 impl IntoResponse for DeleteRecordError {
     fn into_response(self) -> Response {
-        error::log_prefix_error("error response", &self);
-
         match self {
             Self::IdNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
-            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
 }
@@ -412,7 +373,7 @@ pub async fn delete(
     state: state::SharedState,
     initiator: Initiator,
     body::Json(record): body::Json<DeleteRecord>,
-) -> Result<impl IntoResponse, DeleteRecordError> {
+) -> Result<StatusCode, Error<DeleteRecordError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
@@ -435,7 +396,7 @@ pub async fn delete(
             match result {
                 Ok(counted) => {
                     if counted != 1 {
-                        return Err(DeleteRecordError::IdNotFound);
+                        return Err(Error::Inner(DeleteRecordError::IdNotFound));
                     }
                 }
                 Err(err) => return Err(err.into()),
@@ -473,7 +434,7 @@ pub async fn delete(
             match result {
                 Ok(counted) => {
                     if counted != 1 {
-                        return Err(DeleteRecordError::IdNotFound);
+                        return Err(Error::Inner(DeleteRecordError::IdNotFound));
                     }
                 }
                 Err(err) => return Err(err.into()),
