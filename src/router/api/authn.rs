@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tj2_lib::sec::pki::PrivateKey;
 
 use crate::api;
-use crate::net::{Error, body};
+use crate::net::{body, Error};
 use crate::sec::authn::session::ApiSessionOptions;
 use crate::sec::authn::{ApiInitiator, ApiInitiatorError, ApiSession};
 use crate::sec::pki::Data;
@@ -101,7 +101,9 @@ pub async fn patch(
         Err(err) => match err {
             ApiInitiatorError::Unauthenticated(session) => session,
             ApiInitiatorError::NotFound => return Err(Error::Inner(AuthnError::SessionNotFound)),
-            ApiInitiatorError::UserNotFound(_) => return Err(Error::Inner(AuthnError::UserNotFound)),
+            ApiInitiatorError::UserNotFound(_) => {
+                return Err(Error::Inner(AuthnError::UserNotFound))
+            }
             ApiInitiatorError::Expired(_) => return Err(Error::Inner(AuthnError::Expired)),
             ApiInitiatorError::InvalidAuthorization => {
                 return Err(Error::Inner(AuthnError::InvalidAuthorization))

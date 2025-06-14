@@ -10,11 +10,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::{GroupId, RoleId, RoleUid, UserId};
-use crate::net::{Error, body};
+use crate::net::{body, Error};
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Role};
 use crate::state;
-use crate::user::group::{create_attached_groups, update_attached_groups, AttachedGroup, AttachedGroupError};
+use crate::user::group::{
+    create_attached_groups, update_attached_groups, AttachedGroup, AttachedGroupError,
+};
 use crate::user::{create_attached_users, update_attached_users, AttachedUser, AttachedUserError};
 
 #[derive(Debug, Serialize)]
@@ -248,7 +250,9 @@ impl IntoResponse for NewRoleError {
         match self {
             Self::RoleExists => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
             Self::UsersNotFound { .. } => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
-            Self::GroupsNotFound { .. } => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::GroupsNotFound { .. } => {
+                (StatusCode::NOT_FOUND, body::Json(self)).into_response()
+            }
         }
     }
 }
@@ -276,18 +280,26 @@ pub async fn create_role(
 
     let users = match create_attached_users(&transaction, &role, json.users).await {
         Ok(users) => users,
-        Err(err) => return Err(match err {
-            AttachedUserError::NotFound(ids) => Error::Inner(NewRoleError::UsersNotFound { ids }),
-            AttachedUserError::Db(err) => Error::from(err),
-        }),
+        Err(err) => {
+            return Err(match err {
+                AttachedUserError::NotFound(ids) => {
+                    Error::Inner(NewRoleError::UsersNotFound { ids })
+                }
+                AttachedUserError::Db(err) => Error::from(err),
+            })
+        }
     };
 
     let groups = match create_attached_groups(&transaction, &role, json.groups).await {
         Ok(groups) => groups,
-        Err(err) => return Err(match err {
-            AttachedGroupError::NotFound(ids) => Error::Inner(NewRoleError::GroupsNotFound { ids }),
-            AttachedGroupError::Db(err) => Error::from(err),
-        }),
+        Err(err) => {
+            return Err(match err {
+                AttachedGroupError::NotFound(ids) => {
+                    Error::Inner(NewRoleError::GroupsNotFound { ids })
+                }
+                AttachedGroupError::Db(err) => Error::from(err),
+            })
+        }
     };
 
     transaction.commit().await?;
@@ -327,7 +339,9 @@ impl IntoResponse for UpdateRoleError {
             Self::RoleExists => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
             Self::RoleNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
             Self::UsersNotFound { .. } => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
-            Self::GroupsNotFound { .. } => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::GroupsNotFound { .. } => {
+                (StatusCode::NOT_FOUND, body::Json(self)).into_response()
+            }
         }
     }
 }
@@ -367,19 +381,27 @@ pub async fn update_role(
     update_permissions(&transaction, &role, json.permissions).await?;
 
     match update_attached_users(&transaction, &role, json.users).await {
-        Ok(_) => {},
-        Err(err) => return Err(match err {
-            AttachedUserError::NotFound(ids) => Error::Inner(UpdateRoleError::UsersNotFound { ids }),
-            AttachedUserError::Db(err) => Error::from(err),
-        }),
+        Ok(_) => {}
+        Err(err) => {
+            return Err(match err {
+                AttachedUserError::NotFound(ids) => {
+                    Error::Inner(UpdateRoleError::UsersNotFound { ids })
+                }
+                AttachedUserError::Db(err) => Error::from(err),
+            })
+        }
     }
 
     match update_attached_groups(&transaction, &role, json.groups).await {
-        Ok(_) => {},
-        Err(err) => return Err(match err {
-            AttachedGroupError::NotFound(ids) => Error::Inner(UpdateRoleError::GroupsNotFound { ids }),
-            AttachedGroupError::Db(err) => Error::from(err),
-        }),
+        Ok(_) => {}
+        Err(err) => {
+            return Err(match err {
+                AttachedGroupError::NotFound(ids) => {
+                    Error::Inner(UpdateRoleError::GroupsNotFound { ids })
+                }
+                AttachedGroupError::Db(err) => Error::from(err),
+            })
+        }
     }
 
     transaction.commit().await?;
@@ -390,7 +412,7 @@ pub async fn update_role(
 #[derive(Debug, strum::Display, Serialize)]
 #[serde(tag = "error")]
 pub enum DeleteRoleError {
-    RoleNotFound
+    RoleNotFound,
 }
 
 impl IntoResponse for DeleteRoleError {

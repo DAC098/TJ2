@@ -39,12 +39,12 @@ impl<T> Error<T> {
 
     pub fn message<M>(msg: M) -> Self
     where
-        M: Into<String>
+        M: Into<String>,
     {
         Self::Defined {
             response: json_server_error(),
             msg: Some(msg.into()),
-            src: None
+            src: None,
         }
     }
 
@@ -177,7 +177,7 @@ impl<T> From<PermissionError> for Error<T> {
     }
 }
 
-use crate::sec::authn::session::{SessionError, ApiSessionError};
+use crate::sec::authn::session::{ApiSessionError, SessionError};
 
 impl<T> From<SessionError> for Error<T> {
     fn from(err: SessionError) -> Self {
@@ -204,7 +204,7 @@ impl<T> From<ApiSessionError> for Error<T> {
             | ApiSessionError::UserClientNotFound => Self::Defined {
                 response: json_server_error(),
                 msg: None,
-                src: Some(err.into())
+                src: Some(err.into()),
             },
             ApiSessionError::Header(err) => err.into(),
             ApiSessionError::Token(err) => err.into(),

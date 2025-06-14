@@ -12,10 +12,7 @@ mod users;
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
         .route("/", get(send_html))
-        .route(
-            "/users",
-            get(users::search_users).post(users::create_user),
-        )
+        .route("/users", get(users::search_users).post(users::create_user))
         .route("/users/new", get(send_html))
         .route(
             "/users/:users_id",

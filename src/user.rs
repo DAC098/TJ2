@@ -396,7 +396,7 @@ pub enum AttachedUserError {
     NotFound(Vec<UserId>),
 
     #[error(transparent)]
-    Db(#[from] db::PgError)
+    Db(#[from] db::PgError),
 }
 
 pub async fn create_attached_users<'a, I>(

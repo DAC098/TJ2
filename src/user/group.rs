@@ -217,7 +217,7 @@ pub enum AttachedGroupError {
     NotFound(Vec<GroupId>),
 
     #[error(transparent)]
-    Db(#[from] db::PgError)
+    Db(#[from] db::PgError),
 }
 
 pub async fn create_attached_groups<'a, I>(

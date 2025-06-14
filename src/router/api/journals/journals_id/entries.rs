@@ -9,7 +9,7 @@ use crate::db;
 use crate::db::ids::{EntryId, FileEntryUid, JournalId};
 use crate::fs::RemovedFiles;
 use crate::journal::{self, FileEntry, FileStatus};
-use crate::net::{Error, body};
+use crate::net::{body, Error};
 use crate::sec::authn::ApiInitiator;
 use crate::state;
 use crate::sync;
@@ -324,8 +324,7 @@ async fn upsert_files(
         if !insert_id.is_empty() {
             tracing::debug!("inserting file entries: {} {ins_query}", insert_id.len());
 
-            conn.execute(&ins_query, ins_params.as_slice())
-                .await?;
+            conn.execute(&ins_query, ins_params.as_slice()).await?;
         }
 
         if !update_id.is_empty() {
@@ -346,9 +345,7 @@ async fn upsert_files(
 
             match file {
                 FileEntry::Received(rec) => {
-                    removed_files
-                        .add(journal_dir.file_path(&rec.id))
-                        .await?;
+                    removed_files.add(journal_dir.file_path(&rec.id)).await?;
 
                     ids.push(rec.id);
                 }

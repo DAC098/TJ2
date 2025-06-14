@@ -4,7 +4,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::net::{Error, body};
+use crate::net::{body, Error};
 use crate::sec::authn::Initiator;
 use crate::sec::otp;
 use crate::state::{self, Security};
@@ -183,8 +183,10 @@ pub async fn verify_totp(
             if record.verify(code)? {
                 if let Err(err) = record.save(conn).await {
                     return Err(match err {
-                        otp::TotpError::AlreadyExists => Error::Inner(UpdateAuthError::AlreadyExists),
-                        otp::TotpError::Db(err) => Error::from(err)
+                        otp::TotpError::AlreadyExists => {
+                            Error::Inner(UpdateAuthError::AlreadyExists)
+                        }
+                        otp::TotpError::Db(err) => Error::from(err),
                     });
                 }
 

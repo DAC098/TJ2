@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::InviteToken;
-use crate::net::{Error, body};
+use crate::net::{body, Error};
 use crate::sec::authn::session::SessionOptions;
 use crate::sec::authn::Session;
 use crate::state;
@@ -102,12 +102,14 @@ async fn register_user(
     let builder = UserBuilder::new_password(username, password);
     let user = match builder.build(conn).await {
         Ok(u) => u,
-        Err(err) => return Err(match err {
-            UserBuilderError::UsernameExists => Error::Inner(RegisterError::UsernameExists),
-            UserBuilderError::UidExists => Error::message("user uid collision"),
-            UserBuilderError::Db(err) => err.into(),
-            UserBuilderError::Argon(err) => err.into(),
-        }),
+        Err(err) => {
+            return Err(match err {
+                UserBuilderError::UsernameExists => Error::Inner(RegisterError::UsernameExists),
+                UserBuilderError::UidExists => Error::message("user uid collision"),
+                UserBuilderError::Db(err) => err.into(),
+                UserBuilderError::Argon(err) => err.into(),
+            })
+        }
     };
 
     // we have pre-checked that the invite is pending and the user

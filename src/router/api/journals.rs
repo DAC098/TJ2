@@ -2,8 +2,8 @@ use axum::http::StatusCode;
 use chrono::Utc;
 use futures::StreamExt;
 
-use crate::journal::{CustomField, Journal, CustomFieldBuilder};
-use crate::net::{Error, body};
+use crate::journal::{CustomField, CustomFieldBuilder, Journal};
+use crate::net::{body, Error};
 use crate::sec::authn::ApiInitiator;
 use crate::state;
 use crate::sync;
@@ -20,8 +20,7 @@ pub async fn post(
 
     let now = Utc::now();
 
-    let journal = if let Some(mut exists) = Journal::retrieve(&transaction, &json.uid).await?
-    {
+    let journal = if let Some(mut exists) = Journal::retrieve(&transaction, &json.uid).await? {
         if exists.users_id != initiator.user.id {
             return Ok(StatusCode::BAD_REQUEST);
         }

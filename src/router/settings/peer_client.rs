@@ -7,7 +7,7 @@ use tj2_lib::sec::pki::PublicKey;
 
 use crate::db;
 use crate::db::ids::{UserClientId, UserPeerId};
-use crate::net::{Error, body};
+use crate::net::{body, Error};
 use crate::sec::authn::Initiator;
 use crate::state;
 
@@ -261,8 +261,12 @@ pub async fn create_client(
             if let Some(kind) = db::ErrorKind::check(&err) {
                 return match kind {
                     db::ErrorKind::Unique(constraint) => match constraint {
-                        "user_clients_public_key_key" => Err(Error::Inner(NewClientError::InvalidPublicKey)),
-                        "user_clients_users_id_name_key" => Err(Error::Inner(NewClientError::NameAlreadyExists)),
+                        "user_clients_public_key_key" => {
+                            Err(Error::Inner(NewClientError::InvalidPublicKey))
+                        }
+                        "user_clients_users_id_name_key" => {
+                            Err(Error::Inner(NewClientError::NameAlreadyExists))
+                        }
                         _ => unreachable!(),
                     },
                     _ => Err(err.into()),
@@ -323,8 +327,12 @@ pub async fn create_peer(
             if let Some(kind) = db::ErrorKind::check(&err) {
                 return match kind {
                     db::ErrorKind::Unique(constraint) => match constraint {
-                        "user_peers_public_key_key" => Err(Error::Inner(NewClientError::InvalidPublicKey)),
-                        "user_peers_users_id_name_key" => Err(Error::Inner(NewClientError::NameAlreadyExists)),
+                        "user_peers_public_key_key" => {
+                            Err(Error::Inner(NewClientError::InvalidPublicKey))
+                        }
+                        "user_peers_users_id_name_key" => {
+                            Err(Error::Inner(NewClientError::NameAlreadyExists))
+                        }
                         _ => unreachable!(),
                     },
                     _ => Err(err.into()),

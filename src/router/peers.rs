@@ -4,8 +4,8 @@ use futures::StreamExt;
 use serde::Serialize;
 
 use crate::db::ids::UserPeerId;
-use crate::net::{Error, body};
 use crate::net::header::{is_accepting_html, Location};
+use crate::net::{body, Error};
 use crate::sec::authn::Initiator;
 use crate::state;
 use crate::user::peer::UserPeer;
