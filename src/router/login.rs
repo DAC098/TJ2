@@ -3,10 +3,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{self, Context};
+use crate::error;
 use crate::net::header::{is_accepting_html, Location};
-use crate::net::Error as NetError;
-use crate::router::body;
+use crate::net::{body, Error as NetError};
 use crate::sec;
 use crate::sec::authn::session::SessionOptions;
 use crate::sec::authn::{Initiator, InitiatorError, Session};
@@ -110,12 +109,11 @@ pub enum LoginResult {
 }
 
 #[derive(Debug, strum::Display, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "error")]
 pub enum LoginError {
     UsernameNotFound,
     InvalidPassword,
     AlreadyAuthenticated,
-    // will have to think about how to handle this later on
     InvalidSession,
 }
 
@@ -141,8 +139,6 @@ pub async fn post(
     let transaction = conn.transaction().await?;
 
     let result = Initiator::from_headers(&transaction, &headers).await;
-
-    tracing::debug!("initiator result: {result:#?}");
 
     match result {
         Ok(_) => return Err(NetError::Inner(LoginError::AlreadyAuthenticated)),
@@ -177,9 +173,7 @@ pub async fn post(
         LoginResult::Success
     };
 
-    let session = Session::create(&transaction, options)
-        .await
-        .context("failed to create session record")?;
+    let session = Session::create(&transaction, options).await?;
     let session_cookie = session.build_cookie();
 
     transaction.commit().await?;
