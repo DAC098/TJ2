@@ -132,8 +132,11 @@ pub(crate) use simple_from;
 simple_from!(crate::db::PgError);
 simple_from!(crate::db::PoolError);
 simple_from!(crate::error::Error);
+simple_from!(crate::sec::authn::token::InvalidBase64);
 simple_from!(crate::sec::otp::UnixTimestampError);
 simple_from!(crate::sec::password::HashError);
+simple_from!(crate::sec::pki::EncryptError);
+simple_from!(crate::sec::pki::DecryptError);
 
 simple_from!(axum::Error);
 simple_from!(axum::http::Error);
@@ -174,7 +177,7 @@ impl<T> From<PermissionError> for Error<T> {
     }
 }
 
-use crate::sec::authn::session::SessionError;
+use crate::sec::authn::session::{SessionError, ApiSessionError};
 
 impl<T> From<SessionError> for Error<T> {
     fn from(err: SessionError) -> Self {
@@ -188,6 +191,25 @@ impl<T> From<SessionError> for Error<T> {
             },
             SessionError::Db(err) => err.into(),
             SessionError::Rand(err) => err.into(),
+        }
+    }
+}
+
+impl<T> From<ApiSessionError> for Error<T> {
+    fn from(err: ApiSessionError) -> Self {
+        match err {
+            ApiSessionError::TokenExists
+            | ApiSessionError::UserNotFound
+            | ApiSessionError::ExpiresOnOverflow
+            | ApiSessionError::UserClientNotFound => Self::Defined {
+                response: json_server_error(),
+                msg: None,
+                src: Some(err.into())
+            },
+            ApiSessionError::Header(err) => err.into(),
+            ApiSessionError::Token(err) => err.into(),
+            ApiSessionError::Db(err) => err.into(),
+            ApiSessionError::Rand(err) => err.into(),
         }
     }
 }
