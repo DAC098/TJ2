@@ -1250,15 +1250,6 @@ impl CustomFieldBuilder {
     }
 }
 
-pub struct CreateCustomFieldOptions {
-    journals_id: JournalId,
-    name: String,
-    pub order: i32,
-    pub config: custom_field::Type,
-    pub description: Option<String>,
-    pub uid: Option<CustomFieldUid>,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CreateCustomFieldError {
     #[error("the given custom field uid already exists")]
@@ -1317,50 +1308,6 @@ impl CustomField {
             uid: None,
             created: None,
         }
-    }
-
-    pub fn create_options<N>(
-        journals_id: JournalId,
-        name: N,
-        config: custom_field::Type,
-    ) -> CreateCustomFieldOptions
-    where
-        N: Into<String>,
-    {
-        CreateCustomFieldOptions {
-            journals_id,
-            name: name.into(),
-            order: 0,
-            config,
-            description: None,
-            uid: None,
-        }
-    }
-
-    pub async fn create(
-        conn: &impl GenericClient,
-        options: CreateCustomFieldOptions,
-    ) -> Result<Self, CreateCustomFieldError> {
-        let CreateCustomFieldOptions {
-            journals_id,
-            name,
-            order,
-            config,
-            description,
-            uid,
-        } = options;
-        let mut builder = Self::builder(journals_id, name, config);
-        builder.with_order(order);
-
-        if let Some(desc) = description {
-            builder.with_description(desc);
-        }
-
-        if let Some(uid) = uid {
-            builder.with_uid(uid);
-        }
-
-        builder.build(conn).await
     }
 
     pub async fn retrieve_journal_stream(

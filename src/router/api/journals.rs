@@ -1,13 +1,12 @@
 use axum::http::StatusCode;
 use chrono::Utc;
+use futures::StreamExt;
 
-use crate::error::{self, Context};
-use crate::journal::{CustomField, Journal};
-use crate::router::body;
+use crate::journal::{CustomField, Journal, CustomFieldBuilder};
+use crate::net::{Error, body};
 use crate::sec::authn::ApiInitiator;
 use crate::state;
 use crate::sync;
-use crate::sync::journal::{EntryFileSync, SyncEntryResult};
 
 pub mod journals_id;
 
@@ -15,18 +14,13 @@ pub async fn post(
     state: state::SharedState,
     initiator: ApiInitiator,
     body::Json(json): body::Json<sync::journal::JournalSync>,
-) -> Result<StatusCode, error::Error> {
+) -> Result<StatusCode, Error> {
     let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+    let transaction = conn.transaction().await?;
 
     let now = Utc::now();
 
-    let journal = if let Some(mut exists) = Journal::retrieve(&transaction, &json.uid)
-        .await
-        .context("failed to retrieve journal")?
+    let journal = if let Some(mut exists) = Journal::retrieve(&transaction, &json.uid).await?
     {
         if exists.users_id != initiator.user.id {
             return Ok(StatusCode::BAD_REQUEST);
@@ -36,10 +30,9 @@ pub async fn post(
         exists.name = json.name;
         exists.description = json.description;
 
-        exists
-            .update(&transaction)
-            .await
-            .context("failed to update journal")?;
+        if let Err(err) = exists.update(&transaction).await {
+            return Err(Error::source(err));
+        }
 
         exists
     } else {
@@ -50,28 +43,37 @@ pub async fn post(
             options.description(desc);
         }
 
-        let journal = Journal::create(&transaction, options)
-            .await
-            .context("failed to create journal")?;
+        let journal = match Journal::create(&transaction, options).await {
+            Ok(journal) => journal,
+            Err(err) => return Err(Error::source(err)),
+        };
 
         journal
     };
 
-    for cf in json.custom_fields {
-        let mut options = CustomField::create_options(journal.id, cf.name, cf.config);
-        options.uid = Some(cf.uid);
-        options.order = cf.order;
-        options.description = cf.description;
+    let mut builders = Vec::new();
 
-        CustomField::create(&transaction, options)
-            .await
-            .context("failed to create custom field")?;
+    for cf in json.custom_fields {
+        let mut builder = CustomField::builder(journal.id, cf.name, cf.config);
+        builder.with_uid(cf.uid);
+        builder.with_order(cf.order);
+
+        if let Some(desc) = cf.description {
+            builder.with_description(desc);
+        }
+
+        builders.push(builder);
     }
 
-    transaction
-        .commit()
-        .await
-        .context("failed to commit transaction")?;
+    if let Some(stream) = CustomFieldBuilder::build_many(&transaction, builders).await? {
+        futures::pin_mut!(stream);
+
+        while let Some(result) = stream.next().await {
+            result?;
+        }
+    }
+
+    transaction.commit().await?;
 
     Ok(StatusCode::CREATED)
 }
