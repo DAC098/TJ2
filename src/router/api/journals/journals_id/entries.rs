@@ -1,49 +1,36 @@
 use std::collections::HashSet;
-use std::default::Default;
 use std::fmt::Write;
 
+use axum::http::StatusCode;
 use chrono::Utc;
 use futures::StreamExt;
 
 use crate::db;
-use crate::db::ids::{CustomFieldUid, EntryId, FileEntryUid, JournalId};
-use crate::error::{self, Context};
+use crate::db::ids::{EntryId, FileEntryUid, JournalId};
 use crate::fs::RemovedFiles;
 use crate::journal::{self, FileEntry, FileStatus};
-use crate::router::body;
+use crate::net::{Error, body};
 use crate::sec::authn::ApiInitiator;
 use crate::state;
 use crate::sync;
-use crate::sync::journal::{EntryFileSync, SyncEntryResult};
+use crate::sync::journal::SyncEntryError;
 
 pub async fn post(
     state: state::SharedState,
     initiator: ApiInitiator,
     body::Json(json): body::Json<sync::journal::EntrySync>,
-) -> Result<SyncEntryResult, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+) -> Result<StatusCode, Error<SyncEntryError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
     tracing::debug!("received entry from server: {} {json:#?}", json.uid);
 
-    let journal = {
-        let Some(result) = journal::Journal::retrieve(&transaction, &json.journals_uid)
-            .await
-            .context("failed to retrieve journal")?
-        else {
-            tracing::debug!("failed to retrieve journal: {}", json.journals_uid);
-
-            return Ok(SyncEntryResult::JournalNotFound);
-        };
-
-        result
-    };
+    let journal = journal::Journal::retrieve(&transaction, &json.journals_uid)
+        .await?
+        .ok_or(Error::Inner(SyncEntryError::JournalNotFound))?;
 
     if journal.users_id != initiator.user.id {
-        return Ok(SyncEntryResult::JournalNotFound);
+        return Err(Error::Inner(SyncEntryError::JournalNotFound));
     }
 
     let result = transaction.query_one(
@@ -58,32 +45,20 @@ pub async fn post(
         returning id",
         &[&json.uid, &journal.id, &initiator.user.id, &json.date, &json.title, &json.contents, &json.created, &json.updated]
     )
-        .await
-        .context("failed to upsert entry")?;
+        .await?;
 
     let entries_id: EntryId = result.get(0);
 
     upsert_tags(&transaction, &entries_id, &json.tags).await?;
 
-    {
-        let UpsertCFS { not_found, invalid } =
-            upsert_cfs(&transaction, &journal.id, &entries_id, &json.custom_fields).await?;
-
-        if !not_found.is_empty() {
-            return Ok(SyncEntryResult::CFNotFound { uids: not_found });
-        }
-
-        if !invalid.is_empty() {
-            return Ok(SyncEntryResult::CFInvalid { uids: invalid });
-        }
-    }
+    upsert_cfs(&transaction, &journal.id, &entries_id, &json.custom_fields).await?;
 
     let mut removed_files = RemovedFiles::new();
 
     {
         let journal_dir = state.storage().journal_dir(journal.id);
 
-        let UpsertFiles { not_found } = upsert_files(
+        upsert_files(
             &transaction,
             &entries_id,
             journal_dir,
@@ -91,33 +66,24 @@ pub async fn post(
             &mut removed_files,
         )
         .await?;
-
-        if !not_found.is_empty() {
-            return Ok(SyncEntryResult::FileNotFound { uids: not_found });
-        }
     }
 
-    let result = transaction
-        .commit()
-        .await
-        .context("failed to commit entry sync transaction");
-
-    if let Err(err) = result {
+    if let Err(err) = transaction.commit().await {
         removed_files.log_rollback().await;
 
-        return Err(err);
+        return Err(err.into());
     }
 
     removed_files.log_clean().await;
 
-    Ok(SyncEntryResult::Synced)
+    Ok(StatusCode::CREATED)
 }
 
 async fn upsert_tags(
     conn: &impl db::GenericClient,
     entries_id: &EntryId,
     tags: &Vec<sync::journal::EntryTagSync>,
-) -> Result<(), error::Error> {
+) -> Result<(), Error<SyncEntryError>> {
     if !tags.is_empty() {
         let mut params: db::ParamsVec<'_> = vec![entries_id];
         let mut query = String::from(
@@ -155,9 +121,7 @@ async fn upsert_tags(
                   entry_tags.key != tmp_insert.key",
         );
 
-        conn.execute(&query, params.as_slice())
-            .await
-            .context("failed to upsert tags")?;
+        conn.execute(&query, params.as_slice()).await?;
     } else {
         conn.execute(
             "\
@@ -165,25 +129,10 @@ async fn upsert_tags(
             where entries_id = $1",
             &[entries_id],
         )
-        .await
-        .context("failed to delete tags")?;
+        .await?;
     }
 
     Ok(())
-}
-
-struct UpsertCFS {
-    not_found: Vec<CustomFieldUid>,
-    invalid: Vec<CustomFieldUid>,
-}
-
-impl Default for UpsertCFS {
-    fn default() -> Self {
-        UpsertCFS {
-            not_found: Vec::new(),
-            invalid: Vec::new(),
-        }
-    }
 }
 
 async fn upsert_cfs(
@@ -191,13 +140,10 @@ async fn upsert_cfs(
     journals_id: &JournalId,
     entries_id: &EntryId,
     cfs: &Vec<sync::journal::EntryCFSync>,
-) -> Result<UpsertCFS, error::Error> {
-    let mut results = UpsertCFS::default();
-
+) -> Result<(), Error<SyncEntryError>> {
     if !cfs.is_empty() {
-        let fields = journal::CustomField::retrieve_journal_uid_map(conn, journals_id)
-            .await
-            .context("failed to retrieve journal custom fields")?;
+        let fields = journal::CustomField::retrieve_journal_uid_map(conn, journals_id).await?;
+        let mut not_found = Vec::new();
         let mut counted = 0;
         let mut params: db::ParamsVec<'_> = vec![entries_id];
         let mut query = String::from(
@@ -209,7 +155,7 @@ async fn upsert_cfs(
 
         for (index, cf) in cfs.iter().enumerate() {
             let Some(field_ref) = fields.get(&cf.custom_fields_uid) else {
-                results.not_found.push(cf.custom_fields_uid.clone());
+                not_found.push(cf.custom_fields_uid.clone());
 
                 continue;
             };
@@ -231,6 +177,10 @@ async fn upsert_cfs(
             counted += 1;
         }
 
+        if !not_found.is_empty() {
+            return Err(Error::Inner(SyncEntryError::CFNotFound { uids: not_found }));
+        }
+
         if counted > 0 {
             query.push_str(
                 " on conflict (custom_fields_id, entries_id) do update \
@@ -247,9 +197,7 @@ async fn upsert_cfs(
 
             //tracing::debug!("query: {query}");
 
-            conn.execute(&query, params.as_slice())
-                .await
-                .context("failed to upsert custom fields")?;
+            conn.execute(&query, params.as_slice()).await?;
         }
     } else {
         conn.execute(
@@ -258,16 +206,10 @@ async fn upsert_cfs(
             where entries_id = $1",
             &[entries_id],
         )
-        .await
-        .context("failed to delete custom fields")?;
+        .await?;
     }
 
-    Ok(results)
-}
-
-#[derive(Debug, Default)]
-struct UpsertFiles {
-    not_found: Vec<FileEntryUid>,
+    Ok(())
 }
 
 async fn upsert_files(
@@ -276,14 +218,11 @@ async fn upsert_files(
     journal_dir: journal::JournalDir,
     files: Vec<sync::journal::EntryFileSync>,
     removed_files: &mut RemovedFiles,
-) -> Result<UpsertFiles, error::Error> {
+) -> Result<(), Error<SyncEntryError>> {
     let status = FileStatus::Requested;
-    let rtn = UpsertFiles::default();
 
     if !files.is_empty() {
-        let mut known = FileEntry::retrieve_uid_map(conn, entries_id)
-            .await
-            .context("failed to retrieve known file entries")?;
+        let known = FileEntry::retrieve_uid_map(conn, entries_id).await?;
 
         let created = Utc::now();
 
@@ -314,7 +253,7 @@ async fn upsert_files(
             from (values ",
         );
 
-        for (index, file) in files.iter().enumerate() {
+        for file in &files {
             if let Some(exists) = known.get(&file.uid) {
                 if !update_id.insert(exists.uid().clone()) {
                     // duplicate existing id
@@ -338,8 +277,7 @@ async fn upsert_files(
                 // do a lookup to make sure that the uid exists for a different
                 // entry
                 let lookup_result = FileEntry::retrieve(conn, &file.uid)
-                    .await
-                    .context("failed to lookup file uid")?
+                    .await?
                     .is_some_and(|v| v.entries_id() == *entries_id);
 
                 if lookup_result {
@@ -380,44 +318,37 @@ async fn upsert_files(
             tracing::debug!("deleting file entries: {}", to_drop.len());
 
             conn.execute("delete from file_entries where uid = any($1)", &[&to_drop])
-                .await
-                .context("failed to delete from file entries")?;
+                .await?;
         }
 
         if !insert_id.is_empty() {
             tracing::debug!("inserting file entries: {} {ins_query}", insert_id.len());
 
             conn.execute(&ins_query, ins_params.as_slice())
-                .await
-                .context("failed to insert files")?;
+                .await?;
         }
 
         if !update_id.is_empty() {
             tracing::debug!("updating file entries: {} {upd_query}", update_id.len());
 
-            conn.execute(&upd_query, upd_params.as_slice())
-                .await
-                .context("failed to update files")?;
+            conn.execute(&upd_query, upd_params.as_slice()).await?;
         }
     } else {
         // delete all files that are local to the manchine and just remove the
         // entries that are marked remote
-        let known_files = FileEntry::retrieve_entry_stream(conn, entries_id)
-            .await
-            .context("failed to retrieve file entries")?;
+        let known_files = FileEntry::retrieve_entry_stream(conn, entries_id).await?;
         let mut ids = Vec::new();
 
         futures::pin_mut!(known_files);
 
         while let Some(try_record) = known_files.next().await {
-            let file = try_record.context("failed to retrieve record")?;
+            let file = try_record?;
 
             match file {
                 FileEntry::Received(rec) => {
                     removed_files
                         .add(journal_dir.file_path(&rec.id))
-                        .await
-                        .context("failed to remove received journal file")?;
+                        .await?;
 
                     ids.push(rec.id);
                 }
@@ -429,9 +360,8 @@ async fn upsert_files(
             "delete from file_entries where entries_id = $1",
             &[entries_id],
         )
-        .await
-        .context("failed to delete file entries")?;
+        .await?;
     }
 
-    Ok(rtn)
+    Ok(())
 }

@@ -15,10 +15,9 @@ use crate::journal::{custom_field, FileStatus};
 use crate::router::body;
 use crate::sec::Hash;
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum SyncEntryResult {
-    Synced,
+#[derive(Debug, strum::Display, Serialize, Deserialize)]
+#[serde(tag = "error")]
+pub enum SyncEntryError {
     JournalNotFound,
     NotRemoteJournal,
     UserNotFound,
@@ -27,10 +26,9 @@ pub enum SyncEntryResult {
     FileNotFound { uids: Vec<FileEntryUid> },
 }
 
-impl IntoResponse for SyncEntryResult {
+impl IntoResponse for SyncEntryError {
     fn into_response(self) -> Response {
         match &self {
-            Self::Synced => (StatusCode::CREATED, body::Json(self)).into_response(),
             Self::JournalNotFound | Self::UserNotFound => {
                 (StatusCode::NOT_FOUND, body::Json(self)).into_response()
             }
