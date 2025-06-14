@@ -1,12 +1,11 @@
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::db::ids::UserPeerId;
-use crate::error::{self, Context};
+use crate::net::{Error, body};
 use crate::net::header::{is_accepting_html, Location};
-use crate::router::{body, macros};
 use crate::sec::authn::Initiator;
 use crate::state;
 use crate::user::peer::UserPeer;
@@ -21,23 +20,21 @@ pub async fn get(
     state: state::SharedState,
     initiator: Initiator,
     headers: HeaderMap,
-) -> Result<Response, error::Error> {
-    if is_accepting_html(&headers).unwrap_or(true) {
+) -> Result<Response, Error> {
+    if is_accepting_html(&headers)? {
         return Ok(Location::to("/settings/peer_client").into_response());
     }
 
     let conn = state.db_conn().await?;
 
-    let peers = UserPeer::retrieve_many(&conn, &initiator.user.id)
-        .await
-        .context("failed to retrieve user peers")?;
+    let peers = UserPeer::retrieve_many(&conn, &initiator.user.id).await?;
 
     futures::pin_mut!(peers);
 
     let mut rtn = Vec::new();
 
     while let Some(maybe) = peers.next().await {
-        let record = maybe.context("failed to retrieve user peer record")?;
+        let record = maybe?;
 
         rtn.push(UserPeerPartial {
             id: record.id,
