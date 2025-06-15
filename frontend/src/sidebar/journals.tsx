@@ -156,7 +156,9 @@ function JournalSidebar() {
         try {
             let journals = await get_journals();
 
-            set_data(journals);
+            if (journals != null) {
+                set_data(journals);
+            }
         } catch (err) {
             console.error("failed to load journal list", err);
         }

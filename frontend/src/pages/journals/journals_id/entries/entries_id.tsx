@@ -185,7 +185,7 @@ async function parallel_uploads(
         }
     }
 
-    let result = {
+    let result: UploadResult = {
         successful: [],
         failed: [],
     };
@@ -214,51 +214,53 @@ async function parallel_uploads(
         to_upload.push([file_entry, ref]);
     }
 
-    for (let index = 0; index < 2; index += 1) {
-        uploaders.push((async () => {
-            let count = 0;
+    const uploader = async () => {
+        let count = 0;
 
-            while (true) {
-                let uploading = to_upload.pop();
+        while (true) {
+            let uploading = to_upload.pop();
 
-                if (uploading == null) {
-                    break;
-                }
+            if (uploading == null) {
+                break;
+            }
 
-                let [file_entry, ref] = uploading;
+            let [file_entry, ref] = uploading;
 
-                try {
-                    let [successful, json] = await upload_data(
-                        journals_id,
-                        entries_id,
-                        file_entry._id,
-                        ref.data
-                    );
+            try {
+                let json = await upload_data(
+                    journals_id,
+                    entries_id,
+                    file_entry._id,
+                    ref.data
+                );
 
-                    if (successful) {
-                        result.successful.push(json);
-                    } else {
-                        result.failed.push({
-                            type: "failed",
-                            _id: file_entry._id,
-                            uid: file_entry.uid,
-                            name: file_entry.name,
-                            original: ref,
-                        });
-                    }
-                } catch (err) {
+                if (json != null) {
+                    result.successful.push(json);
+                } else {
                     result.failed.push({
                         type: "failed",
                         _id: file_entry._id,
                         uid: file_entry.uid,
                         name: file_entry.name,
-                        original: ref
+                        original: ref,
                     });
                 }
-
-                count += 1;
+            } catch (err) {
+                result.failed.push({
+                    type: "failed",
+                    _id: file_entry._id,
+                    uid: file_entry.uid,
+                    name: file_entry.name,
+                    original: ref
+                });
             }
-        })());
+
+            count += 1;
+        }
+    };
+
+    for (let index = 0; index < 2; index += 1) {
+        uploaders.push(uploader());
     }
 
     await Promise.all(uploaders);
@@ -299,8 +301,12 @@ async function retrieve_entry(
 }
 
 export function Entry() {
-    const { journals_id, entries_id } = useParams();
+    const { journals_id, entries_id } = useParams<{journals_id: string, entries_id: string}>();
     const navigate = useNavigate();
+
+    if (journals_id == null || entries_id == null) {
+        throw new Error("missing journals_id / entries_id");
+    }
 
     const form = useForm<UIEntryForm>({
         defaultValues: async () => retrieve_entry(journals_id, entries_id),
@@ -316,7 +322,7 @@ export function Entry() {
 
         let uploaded = await parallel_uploads(
             journals_id,
-            result.id,
+            result.id!,
             entry.files,
             result.files
         );
@@ -333,7 +339,7 @@ export function Entry() {
 
         let uploaded = await parallel_uploads(
             journals_id,
-            result.id,
+            result.id!,
             entry.files,
             result.files
         );
@@ -481,7 +487,7 @@ function TagEntry({}: TagEntryProps) {
 }
 
 interface AddFileProps {
-    on_selected: (FileList) => void,
+    on_selected: (files: FileList) => void,
     disabled?: boolean
 }
 
@@ -495,7 +501,7 @@ function AddFile({on_selected, disabled = false}: AddFileProps) {
             multiple
             style={{display: "none"}}
             onChange={e => {
-                on_selected(e.target.files);
+                on_selected(e.target.files!);
             }}
         />
         <Button type="button" variant="secondary" disabled={disabled} onClick={() => {
@@ -515,6 +521,10 @@ interface DownloadBtnProps {
 
 function DownloadBtn({src, name}: DownloadBtnProps) {
     let url = useObjectUrl(src);
+
+    if (url == null) {
+        return null;
+    }
 
     return <a href={url} download={name ?? true}>
         <Button type="button" variant="secondary" size="icon">
@@ -572,12 +582,8 @@ function FileEntry({journals_id, entries_id}: FileEntryProps) {
         <div className="flex flex-row flex-nowrap gap-x-4 items-center">
             Files
             <AddFile on_selected={file_list => {
-                for (let file of file_list) {
-                    // more than likely this is not correct
-                    let mime_split = file.type.split("/");
-                    let mime_type = mime_split[0];
-                    let mime_subtype = mime_split[1];
-                    let mime_param: null;
+                for (let index = 0; index < file_list.length; index += 1) {
+                    let file = file_list[index];
 
                     files.append({
                         type: "local",

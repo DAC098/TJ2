@@ -32,7 +32,7 @@ import {
 import { send_to_clipboard } from "@/utils";
 
 interface UserKeys {
-    public_key: String,
+    public_key: string,
     clients: UserClient[],
     peers: UserPeer[],
 }
@@ -180,7 +180,7 @@ export function PeerClient() {
 
 interface ClientListProps {
     clients: UserClient[]
-    on_delete: (number) => void,
+    on_delete: (id: number) => void,
 }
 
 function ClientList({clients, on_delete}: ClientListProps) {
@@ -250,7 +250,7 @@ function ClientListItem({client, on_delete}: ClientListItemProps) {
             includeSeconds: true,
         });
 
-        update_ele = <span title={update_date}>Modified: {update_distance}</span>;
+        update_ele = <span title={update_date.toString()}>Modified: {update_distance}</span>;
     }
 
     return <div className="rounded-lg border p-4 space-y-4">
@@ -258,7 +258,7 @@ function ClientListItem({client, on_delete}: ClientListItemProps) {
             <h3 className="text-lg grow">{client.name}</h3>
             <Button
                 type="button"
-                icon="icon"
+                size="icon"
                 variant="destructive"
                 disabled={loading}
                 onClick={() => delete_client()}
@@ -268,7 +268,7 @@ function ClientListItem({client, on_delete}: ClientListItemProps) {
         </div>
         <div className="flex flex-col gap-y-1">
             <span>Public Key: {client.public_key}</span>
-            <span title={create_date}>Created: {create_distance}</span>
+            <span title={create_date.toString()}>Created: {create_distance}</span>
             {update_ele}
         </div>
     </div>;
@@ -280,7 +280,7 @@ interface NewClient {
 }
 
 interface AddClientProps {
-    on_added: (UserClient) => void,
+    on_added: (client: UserClient) => void,
 }
 
 function AddClient({on_added}: AddClientProps) {
@@ -293,7 +293,7 @@ function AddClient({on_added}: AddClientProps) {
         }
     });
 
-    const on_submit: SubmitHandler<Newclient> = async (data, event) => {
+    const on_submit: SubmitHandler<NewClient> = async (data, event) => {
         try {
             let body = JSON.stringify({
                 type: "Client",
@@ -377,7 +377,7 @@ function AddClient({on_added}: AddClientProps) {
 
 interface PeerListProps {
     peers: UserPeer[],
-    on_delete: (number) => void,
+    on_delete: (id: number) => void,
 }
 
 function PeerList({peers, on_delete}: PeerListProps) {
@@ -447,7 +447,7 @@ function PeerListItem({peer, on_delete}: PeerListItemProps) {
             includeSeconds: true,
         });
 
-        update_ele = <span title={update_date}>Modified: {update_distance}</span>;
+        update_ele = <span title={update_date.toString()}>Modified: {update_distance}</span>;
     }
 
     return <div className="rounded-lg border p-4 space-y-4">
@@ -461,7 +461,7 @@ function PeerListItem({peer, on_delete}: PeerListItemProps) {
             </div>
             <Button
                 type="button"
-                icon="icon"
+                size="icon"
                 variant="destructive"
                 disabled={loading}
                 onClick={() => delete_peer()}
@@ -481,7 +481,7 @@ function PeerListItem({peer, on_delete}: PeerListItemProps) {
                 </div>
             </div>
             <span>Public Key: {peer.public_key}</span>
-            <span title={create_date}>Created: {create_distance}</span>
+            <span title={create_date.toString()}>Created: {create_distance}</span>
             {update_ele}
         </div>
     </div>;
@@ -497,7 +497,7 @@ interface NewPeer {
 }
 
 interface AddPeerProps {
-    on_added: (UserPeer) => void
+    on_added: (peer: UserPeer) => void
 }
 
 function AddPeer({on_added}: AddPeerProps) {
@@ -516,12 +516,9 @@ function AddPeer({on_added}: AddPeerProps) {
 
     const on_submit: SubmitHandler<NewPeer> = async (data, event) => {
         try {
-            let port = parseInt(data.port, 10);
-
             let body = JSON.stringify({
                 type: "Peer",
                 ...data,
-                port,
             });
             let res = await fetch("/settings/peer_client", {
                 method: "POST",
@@ -569,7 +566,7 @@ function AddPeer({on_added}: AddPeerProps) {
                 </DialogDescription>
             </DialogHeader>
             <Separator/>
-            <FormProvider<NewClient> {...form} children={
+            <FormProvider<NewPeer> {...form} children={
                 <form className="space-y-4" onSubmit={form.handleSubmit(on_submit)}>
                     <FormField control={form.control} name="name" render={({field}) => {
                         return <FormItem>
@@ -592,7 +589,11 @@ function AddPeer({on_added}: AddPeerProps) {
                             return <FormItem className="w-1/4">
                                 <FormLabel>Port</FormLabel>
                                 <FormControl>
-                                    <Input type="number" {...field}/>
+                                    <Input
+                                        type="number"
+                                        {...field}
+                                        onChange={ev => field.onChange(parseInt(ev.target.value, 10))}
+                                    />
                                 </FormControl>
                             </FormItem>
                         }}/>

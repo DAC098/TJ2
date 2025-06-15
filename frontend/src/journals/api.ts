@@ -382,17 +382,6 @@ export interface UIEntryForm extends EntryFormBase {
     files: UIEntryFileForm[],
 }
 
-export interface EntryForm {
-    id: number | null,
-    uid: string | null,
-    date: Date,
-    title: string,
-    contents: string,
-    tags: EntryTagForm[],
-    files: EntryFileForm[],
-    custom_fields: EntryCustomFieldForm[],
-}
-
 function pad_num(num: number): string {
     if (num < 10) {
         return "0" + num.toString(10);
@@ -636,7 +625,7 @@ export async function upload_data(
     entries_id: string | number,
     file_entry_id: string | number,
     data: Blob | File,
-): Promise<[boolean, ReceivedFile | null]> {
+): Promise<ReceivedFile> {
     try {
         let path = `/journals/${journals_id}/entries/${entries_id}/${file_entry_id}`;
 
@@ -658,13 +647,13 @@ export async function upload_data(
         });
 
         if (result.status !== 200) {
-            return [false, null];
+            return null;
         } else {
-            return [true, await result.json()];
+            return await result.json();
         }
     } catch(err) {
         console.log("failed to upload data", err);
 
-        return [false, null];
+        return null;
     }
 }

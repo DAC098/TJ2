@@ -30,17 +30,16 @@ export function Verify() {
     const on_submit: SubmitHandler<VerifyForm> = async (data, event) => {
         try {
             let res = await send_json("POST", "/verify", data);
+            let prev = new URL(location.pathname + location.search, window.location.origin)
+                .searchParams
+                .get("prev");
 
             switch (res.status) {
                 case 200:
-                    let prev = new URL(location.pathname + location.search, window.location.origin)
-                        .searchParams
-                        .get("prev");
-
                     navigate(prev ?? "/journals");
 
                     break;
-                case 400:
+                case 400: {
                     let json = await res.json();
 
                     if (json.type === "InvalidCode") {
@@ -52,7 +51,8 @@ export function Verify() {
                     }
 
                     break;
-                case 404:
+                }
+                case 404: {
                     let json = await res.json();
 
                     if (json.type === "MFANotFound") {
@@ -60,6 +60,7 @@ export function Verify() {
                     }
 
                     break;
+                }
                 default:
                     console.warn("unhandled status code");
 

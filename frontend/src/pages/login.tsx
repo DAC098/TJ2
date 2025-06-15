@@ -28,7 +28,11 @@ interface LoginFailed {
     value: LoginFailure
 }
 
-type LoginResult = LoginSuccess | LoginFailed;
+interface LoginVerify {
+    type: "Verify"
+}
+
+type LoginResult = LoginSuccess | LoginVerify | LoginFailed;
 
 async function send_login(given: LoginForm) {
     let body = JSON.stringify(given);

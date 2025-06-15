@@ -75,7 +75,7 @@ function PasswordUpdate() {
         {display ?
             <FormProvider<PasswordForm> {...form}>
                 <form className="space-y-4" onSubmit={form.handleSubmit(on_submit)}>
-                    <FormField control={form.control} name="password.current" render={({field}) => {
+                    <FormField control={form.control} name="current" render={({field}) => {
                         return <FormItem className="w-1/2">
                             <FormLabel>Current Password</FormLabel>
                             <FormControl>
@@ -83,7 +83,7 @@ function PasswordUpdate() {
                             </FormControl>
                         </FormItem>;
                     }}/>
-                    <FormField control={form.control} name="password.updated" render={({field}) => {
+                    <FormField control={form.control} name="updated" render={({field}) => {
                         return <FormItem className="w-1/2">
                             <FormLabel>New Password</FormLabel>
                             <FormControl>
@@ -91,7 +91,7 @@ function PasswordUpdate() {
                             </FormControl>
                         </FormItem>;
                     }}/>
-                    <FormField control={form.control} name="password.confirm" render={({field}) => {
+                    <FormField control={form.control} name="confirm" render={({field}) => {
                         return <FormItem className="w-1/2">
                             <FormLabel>Confirm Password</FormLabel>
                             <FormControl>
@@ -199,7 +199,7 @@ function TotpEdit() {
 
                         let data_url = await QRCode.toDataURL(url, {
                             type: "image/png",
-                            quality: 1,
+                            //quality: 1,
                             margin: 1,
                             color: {
                                 dark: "#010599FF",
@@ -248,7 +248,7 @@ function TotpEdit() {
             });
 
             switch (res.status) {
-                case 200:
+                case 200: {
                     let json = await res.json();
 
                     if (json.type === "VerifiedTotp") {
@@ -260,7 +260,8 @@ function TotpEdit() {
                     }
 
                     break;
-                case 400:
+                }
+                case 400: {
                     let json = await res.json();
 
                     if (json.type === "InvalidTotpCode") {
@@ -270,6 +271,7 @@ function TotpEdit() {
                     }
 
                     break;
+                }
                 default:
                     console.warn("unhandled status code");
                     break;
