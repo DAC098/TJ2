@@ -44,6 +44,7 @@ import {
 import { JournalSidebar } from "@/sidebar/journals";
 import { AdminSidebar } from "@/sidebar/admin";
 import { SettingsSidebar } from "@/sidebar/settings";
+import { toggle_theme } from "@/theme";
 
 async function send_logout() {
     let res = await fetch("/logout", {
@@ -143,10 +144,13 @@ function UserMenu({name, email, avatar}: UserMenuProps) {
                     </DropdownMenuItem>
                     <DropdownMenuSeparator/>
                     <Link to="/settings">
-                        <DropdownMenuItem>
-                            Settings
-                        </DropdownMenuItem>
+                        <DropdownMenuItem>Settings</DropdownMenuItem>
                     </Link>
+                    <DropdownMenuItem onSelect={() => {
+                        toggle_theme();
+                    }}>
+                        Switch Theme
+                    </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
         </SidebarMenuItem>
