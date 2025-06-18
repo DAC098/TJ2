@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::db;
 use crate::net::{body, Error};
 use crate::sec::authn::Initiator;
-use crate::sec::otp;
+use crate::sec::{self, otp};
 use crate::state::{self, Security};
 use crate::user::User;
 
@@ -69,6 +69,11 @@ pub enum UpdateAuth {
     EnableTotp,
     DisableTotp,
     VerifyTotp { code: String },
+    UpdatePassword {
+        current: String,
+        updated: String,
+        confirm: String,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -78,6 +83,7 @@ pub enum ResultAuth {
     CreatedTotp(ResultTotp),
     DeletedTotp,
     VerifiedTotp,
+    UpdatedPassword,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,15 +100,19 @@ pub enum UpdateAuthError {
     InvalidTotpCode,
     TotpNotFound,
     AlreadyExists,
+
+    InvalidPassword,
+    InvalidConfirm,
 }
 
 impl IntoResponse for UpdateAuthError {
     fn into_response(self) -> Response {
         match self {
-            Self::AlreadyExists | Self::InvalidTotpCode => {
+            Self::AlreadyExists | Self::InvalidTotpCode | Self::InvalidConfirm => {
                 (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
             }
             Self::TotpNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::InvalidPassword => (StatusCode::FORBIDDEN, body::Json(self)).into_response(),
         }
     }
 }
@@ -124,6 +134,9 @@ pub async fn patch(
         }
         UpdateAuth::VerifyTotp { code } => {
             verify_totp(state.security(), &transaction, initiator.user, code).await?
+        }
+        UpdateAuth::UpdatePassword { current, updated, confirm } => {
+            update_password(&transaction, initiator, current, updated, confirm).await?
         }
     };
 
@@ -215,4 +228,31 @@ pub async fn disable_totp(
         },
         None => Ok(ResultAuth::Noop),
     }
+}
+
+pub async fn update_password(
+    conn: &impl db::GenericClient,
+    mut initiator: Initiator,
+    current: String,
+    updated: String,
+    confirm: String,
+) -> Result<ResultAuth, Error<UpdateAuthError>> {
+    if updated != confirm {
+        return Err(Error::Inner(UpdateAuthError::InvalidConfirm));
+    }
+
+    if !sec::password::verify(&initiator.user.password, &current)? {
+        return Err(Error::Inner(UpdateAuthError::InvalidPassword));
+    }
+
+    initiator.user.password = sec::password::create(&updated)?;
+
+    initiator.user.update(conn).await?;
+
+    conn.execute(
+        "delete from authn_sessions where users_id = $1 and token != $2",
+        &[&initiator.user.id, &initiator.session.token]
+    ).await?;
+
+    Ok(ResultAuth::UpdatedPassword)
 }

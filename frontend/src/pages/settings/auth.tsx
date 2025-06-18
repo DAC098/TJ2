@@ -1,37 +1,19 @@
-import { useRef, useState, useEffect, useMemo, JSX } from "react";
-import { Link, useParams, useNavigate } from "react-router-dom";
-import {  } from "lucide-react";
-import { useForm, useFormContext, FormProvider, SubmitHandler, Form } from "react-hook-form";
+import { useState, useEffect } from "react";
+import { useForm, FormProvider } from "react-hook-form";
 import QRCode from "qrcode";
 
 import { Button } from "@/components/ui/button";
 import {
     FormControl,
-    FormDescription,
     FormField,
     FormItem,
     FormLabel,
-    FormMessage,
 } from "@/components/ui/form";
 import { Input, PasswordInput } from "@/components/ui/input";
 import { CenterPage } from "@/components/ui/page";
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import { send_to_clipboard } from "@/utils";
-
-interface AuthSettings {
-    password: {
-        current: "",
-        updated: "",
-        confirm: "",
-    },
-    totp: boolean
-}
+import { useTimer } from "@/components/hooks/timers";
 
 export function Auth() {
     return <CenterPage className="pt-4 max-w-xl">
@@ -50,6 +32,17 @@ interface PasswordForm {
 
 function PasswordUpdate() {
     const [display, set_display] = useState(false);
+    const [update_result, set_update_result] = useState({
+        failed: false,
+        message: ""
+    });
+    const {set, clear} = useTimer(() => {
+        set_update_result({
+            failed: false,
+            message: "",
+        });
+    })
+
     const form = useForm<PasswordForm>({
         defaultValues: {
             current: "",
@@ -58,7 +51,108 @@ function PasswordUpdate() {
         }
     });
 
-    function on_submit(data: PasswordForm) {
+    async function on_submit(data: PasswordForm) {
+        set_update_result({
+            failed: false,
+            message: "",
+        });
+        clear();
+
+        try {
+            let body = JSON.stringify({
+                type: "UpdatePassword",
+                ...data
+            });
+
+            let response = await fetch("/settings/auth", {
+                method: "PATCH",
+                headers: {
+                    "content-type": "application/json; charset=utf-8",
+                    "content-length": body.length.toString(10),
+                },
+                body
+            });
+
+            let json = await response.json();
+
+            switch (response.status) {
+                case 200:
+                    if (json.type === "UpdatedPassword") {
+                        form.reset();
+
+                        set_update_result({
+                            failed: false,
+                            message: "Updated Password",
+                        });
+                        set(3000);
+                    } else {
+                        console.error("unknown response:", response.status, json);
+
+                        set_update_result({
+                            failed: true,
+                            message: "unknown response",
+                        });
+                    }
+                    break;
+                case 400:
+                    if (json.error === "InvalidConfirm") {
+                        console.log("confirm password does not match updated");
+
+                        set_update_result({
+                            failed: true,
+                            message: "Invalid confirm provided. Make sure that \"updated\" and \"confirm\" are the same.",
+                        });
+                    } else {
+                        console.error("unknown response:", response.status, json);
+
+                        set_update_result({
+                            failed: true,
+                            message: "unknown response",
+                        });
+                    }
+                    break;
+                case 403:
+                    if (json.error === "InvalidPassword") {
+                        console.log("invalid password");
+
+                        set_update_result({
+                            failed: true,
+                            message: "Invalid password provided",
+                        });
+                    } else {
+                        console.error("unknown response:", response.status, json);
+
+                        set_update_result({
+                            failed: true,
+                            message: "unknown response",
+                        });
+                    }
+                    break;
+                case 500:
+                    console.log("server error", json);
+
+                    set_update_result({
+                        failed: true,
+                        message: "server error",
+                    });
+                    break;
+                default:
+                    console.error("unknown response:", response.status, json);
+
+                    set_update_result({
+                        failed: true,
+                        message: "unknown response",
+                    });
+                    break;
+            }
+        } catch (err) {
+            console.error("error sending password update", err);
+
+            set_update_result({
+                failed: true,
+                message: "client error",
+            });
+        }
     }
 
     return <div className="space-y-4">
@@ -99,8 +193,9 @@ function PasswordUpdate() {
                             </FormControl>
                         </FormItem>;
                     }}/>
-                    <div className="flex flex-row gap-4">
-                        <Button type="submit" disabled={!form.formState.isDirty}>Save</Button>
+                    <div className="flex flex-row gap-4 items-center">
+                        <Button type="submit" disabled={!form.formState.isDirty || form.formState.isSubmitting}>Save</Button>
+                        <span>{update_result.message}</span>
                     </div>
                 </form>
             </FormProvider>
