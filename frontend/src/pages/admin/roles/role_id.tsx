@@ -163,8 +163,20 @@ function RoleHeader({role_id, on_delete}: RoleHeaderProps) {
     </div>;
 }
 
+interface RolePermissionJson {
+    scope: string,
+    abilities: string[],
+}
+
+interface RoleJson {
+    name: string,
+    permissions: RolePermissionJson[],
+    users: string | number[],
+    groups: string | number[],
+}
+
 function form_to_body(form: RoleForm) {
-    let rtn = {
+    let rtn: RoleJson = {
         name: form.name,
         permissions: [],
         users: form.users.map(attached => {

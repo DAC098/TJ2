@@ -96,6 +96,10 @@ export function User() {
     const { users_id } = useParams();
     const navigate = useNavigate();
 
+    if (users_id == null) {
+        throw new Error("missing users_id");
+    }
+
     const [show_password, set_show_password] = useState(false);
     const [loading, set_loading] = useState(false);
 
@@ -107,7 +111,7 @@ export function User() {
         }
     });
 
-    const create_user = async (data) => {
+    const create_user = async (data: UserForm) => {
         let body = JSON.stringify({
             username: data.username,
             password: data.password,
@@ -148,7 +152,7 @@ export function User() {
         return null;
     };
 
-    const update_user = async (users_id, data) => {
+    const update_user = async (users_id: string, data: UserForm) => {
         let body = JSON.stringify({
             username: data.username,
             password: data.password.length !== 0 ? data.password : null,
@@ -273,6 +277,12 @@ export function User() {
         set_loading(true);
 
         get_user(users_id).then(result => {
+            if (result == null) {
+                console.log("null result");
+
+                return;
+            }
+
             let form_reset = {
                 username: result.username,
                 password: "",

@@ -114,12 +114,11 @@ function EntryHeader({journals_id, entries_id, loading}: EntryHeaderProps) {
                             </Button>
                         </FormControl>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" aligh="start">
+                    <PopoverContent className="w-auto p-0" align="start">
                         <Calendar
-                            name={field.name}
                             mode="single"
                             selected={date_value}
-                            onBlur={field.onBlur}
+                            onDayBlur={field.onBlur}
                             onSelect={field.onChange}
                             disabled={(date) => {
                                 return date > new Date() || date < new Date("1900-01-01");
@@ -166,8 +165,6 @@ async function parallel_uploads(
         switch (file.type) {
             case "received":
             case "requested":
-            case "remote":
-                continue;
             case "local":
             case "in-memory":
                 mapped[file.key] = file;

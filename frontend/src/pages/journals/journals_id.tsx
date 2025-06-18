@@ -138,6 +138,10 @@ export function Journal() {
     const { journals_id } = useParams();
     const navigate = useNavigate();
 
+    if (journals_id == null) {
+        throw new Error("missing journals_id");
+    }
+
     const form = useForm<JournalForm>({
         defaultValues: async () => {
             if (journals_id === "new") {
@@ -219,10 +223,13 @@ export function Journal() {
             };
 
             if (field._id != null) {
-                obj["id"] = field._id;
+                custom_fields.push({
+                    id: field._id,
+                    ...obj
+                });
+            } else {
+                custom_fields.push(obj);
             }
-
-            custom_fields.push(obj);
         }
 
         for (let peer of data.peers) {
@@ -302,7 +309,7 @@ export function Journal() {
                     return <FormItem className="w-1/2">
                         <FormLabel>Description</FormLabel>
                         <FormControl>
-                            <Textarea type="text" {...field}/>
+                            <Textarea {...field}/>
                         </FormControl>
                     </FormItem>
                 }}/>
@@ -569,7 +576,7 @@ function CustomFieldList({}: CustomFieldListProps) {
                         return <FormItem className="w-3/4">
                             <FormLabel>Description</FormLabel>
                             <FormControl>
-                                <Textarea type="text" {...desc_field}/>
+                                <Textarea {...desc_field}/>
                             </FormControl>
                         </FormItem>
                     }}/>

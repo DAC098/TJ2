@@ -52,15 +52,15 @@ import {
     naive_date_to_date,
     custom_field,
 } from "@/journals/api";
-import { RecordAudio, PlayAudio } from "@/journals/audio";
-import { CustomFieldEntries, CustomFieldEntryCell } from "@/journals/custom_fields";
-import { RecordVideo, PlayVideo } from "@/journals/video";
-import { ViewImage } from "@/journals/image";
-import { getUserMedia } from "@/media";
+import { ViewImage } from "@/components/image";
+import { RecordAudio, PlayAudio } from "@/components/audio";
+import { RecordVideo, PlayVideo } from "@/components/video";
 import { useObjectUrl } from "@/hooks";
+import { CustomFieldEntries, CustomFieldEntryCell } from "@/journals/custom_fields";
+import { getUserMedia } from "@/media";
+import { parse_mime, default_mime } from "@/parse";
 import { cn } from "@/utils";
 import { uuidv4 } from "@/uuid";
-import { parse_mime, default_mime } from "@/parse";
 
 interface CustomFieldPartial {
     id: number,
@@ -75,7 +75,7 @@ export function Entries() {
     let [loading, set_loading] = useState(false);
     let [{entries, custom_fields}, set_list_data] = useState<{
         entries: EntryPartial[],
-        custom_fields: CustomFieldPartial
+        custom_fields: CustomFieldPartial[]
     }>({
         entries: [],
         custom_fields: [],
@@ -151,7 +151,7 @@ export function Entries() {
                     for (let tag in row.original.tags) {
                         let value = row.original.tags[tag];
 
-                        list.push(<Badge key={tag} variant="outline" title={value}>
+                        list.push(<Badge key={tag} variant="outline" title={value ?? ""}>
                             {tag}
                         </Badge>);
                     }
@@ -170,7 +170,7 @@ export function Entries() {
                         includeSeconds: true,
                     });
 
-                    return <span title={to_use} className="text-nowrap">{distance}</span>;
+                    return <span title={to_use.toString()} className="text-nowrap">{distance}</span>;
                 }
             }
         );

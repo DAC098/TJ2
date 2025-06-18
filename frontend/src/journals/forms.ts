@@ -6,6 +6,7 @@ export interface JournalForm {
     name: string,
     description: string,
     custom_fields: JournalCustomFieldForm[],
+    peers: JournalPeerForm[],
 }
 
 export interface JournalPeerForm {
