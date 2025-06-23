@@ -2,7 +2,7 @@ use rand::RngCore;
 
 pub mod authn;
 pub mod authz;
-pub mod otp;
+pub mod mfa;
 pub mod password;
 pub mod pki;
 

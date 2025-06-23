@@ -14,7 +14,7 @@ use crate::db::ids::{FileEntryId, JournalId, UserId};
 use crate::error::{self, Context};
 use crate::journal::JournalDir;
 use crate::sec::authn::session::ApiSessionToken;
-use crate::sec::otp::Totp;
+use crate::sec::mfa::otp::Totp;
 use crate::sec::pki::Data;
 use crate::templates;
 use crate::user::UserDir;

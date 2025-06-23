@@ -9,7 +9,7 @@ use crate::net::{body, Error as NetError};
 use crate::sec;
 use crate::sec::authn::session::SessionOptions;
 use crate::sec::authn::{Initiator, InitiatorError, Session};
-use crate::sec::otp;
+use crate::sec::mfa::otp;
 use crate::state;
 use crate::user;
 

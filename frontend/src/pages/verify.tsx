@@ -1,17 +1,15 @@
-import { useState } from "react";
 import { useForm, SubmitHandler } from "react-hook-form";
-import { useNavigate, useLocation, Link } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 
 import { send_json } from "@/net";
 
-import { Input, PasswordInput } from "@/components/ui/input";
 import {
     InputOTP,
     InputOTPGroup,
     InputOTPSlot,
 } from "@/components/ui/input-otp"
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
 
 interface VerifyForm {
     code: string
@@ -29,7 +27,7 @@ export function Verify() {
 
     const on_submit: SubmitHandler<VerifyForm> = async (data, event) => {
         try {
-            let res = await send_json("POST", "/verify", data);
+            let res = await send_json("POST", "/verify", {type: "Totp", ...data});
             let prev = new URL(location.pathname + location.search, window.location.origin)
                 .searchParams
                 .get("prev");

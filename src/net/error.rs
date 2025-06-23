@@ -133,7 +133,7 @@ simple_from!(crate::db::PgError);
 simple_from!(crate::db::PoolError);
 simple_from!(crate::error::Error);
 simple_from!(crate::sec::authn::token::InvalidBase64);
-simple_from!(crate::sec::otp::UnixTimestampError);
+simple_from!(crate::sec::mfa::otp::UnixTimestampError);
 simple_from!(crate::sec::password::HashError);
 simple_from!(crate::sec::pki::EncryptError);
 simple_from!(crate::sec::pki::DecryptError);
@@ -259,6 +259,17 @@ impl<T> From<ApiInitiatorError> for Error<T> {
                 src: Some(err.into()),
             },
             ApiInitiatorError::DbPg(err) => err.into(),
+        }
+    }
+}
+
+use crate::sec::mfa::RecoveryError;
+
+impl<T> From<RecoveryError> for Error<T> {
+    fn from(err: RecoveryError) -> Self {
+        match err {
+            RecoveryError::Hash(err) => err.into(),
+            RecoveryError::Db(err) => err.into(),
         }
     }
 }

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::net::Error as NetError;
 use crate::router::{body, macros};
 use crate::sec::authn::{Initiator, InitiatorError};
-use crate::sec::otp;
+use crate::sec::mfa::{self, otp};
 use crate::state;
 
 pub async fn get(
@@ -18,8 +18,14 @@ pub async fn get(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct VerifyBody {
-    code: String,
+#[serde(tag = "type")]
+pub enum VerifyBody {
+    Totp {
+        code: String,
+    },
+    Recovery {
+        code: String,
+    }
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -27,6 +33,7 @@ pub struct VerifyBody {
 pub enum VerifyError {
     MFANotFound,
     InvalidCode,
+    InvalidRecovery,
     AlreadyVerified,
     InvalidSession,
 }
@@ -34,7 +41,7 @@ pub enum VerifyError {
 impl IntoResponse for VerifyError {
     fn into_response(self) -> Response {
         match self {
-            Self::InvalidSession | Self::InvalidCode | Self::AlreadyVerified => {
+            Self::InvalidSession | Self::InvalidCode | Self::AlreadyVerified | Self::InvalidRecovery => {
                 (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
             }
             Self::MFANotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
@@ -59,12 +66,21 @@ pub async fn post(
         },
     };
 
-    let totp = otp::Totp::retrieve(&transaction, &session.users_id)
-        .await?
-        .ok_or(NetError::Inner(VerifyError::MFANotFound))?;
+    match verify {
+        VerifyBody::Totp { code } => {
+            let totp = otp::Totp::retrieve(&transaction, &session.users_id)
+                .await?
+                .ok_or(NetError::Inner(VerifyError::MFANotFound))?;
 
-    if !totp.verify(&verify.code)? {
-        return Err(NetError::Inner(VerifyError::InvalidCode));
+            if !totp.verify(&code)? {
+                return Err(NetError::Inner(VerifyError::InvalidCode));
+            }
+        }
+        VerifyBody::Recovery { code } => {
+            if !mfa::verify_and_mark(&transaction, &session.users_id, &code).await? {
+                return Err(NetError::Inner(VerifyError::InvalidRecovery));
+            }
+        }
     }
 
     session.verified = true;

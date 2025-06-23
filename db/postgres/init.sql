@@ -64,6 +64,12 @@ create table authn_totp (
     secret bytea not null
 );
 
+create table authn_recovery (
+    users_id bigint not null references users (id),
+    hash varchar not null unique,
+    used_on timestamp with time zone
+);
+
 create table authn_sessions (
     token bytea primary key not null,
     users_id bigint not null references users (id),
