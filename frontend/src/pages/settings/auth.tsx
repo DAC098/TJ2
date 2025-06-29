@@ -1,6 +1,9 @@
+import { format } from "date-fns";
 import { useState, useEffect } from "react";
 import { useForm, FormProvider } from "react-hook-form";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import QRCode from "qrcode";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -9,18 +12,25 @@ import {
     FormItem,
     FormLabel,
 } from "@/components/ui/form";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import { Input, PasswordInput } from "@/components/ui/input";
 import { CenterPage } from "@/components/ui/page";
 import { Separator } from "@/components/ui/separator";
-import { send_to_clipboard } from "@/utils";
+import { cn, send_to_clipboard } from "@/utils";
 import { useTimer } from "@/components/hooks/timers";
+import { ApiError, req_api_json } from "@/net";
 
 export function Auth() {
     return <CenterPage className="pt-4 max-w-xl">
         <PasswordUpdate />
         <Separator />
         <MFAUpdate />
-        <Separator />
     </CenterPage>;
 }
 
@@ -36,12 +46,12 @@ function PasswordUpdate() {
         failed: false,
         message: ""
     });
-    const {set, clear} = useTimer(() => {
+    const [set_timer, clear_timer] = useTimer(() => {
         set_update_result({
             failed: false,
             message: "",
         });
-    })
+    });
 
     const form = useForm<PasswordForm>({
         defaultValues: {
@@ -56,102 +66,54 @@ function PasswordUpdate() {
             failed: false,
             message: "",
         });
-        clear();
+        clear_timer();
 
         try {
-            let body = JSON.stringify({
+            let json = await req_api_json("PATCH", "/settings/auth", {
                 type: "UpdatePassword",
                 ...data
             });
 
-            let response = await fetch("/settings/auth", {
-                method: "PATCH",
-                headers: {
-                    "content-type": "application/json; charset=utf-8",
-                    "content-length": body.length.toString(10),
-                },
-                body
+            if (json.type !== "UpdatedPassword") {
+                throw new Error(`unknown json.type from server: ${json.type}`);
+            }
+
+            form.reset();
+
+            set_update_result({
+                failed: false,
+                message: "Updated Password",
             });
-
-            let json = await response.json();
-
-            switch (response.status) {
-                case 200:
-                    if (json.type === "UpdatedPassword") {
-                        form.reset();
-
-                        set_update_result({
-                            failed: false,
-                            message: "Updated Password",
-                        });
-                        set(3000);
-                    } else {
-                        console.error("unknown response:", response.status, json);
-
-                        set_update_result({
-                            failed: true,
-                            message: "unknown response",
-                        });
-                    }
-                    break;
-                case 400:
-                    if (json.error === "InvalidConfirm") {
-                        console.log("confirm password does not match updated");
-
+            set_timer(3000);
+        } catch (err) {
+            if (err instanceof ApiError) {
+                switch (err.kind) {
+                    case "InvalidConfirm":
                         set_update_result({
                             failed: true,
                             message: "Invalid confirm provided. Make sure that \"updated\" and \"confirm\" are the same.",
                         });
-                    } else {
-                        console.error("unknown response:", response.status, json);
-
-                        set_update_result({
-                            failed: true,
-                            message: "unknown response",
-                        });
-                    }
-                    break;
-                case 403:
-                    if (json.error === "InvalidPassword") {
-                        console.log("invalid password");
-
+                        break;
+                    case "InvalidPassword":
                         set_update_result({
                             failed: true,
                             message: "Invalid password provided",
                         });
-                    } else {
-                        console.error("unknown response:", response.status, json);
-
+                        break;
+                    default:
                         set_update_result({
                             failed: true,
                             message: "unknown response",
                         });
-                    }
-                    break;
-                case 500:
-                    console.log("server error", json);
+                }
+            } else {
+                console.error("error sending password update", err);
 
-                    set_update_result({
-                        failed: true,
-                        message: "server error",
-                    });
-                    break;
-                default:
-                    console.error("unknown response:", response.status, json);
-
-                    set_update_result({
-                        failed: true,
-                        message: "unknown response",
-                    });
-                    break;
+                set_update_result({
+                    failed: true,
+                    message: "client error",
+                });
             }
-        } catch (err) {
-            console.error("error sending password update", err);
-
-            set_update_result({
-                failed: true,
-                message: "client error",
-            });
         }
     }
 
@@ -205,15 +167,6 @@ function PasswordUpdate() {
     </div>;
 }
 
-function MFAUpdate() {
-    return <div className="space-y-4">
-        <h2 className="text-xl">Multi-Factor Authentication (MFA, 2FA)</h2>
-        <div className="space-y-4">
-            <TotpEdit />
-        </div>
-    </div>;
-}
-
 interface TotpEnabled {
     type: "enabled"
 }
@@ -234,92 +187,121 @@ interface TotpVerify {
 
 type TotpState = TotpEnabled | TotpDisabled | TotpVerify;
 
-function TotpEdit() {
+interface MFAData {
+    type: "MFA",
+    totp: boolean,
+    recovery: (string | null)[] | null
+}
+
+type AuthQuery = MFAData;
+
+function MFAUpdate() {
+    const client = useQueryClient();
+    const {data, isError, isLoading} = useQuery({
+        queryKey: ["mfa_query"],
+        initialData: {
+            type: "MFA",
+            totp: false,
+            recovery: null
+        },
+        queryFn: async () => {
+            let json = await req_api_json<AuthQuery>("GET", "/settings/auth?kind=MFA");
+
+            if (json.type !== "MFA") {
+                throw new Error(`unknown json.type from server: ${json.type}`);
+            }
+
+            return json;
+        }
+    });
+
+    let contents;
+
+    if (isLoading) {
+        contents = <div>Loading...</div>;
+    } else if (isError) {
+        contents = <div>Failed to load MFA data</div>;
+    } else {
+        contents = <>
+            <TotpEdit enabled={data.totp} on_update={state => {
+                client.setQueryData(
+                    ["mfa_query"],
+                    state ? 
+                        {type: "MFA", totp: true, recovery: null} :
+                        {type: "MFA", totp: false, recovery: null}
+                );
+            }}/>
+            <RecoveryEdit allowed={data.totp} used_on={data.recovery} on_update={state => {
+                client.setQueryData(
+                    ["mfa_query"],
+                    state ?
+                        {type: "MFA", totp: true, recovery: [null, null, null, null, null]} :
+                        {type: "MFA", totp: true, recovery: null}
+                );
+            }}/>
+        </>
+    }
+
+    return <div className="space-y-4">
+        <h2 className="text-xl">Multi-Factor Authentication (MFA, 2FA)</h2>
+        <div className="space-y-4">
+            {contents}
+        </div>
+    </div>;
+}
+
+interface TotpEditProps {
+    enabled: boolean,
+    on_update: (state: boolean) => void,
+}
+
+function TotpEdit({enabled, on_update}: TotpEditProps) {
     const [loading, set_loading] = useState(false);
     const [view_params, set_view_params] = useState(false);
 
     const [code, set_code] = useState("");
+    const [verify_err, set_verify_err] = useState<string | null>(null);
 
-    const [state, set_state] = useState<TotpState>({type: "disabled"});
-
-    async function fetch_totp() {
-        set_loading(true);
-
-        try {
-            let res = await fetch("/settings/auth?kind=Totp")
-
-            if (res.status === 200) {
-                let json = await res.json();
-
-                if (json.type === "Totp") {
-                    set_state({type: json.enabled ? "enabled" : "disabled"});
-                } else {
-                    console.warn("unhandled response type", json.type);
-                }
-            } else {
-                console.warn("unhandled response code");
-            }
-        } catch (err) {
-            console.error("failed to retrieve totp settings", err);
-        }
-
-        set_loading(false);
-    }
+    const [state, set_state] = useState<TotpState>(enabled ? {type: "enabled"} : {type: "disabled"});
 
     async function enable_totp() {
         set_loading(true);
 
         try {
-            let body = JSON.stringify({
-                type: "EnableTotp",
-            });
-            let res = await fetch("/settings/auth", {
-                method: "PATCH",
-                headers: {
-                    "content-type": "application/json",
-                    "content-length": body.length.toString(10),
-                },
-                body
+            let json = await req_api_json("PATCH", "/settings/auth", {
+                type: "EnableTotp"
             });
 
-            switch (res.status) {
-                case 200:
-                    let json = await res.json();
-
-                    if (json.type !== "CreatedTotp") {
-                        console.log("response type is not CreatedTotp");
-                    } else {
-                        let { algo, step, digits, secret } = json;
-                        let url = `otpauth://totp/test?issuer=tj2&secret=${secret}&period=${step}&algorithm=${algo}`;
-
-                        let data_url = await QRCode.toDataURL(url, {
-                            type: "image/png",
-                            //quality: 1,
-                            margin: 1,
-                            color: {
-                                dark: "#010599FF",
-                                light: "#FFBF60FF",
-                            }
-                        });
-
-                        set_code("");
-                        set_state({
-                            type: "verify",
-                            algo,
-                            step,
-                            digits,
-                            secret,
-                            url,
-                            data_url,
-                        });
-                    }
-                    break;
-                default:
-                    console.warn("unhandled status code");
-                    break;
+            if (json.type !== "EnabledTotp") {
+                throw new Error(`unknown json type from server: ${json.type}`);
             }
+
+            let { algo, step, digits, secret } = json;
+            let url = `otpauth://totp/test?issuer=tj2&secret=${secret}&period=${step}&algorithm=${algo}`;
+
+            let data_url = await QRCode.toDataURL(url, {
+                type: "image/png",
+                margin: 1,
+                color: {
+                    dark: "#010599FF",
+                    light: "#FFBF60FF",
+                }
+            });
+
+            set_code("");
+            set_state({
+                type: "verify",
+                algo,
+                step,
+                digits,
+                secret,
+                url,
+                data_url,
+            });
         } catch (err) {
             console.error("failed to enable totp", err);
+
+            toast("Failed to enable Totp.");
         }
 
         set_loading(false);
@@ -329,50 +311,32 @@ function TotpEdit() {
         set_loading(true);
 
         try {
-            let body = JSON.stringify({
+            let json = await req_api_json("PATCH", "/settings/auth", {
                 type: "VerifyTotp",
                 code: code
             });
-            let res = await fetch("/settings/auth", {
-                method: "PATCH",
-                headers: {
-                    "content-type": "application/json",
-                    "content-length": body.length.toString(10),
-                },
-                body
-            });
 
-            switch (res.status) {
-                case 200: {
-                    let json = await res.json();
-
-                    if (json.type === "VerifiedTotp") {
-                        set_code("");
-                        set_view_params(false);
-                        set_state({type: "enabled"});
-                    } else {
-                        console.log("response type is not VerifiedTotp");
-                    }
-
-                    break;
-                }
-                case 400: {
-                    let json = await res.json();
-
-                    if (json.type === "InvalidTotpCode") {
-                        console.log("Invalid totp code");
-                    } else if (json.type === "TotpNotFound") {
-                        console.log("totp was not found for user");
-                    }
-
-                    break;
-                }
-                default:
-                    console.warn("unhandled status code");
-                    break;
+            if (json.type !== "VerifiedTotp") {
+                throw new Error(`unknown json type from server: ${json.type}`);
             }
+
+            on_update(true);
         } catch (err) {
-            console.error("error when verifying totp", err);
+            if (err instanceof ApiError) {
+                if (err.kind === "InvalidTotpCode") {
+                    set_verify_err("Invalid Totp code");
+                } else if (err.kind === "TotpNotFound") {
+                    set_verify_err("Totp is no longer available. Try disabling and re-enabling");
+                } else {
+                    console.error("error when verifying totp", err);
+
+                    set_verify_err("error when sending verification code.");
+                }
+            } else {
+                console.error("error when verifying totp", err);
+
+                set_verify_err("error when sending verification code.");
+            }
         }
 
         set_loading(false);
@@ -382,39 +346,37 @@ function TotpEdit() {
         set_loading(true);
 
         try {
-            let body = JSON.stringify({
+            let json = await req_api_json("PATCH", "/settings/auth", {
                 type: "DisableTotp"
             });
-            let res = await fetch("/settings/auth", {
-                method: "PATCH",
-                headers: {
-                    "content-type": "application/json",
-                    "content-length": body.length.toString(10),
-                },
-                body
-            });
 
-            switch (res.status) {
-                case 200:
-                    set_view_params(false);
-                    set_state({type: "disabled"});
-                    break;
-                default:
-                    console.warn("unhandled status code");
-                    break;
+            if (json.type !== "DisabledTotp" && json.type !== "Noop") {
+                throw new Error(`unknown json.type from server: ${json.type}`);
+            }
+
+            if (enabled) {
+                on_update(false);
+            } else {
+                set_state({type: "disabled"});
+                set_code("");
+                set_verify_err(null);
+                set_view_params(false);
             }
         } catch (err) {
-            console.error("error when disabling totp");
+            console.error("error when disabling totp", err);
+
+            toast("Failed to disable Totp.");
         }
 
         set_loading(false);
     }
 
     useEffect(() => {
-        fetch_totp();
-
-        return () => {};
-    }, []);
+        set_state(enabled ? {type: "enabled"} : {type: "disabled"});
+        set_code("");
+        set_verify_err(null);
+        set_view_params(false);
+    }, [enabled]);
 
     let button;
 
@@ -451,13 +413,13 @@ function TotpEdit() {
             break;
     }
 
-    return <div className="rounded-lg border p-4 space-y-4">
-        <div className="flex flex-row items-center justify-between">
+    return <div className="rounded-lg border space-y-4">
+        <div className={cn("flex flex-row gap-2 items-start justify-between", {"p-4": state.type !== "verify", "pt-4 px-4": state.type === "verify"})}>
             <div className="space-y-0.5">
                 <span className="text-base">
                     Time One-Time-Password (TOTP)
                 </span>
-                <p className="text-xs">
+                <p className="text-sm">
                     Enable / Disable a Time based One-Time-Passwords when loging into the server
                 </p>
             </div>
@@ -465,60 +427,257 @@ function TotpEdit() {
         </div>
         {state.type === "verify" ?
             <>
-                <div className="flex flex-row flex-nowrap gap-4">
+                <Separator/>
+                <div className="pb-4 px-4 space-y-4">
+                    <div className="flex flex-row flex-nowrap gap-4">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={() => send_to_clipboard(state.url).then(() => {
+                                console.log("wrote to clipboard");
+                            }).catch(err => {
+                                console.error("failed writing to clipboard", err);
+                            })}
+                        >
+                            Copy URL
+                        </Button>
+                        <Button type="button" variant="ghost" onClick={() => set_view_params(v => !v)}>
+                            {view_params ? "Hide Params" : "Show Params"}
+                        </Button>
+                    </div>
+                    <div className="flex flex-row gap-2">
+                        <img src={state.data_url}/>
+                        {view_params ?
+                            <div className="flex flex-col gap-2">
+                                <span>algo: {state.algo}</span>
+                                <span>period: {state.step}</span>
+                                <span>digits: {state.digits}</span>
+                                <span
+                                    className="hover:underline cursor-pointer"
+                                    onClick={() => send_to_clipboard(state.secret).then(() => {
+                                        console.log("wrote to clipboard");
+                                    }).catch(err => {
+                                        console.error("failed writing to clipboard", err);
+                                    })}
+                                >
+                                    copy secret
+                                </span>
+                            </div>
+                            :
+                            null
+                        }
+                    </div>
+                    <p className="text-sm">
+                        You have 3 minutes to verify that your Authenticator works before the server discards the data.
+                    </p>
+                    <div className="space-y-0.5">
+                        <Input className="w-1/2" value={code} disabled={loading} onChange={e => {
+                            set_code(e.target.value);
+                            set_verify_err(null);
+                        }}/>
+                        {verify_err != null ?
+                            <p className="text-sm font-medium text-destructive">{verify_err}</p>
+                            :
+                            null
+                        }
+                    </div>
                     <Button
                         type="button"
-                        variant="ghost"
-                        onClick={() => send_to_clipboard(state.url).then(() => {
-                            console.log("wrote to clipboard");
-                        }).catch(err => {
-                            console.error("failed writing to clipboard", err);
-                        })}
+                        disabled={loading || code.length === 0}
+                        onClick={() => verify_totp()}
                     >
-                        Copy URL
-                    </Button>
-                    <Button type="button" variant="ghost" onClick={() => set_view_params(v => !v)}>
-                        {view_params ? "Hide Params" : "Show Params"}
+                        Verify
                     </Button>
                 </div>
-                <div className="flex flex-row gap-2">
-                    <img src={state.data_url}/>
-                    {view_params ?
-                        <div className="flex flex-col gap-2">
-                            <span>algo: {state.algo}</span>
-                            <span>period: {state.step}</span>
-                            <span>digits: {state.digits}</span>
-                            <span
-                                className="hover:underline cursor-pointer"
-                                onClick={() => send_to_clipboard(state.secret).then(() => {
-                                    console.log("wrote to clipboard");
-                                }).catch(err => {
-                                    console.error("failed writing to clipboard", err);
-                                })}
-                            >
-                                copy secret
-                            </span>
-                        </div>
-                        :
-                        null
-                    }
-                </div>
-                <p className="text-xs">
-                    You have 3 minutes to verify that your Authenticator works before the server discards the data.
-                </p>
-                <Input className="w-1/2" value={code} disabled={loading} onChange={e => {
-                    set_code(e.target.value);
-                }}/>
-                <Button
-                    type="button"
-                    disabled={loading || code.length === 0}
-                    onClick={() => verify_totp()}
-                >
-                    Verify
-                </Button>
             </>
             :
             null
         }
     </div>;
+}
+
+interface RecoveryEditProps {
+    allowed: boolean,
+    used_on: (string | null)[] | null,
+    on_update: (state: boolean) => void,
+}
+
+function RecoveryEdit({allowed, used_on, on_update}: RecoveryEditProps) {
+    const [loading, set_loading] = useState(false);
+
+    const [codes, set_codes] = useState<string[] | null>(null);
+
+    async function enable_recovery() {
+        set_loading(true);
+
+        try {
+            let json = await req_api_json("PATCH", "/settings/auth", {
+                type: "EnableRecovery"
+            });
+
+            if (json.type !== "EnabledRecovery") {
+                throw new Error(`unknown json.type from server: ${json.type}`);
+            }
+
+            set_codes(json.codes);
+
+            on_update(true);
+        } catch (err) {
+            if (err instanceof ApiError) {
+                toast("failed to enable recovery codes");
+            } else {
+                toast("failed to enable recovery codes");
+            }
+        }
+
+        set_loading(false);
+    }
+
+    async function disable_recovery() {
+        set_loading(true);
+
+        try {
+            let json = await req_api_json("PATCH", "/settings/auth", {
+                type: "DisableRecovery",
+            });
+
+            if (json.type !== "DisabledRecovery") {
+                throw new Error(`unknown json.type from server: ${json.type}`);
+            }
+
+            on_update(false);
+        } catch (err) {
+            if (err instanceof ApiError) {
+                toast("failed to disable recovery codes.");
+            } else {
+                toast("Failed to disable recovery codes.");
+            }
+        }
+
+        set_loading(false);
+    }
+
+    useEffect(() => {
+        if (!allowed) {
+            set_codes(null);
+        }
+    }, [allowed]);
+
+    let button;
+
+    if (!allowed) {
+        button = <Button
+            type="button"
+            variant="secondary"
+            disabled={true}
+        >
+            Enable TOTP
+        </Button>;
+    } else if (allowed) {
+        if (used_on == null) {
+            button = <Button
+                type="button"
+                variant="secondary"
+                disabled={loading}
+                onClick={() => enable_recovery()}
+            >
+                Enable
+            </Button>;
+        } else {
+            button = <Button
+                type="button"
+                variant="destructive"
+                disabled={loading}
+                onClick={() => disable_recovery()}
+            >
+                Disable
+            </Button>;
+        }
+    }
+
+    let used_on_list = [];
+
+    for (let date of used_on ?? []) {
+        if (date == null) {
+            continue;
+        }
+
+        let fmt = format(date, "yyyy/MM/dd HH:mm:ss");
+
+        used_on_list.push(<li key={date} title={date}>{fmt}</li>);
+    }
+
+    return <div className="rounded-lg border space-y-4">
+        <div className={cn("flex flex-row gap-2 items-start justify-between", {"p-4": used_on == null, "pt-4 px-4": used_on != null})}>
+            <div className="space-y-0.5">
+                <span className="text-base">
+                    Recovery Codes
+                </span>
+                <p className="text-sm">
+                    Allow for the use of recovery codes in the event that a MFA method is not available (ex. loosing an authenticator).
+                </p>
+            </div>
+            {button}
+        </div>
+        {used_on != null ?
+            <>
+                <Separator/>
+                <div className="pb-4 px-4 space-y-0.5">
+                {used_on_list.length > 0 ?
+                    <>
+                        <p className="text-xs">
+                            A list of dates indicating when a recovery code was used.
+                        </p>
+                        <ul className="pl-4">
+                            {used_on_list}
+                        </ul>
+                    </>
+                    :
+                    <p className="text-sm">
+                        No codes have been used.
+                    </p>
+                }
+                </div>
+            </>
+            :
+            null
+        }
+        {codes != null ?
+            <Dialog defaultOpen={true} onOpenChange={v => {
+                if (!v) {
+                    set_codes(null);
+                }
+            }}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Recovery Codes</DialogTitle>
+                        <DialogDescription>
+                            This is the list of recovery codes to use. DO NOT SHARE THESE. Treat them as passwords and place them somewhere safe. THESE WILL NOT BE SHOWN AGAIN.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <Separator/>
+                    <div className="flex flex-col items-center space-y-4">
+                        <ul>
+                            {codes.map(code => {
+                                return <li key={code}><pre>{code}</pre></li>
+                            })}
+                        </ul>
+                        <Button type="button" variant={"secondary"} onClick={() => {
+                            send_to_clipboard(codes.join("\n")).then(() => {
+                                toast("Copied to clipboard");
+                            }).catch(err => {
+                                console.error("failed to copy codes to clipboard", err);
+
+                                toast("Failed to copy to clipboard");
+                            });
+                        }}>
+                            Copy to Clipboard
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
+            :
+            null
+        }
+    </div>
 }

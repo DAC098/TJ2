@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react"
 
-export function useTimer(callback: () => void) {
+export function useTimer(callback: () => void): [(ms: number) => void, () => void] {
     let timer_ref = useRef<number>();
     let cb_ref = useRef(callback);
 
@@ -8,21 +8,23 @@ export function useTimer(callback: () => void) {
         cb_ref.current = callback;
     }, [callback]);
 
-    return {
-        set: (ms: number) => {
-            if (timer_ref.current)
+    return [
+        (ms: number) => {
+            if (timer_ref.current) {
                 window.clearTimeout(timer_ref.current);
+            }
 
             timer_ref.current = window.setTimeout(() => {
                 window.clearTimeout(timer_ref.current);
                 cb_ref.current();
             }, ms);
         },
-        clear: () => {
-            if (timer_ref.current)
+        () => {
+            if (timer_ref.current) {
                 window.clearTimeout(timer_ref.current);
+            }
         }
-    }
+    ];
 }
 
 export function useInterval(callback: () => void, time: number) {

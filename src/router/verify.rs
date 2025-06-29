@@ -77,6 +77,10 @@ pub async fn post(
             }
         }
         VerifyBody::Recovery { code } => {
+            if !otp::Totp::exists(&transaction, &session.users_id).await? {
+                return Err(NetError::Inner(VerifyError::MFANotFound));
+            }
+
             if !mfa::verify_and_mark(&transaction, &session.users_id, &code).await? {
                 return Err(NetError::Inner(VerifyError::InvalidRecovery));
             }

@@ -10,15 +10,15 @@ use crate::db;
 use crate::net::{body, Error};
 use crate::sec::authn::Initiator;
 use crate::sec;
-use crate::sec::mfa::{otp, create_recovery, delete_recovery};
+use crate::sec::mfa::{otp, create_recovery, delete_recovery, RECOVERY_CODE_AMOUNT};
 use crate::state::{self, Security};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum AuthSettings {
-    Totp { enabled: bool },
-    Recovery {
-        used_on: Vec<Option<DateTime<Utc>>>,
+    MFA {
+        totp: bool,
+        recovery: Option<Vec<Option<DateTime<Utc>>>>,
     },
 }
 
@@ -29,8 +29,7 @@ pub struct AuthQuery {
 
 #[derive(Debug, Deserialize)]
 pub enum AuthKind {
-    Totp,
-    Recovery,
+    MFA
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -62,26 +61,35 @@ pub async fn get(
     let conn = state.db().get().await?;
 
     let result = match kind {
-        AuthKind::Totp => AuthSettings::Totp {
-            enabled: otp::Totp::exists(&conn, &initiator.user.id).await?,
-        },
-        AuthKind::Recovery => {
-            let stream = conn.query_raw(
-                "select used_on from authn_recovery where users_id = $1 order by used_on",
-                &[&initiator.user.id]
-            ).await?;
+        AuthKind::MFA => {
+            let totp = otp::Totp::exists(&conn, &initiator.user.id).await?;
 
-            futures::pin_mut!(stream);
+            let recovery = if totp {
+                let stream = conn.query_raw(
+                    "select used_on from authn_recovery where users_id = $1 order by used_on desc",
+                    &[&initiator.user.id]
+                ).await?;
 
-            let mut used_on = Vec::with_capacity(5);
+                futures::pin_mut!(stream);
 
-            while let Some(maybe) = stream.next().await {
-                let row = maybe?;
+                let mut used_on = Vec::with_capacity(RECOVERY_CODE_AMOUNT);
 
-                used_on.push(row.get(0));
-            }
+                while let Some(maybe) = stream.next().await {
+                    let row = maybe?;
 
-            AuthSettings::Recovery { used_on }
+                    used_on.push(row.get(0));
+                }
+
+                if used_on.is_empty() {
+                    None
+                } else {
+                    Some(used_on)
+                }
+            } else {
+                None
+            };
+
+            AuthSettings::MFA { totp, recovery }
         }
     };
 
@@ -99,7 +107,6 @@ pub enum UpdateAuth {
     // MFA Recovery
     EnableRecovery,
     DisableRecovery,
-    ResetRecovery,
 
     // Password
     UpdatePassword {
@@ -124,9 +131,6 @@ pub enum ResultAuth {
         codes: Vec<String>,
     },
     DisabledRecovery,
-    ResetRecovery {
-        codes: Vec<String>,
-    },
 
     // Password
     UpdatedPassword,
@@ -194,9 +198,6 @@ pub async fn patch(
         }
         UpdateAuth::DisableRecovery => {
             disable_recovery(&transaction, initiator).await?
-        }
-        UpdateAuth::ResetRecovery => {
-            reset_recovery(&transaction, initiator).await?
         }
         UpdateAuth::UpdatePassword { current, updated, confirm } => {
             update_password(&transaction, initiator, current, updated, confirm).await?
@@ -284,13 +285,15 @@ async fn disable_totp(
 ) -> Result<ResultAuth, Error<UpdateAuthError>> {
     security.vetting.totp.invalidate(&initiator.user.id);
 
-    match otp::Totp::retrieve(conn, &initiator.user.id).await? {
-        Some(record) => match record.delete(conn).await {
-            Ok(_) => Ok(ResultAuth::DisabledTotp),
-            Err(err) => Err(Error::from(err)),
-        },
-        None => Ok(ResultAuth::Noop),
-    }
+    let Some(record) = otp::Totp::retrieve(conn, &initiator.user.id).await? else {
+        return Ok(ResultAuth::Noop);
+    };
+
+    record.delete(conn).await?;
+
+    delete_recovery(conn, &initiator.user.id).await?;
+
+    Ok(ResultAuth::DisabledTotp)
 }
 
 async fn enable_recovery(
@@ -330,21 +333,6 @@ async fn disable_recovery(
     } else {
         Ok(ResultAuth::DisabledRecovery)
     }
-}
-
-async fn reset_recovery(
-    conn: &impl db::GenericClient,
-    initiator: Initiator,
-) -> Result<ResultAuth, Error<UpdateAuthError>> {
-    if !otp::Totp::exists(conn, &initiator.user.id).await? {
-        return Err(Error::Inner(UpdateAuthError::NoMFAEnabled));
-    }
-
-    delete_recovery(conn, &initiator.user.id).await?;
-
-    let codes = create_recovery(conn, &initiator.user.id).await?;
-
-    Ok(ResultAuth::ResetRecovery { codes })
 }
 
 async fn update_password(

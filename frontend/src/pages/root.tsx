@@ -1,5 +1,5 @@
 import { CSSProperties } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { Routes, Route } from "react-router-dom";
 
 import { SidebarProvider } from "@/components/ui/sidebar";
 
@@ -14,7 +14,7 @@ export function Root() {
         <SidebarProvider style={{"--sidebar-width": "350px"} as CSSProperties}>
             <AppSidebar/>
             <main className="relative flex-auto overflow-auto">
-                <div className="px-2 px-2 h-full">
+                <div className="px-2 h-full">
                     <Routes>
                         <Route index element={<div>root page</div>}/>
                         <Route path="/journals/*" element={<JournalRoutes />}/>
