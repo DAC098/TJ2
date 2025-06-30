@@ -735,15 +735,16 @@ SidebarMenuSubButton.displayName = "SidebarMenuSubButton";
 interface SidebarMenuLinkProps {
     title: string,
     path: string,
+    tooltip?: string | React.ReactElement,
     active?: boolean,
-    icon?: ReactElement,
+    icon?: React.ReactElement,
 }
 
-function SidebarMenuLink({title, path, icon, active = false}: SidebarMenuLinkProps) {
+function SidebarMenuLink({title, tooltip, path, icon, active = false}: SidebarMenuLinkProps) {
     return <SidebarMenuItem>
         <SidebarMenuButton
             asChild
-            tooltip={{children: title, hidden: false}}
+            tooltip={{children: tooltip ?? title, hidden: false}}
             isActive={active}
             className="px-2.5 md:px-2"
         >

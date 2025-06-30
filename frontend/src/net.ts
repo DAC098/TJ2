@@ -6,7 +6,7 @@ interface ErrorJson {
     message?: string,
 }
 
-interface ApiOptions {
+interface ApiErrorOptions {
     message?: string,
     source?: unknown,
     data?: any,
@@ -16,7 +16,7 @@ export class ApiError extends Error {
     public kind: string;
     public data: any;
 
-    constructor(kind: string, {message, source, data}: ApiOptions = {}) {
+    constructor(kind: string, {message, source, data}: ApiErrorOptions = {}) {
         // @ts-ignore
         super(message, {cause: source});
 
@@ -99,7 +99,7 @@ export async function req_json(
 export async function req_api_json<T = any>(
     method: RequestMethod,
     url: string,
-    data?: any
+    data?: any,
 ): Promise<T> {
     let response = await req_json(method, url, data);
 

@@ -1,15 +1,10 @@
-import { ReactElement } from "react";
 import { Link, Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import {
-    BadgeCheck,
-    Bell,
     ChevronsUpDown,
     LogOut,
     Notebook,
     Settings,
-    Shield,
     EarthLock,
-    Users,
 } from "lucide-react";
 
 import {
@@ -20,7 +15,6 @@ import {
 import {
     DropdownMenu,
     DropdownMenuContent,
-    DropdownMenuGroup,
     DropdownMenuItem,
     DropdownMenuLabel,
     DropdownMenuSeparator,
@@ -29,7 +23,6 @@ import {
 import {
     Sidebar,
     SidebarContent,
-    SidebarFooter,
     SidebarGroup,
     SidebarGroupLabel,
     SidebarGroupContent,
@@ -56,30 +49,6 @@ async function send_logout() {
     }
 }
 
-function JournalGroup() {
-    return <SidebarGroup>
-        <SidebarGroupLabel>Journals</SidebarGroupLabel>
-        <SidebarGroupContent>
-            <SidebarMenu>
-                <SidebarMenuLink title="All Journals" path="/journals"/>
-            </SidebarMenu>
-        </SidebarGroupContent>
-    </SidebarGroup>
-}
-
-function AdministrativeGroup() {
-    return <SidebarGroup>
-        <SidebarGroupLabel>Administrative</SidebarGroupLabel>
-        <SidebarGroupContent>
-            <SidebarMenu>
-                <SidebarMenuLink title="Users" path="/users"/>
-                <SidebarMenuLink title="Groups" path="/groups"/>
-                <SidebarMenuLink title="Roles" path="/roles"/>
-            </SidebarMenu>
-        </SidebarGroupContent>
-    </SidebarGroup>
-}
-
 interface UserBadgeProps {
     name: string,
     email: string,
@@ -89,7 +58,7 @@ interface UserBadgeProps {
 function UserBadge({name, email, avatar}: UserBadgeProps) {
     return <>
         <Avatar className="h-8 w-8 rounded-lg">
-            <AvatarImage src={avatar} alt={name} />
+            {avatar != null ? <AvatarImage src={avatar} alt={name} /> : null}
             <AvatarFallback className="rounded-lg">TJ2</AvatarFallback>
         </Avatar>
         <div className="grid flex-1 text-left text-sm leading-tight">
@@ -202,20 +171,21 @@ function NavSidebar({name, email, avatar}: NavSidebarProps) {
     </Sidebar>
 }
 
-function AppSidebar() {
+export function AppSidebar() {
     return <Sidebar
         collapsible="icon"
         className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row"
     >
         <NavSidebar name="The Dude" email="the_dude@laboski.drink"/>
-        <Sidebar collapsible="none" className="hidden flex-1 md:flex">
+        <Sidebar
+            collapsible="none"
+            className="hidden flex-1 md:flex !w-[calc(var(--sidebar-width)_-_(var(--sidebar-width-icon)_+_1px))]"
+        >
             <Routes>
-                <Route path="/journals/*" element={<JournalSidebar />}/>
+                <Route path="/journals/:journals_id/*" element={<JournalSidebar />}/>
                 <Route path="/admin/*" element={<AdminSidebar />}/>
                 <Route path="/settings/*" element={<SettingsSidebar />}/>
             </Routes>
         </Sidebar>
     </Sidebar>
 }
-
-export { AppSidebar };
