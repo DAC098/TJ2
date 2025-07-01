@@ -5,6 +5,8 @@ import {
     Notebook,
     Settings,
     EarthLock,
+    PanelLeft,
+    PanelLeftClose,
 } from "lucide-react";
 
 import {
@@ -38,6 +40,9 @@ import { JournalSidebar } from "@/sidebar/journals";
 import { AdminSidebar } from "@/sidebar/admin";
 import { SettingsSidebar } from "@/sidebar/settings";
 import { toggle_theme } from "@/theme";
+import { ReactElement, useEffect, useState } from "react";
+import { cn } from "./utils";
+import { Button } from "@/components/ui/button";
 
 async function send_logout() {
     let res = await fetch("/logout", {
@@ -53,30 +58,41 @@ interface UserBadgeProps {
     name: string,
     email: string,
     avatar?: string,
+    show_details?: boolean
 }
 
-function UserBadge({name, email, avatar}: UserBadgeProps) {
+function UserBadge({
+    name,
+    email,
+    avatar,
+    show_details = false
+}: UserBadgeProps) {
     return <>
         <Avatar className="h-8 w-8 rounded-lg">
             {avatar != null ? <AvatarImage src={avatar} alt={name} /> : null}
             <AvatarFallback className="rounded-lg">TJ2</AvatarFallback>
         </Avatar>
-        <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="truncate font-semibold">{name}</span>
-            <span className="truncate text-xs">{email}</span>
-        </div>
+        {show_details ?
+            <div className="grid flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-semibold">{name}</span>
+                <span className="truncate text-xs">{email}</span>
+            </div>
+            :
+            null
+        }
     </>;
 }
 
 interface UserMenuProps {
-    name: string,
-    email: string,
-    avatar?: string,
+    collapsed: boolean
 }
 
-function UserMenu({name, email, avatar}: UserMenuProps) {
+function UserMenu({collapsed}: UserMenuProps) {
     const { isMobile } = useSidebar();
     const navigate = useNavigate();
+
+    let name = "The Dude";
+    let email = "the_dude@laboski.drink";
 
     return <SidebarMenu>
         <SidebarMenuItem>
@@ -84,9 +100,9 @@ function UserMenu({name, email, avatar}: UserMenuProps) {
                 <DropdownMenuTrigger asChild>
                     <SidebarMenuButton
                         size="lg"
-                        className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground md:h-8 md:p-0"
+                        className={cn("data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground", {"md:h-8 md:p-0": collapsed})}
                     >
-                        <UserBadge name={name} email={email} avatar={avatar}/>
+                        <UserBadge name={name} email={email} show_details={!collapsed}/>
                         <ChevronsUpDown className="ml-auto size-4" />
                     </SidebarMenuButton>
                 </DropdownMenuTrigger>
@@ -96,11 +112,24 @@ function UserMenu({name, email, avatar}: UserMenuProps) {
                     align="end"
                     sideOffset={4}
                 >
-                    <DropdownMenuLabel className="p-0 font-normal">
-                        <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                            <UserBadge name={name} email={email} avatar={avatar}/>
-                        </div>
-                    </DropdownMenuLabel>
+                    {collapsed ?
+                        <DropdownMenuLabel className="p-0 font-normal">
+                            <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+                                <UserBadge name={name} email={email} show_details={true}/>
+                            </div>
+                        </DropdownMenuLabel>
+                        :
+                        null
+                    }
+                    <Link to="/settings">
+                        <DropdownMenuItem>Settings</DropdownMenuItem>
+                    </Link>
+                    <DropdownMenuItem onSelect={() => {
+                        toggle_theme();
+                    }}>
+                        Switch Theme
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator/>
                     <DropdownMenuItem onSelect={(ev) => {
                         send_logout().then(() => {
                             navigate("/login");
@@ -111,15 +140,6 @@ function UserMenu({name, email, avatar}: UserMenuProps) {
                         <LogOut />
                         Log out
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator/>
-                    <Link to="/settings">
-                        <DropdownMenuItem>Settings</DropdownMenuItem>
-                    </Link>
-                    <DropdownMenuItem onSelect={() => {
-                        toggle_theme();
-                    }}>
-                        Switch Theme
-                    </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
         </SidebarMenuItem>
@@ -127,20 +147,27 @@ function UserMenu({name, email, avatar}: UserMenuProps) {
 }
 
 interface NavSidebarProps {
-    name: string,
-    email: string,
-    avatar?: string,
+    collapsed: boolean
 }
 
-function NavSidebar({name, email, avatar}: NavSidebarProps) {
+function NavSidebar({collapsed}: NavSidebarProps) {
+    const {open, setOpen} = useSidebar();
     const location = useLocation();
 
     return <Sidebar
         collapsible="none"
-        className="!w-[calc(var(--sidebar-width-icon)_+_1px)] border-r"
+        className={cn({"!w-[calc(var(--sidebar-width-icon)_+_1px)] border-r": collapsed})}
     >
-        <SidebarHeader>
-            <UserMenu name={name} email={email} avatar={avatar}/>
+        <SidebarHeader className={cn("flex gap-2", {"flex-row items-center": !collapsed && open, "flex-col": collapsed || !open})}>
+            <UserMenu collapsed={collapsed || !open}/>
+            <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={cn("flex-none", {"w-8 h-8": collapsed || !open})}
+                onClick={() => setOpen(!open)}>
+                {open ? <PanelLeftClose/> : <PanelLeft/>}
+            </Button>
         </SidebarHeader>
         <SidebarContent>
             <SidebarGroup>
@@ -171,20 +198,52 @@ function NavSidebar({name, email, avatar}: NavSidebarProps) {
     </Sidebar>
 }
 
+interface MountStatusProps {
+    element: ReactElement,
+    mounted: () => void,
+    unmounted: () => void,
+}
+
+function MountHook({element, mounted, unmounted}: MountStatusProps) {
+    useEffect(() => {
+        mounted();
+
+        return () => {
+            unmounted();
+        }
+    }, []);
+
+    return element;
+}
+
 export function AppSidebar() {
+    const [collapse, set_collapse] = useState(0b0);
+
     return <Sidebar
         collapsible="icon"
         className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row"
     >
-        <NavSidebar name="The Dude" email="the_dude@laboski.drink"/>
+        <NavSidebar collapsed={collapse > 0}/>
         <Sidebar
             collapsible="none"
             className="hidden flex-1 md:flex !w-[calc(var(--sidebar-width)_-_(var(--sidebar-width-icon)_+_1px))]"
         >
             <Routes>
-                <Route path="/journals/:journals_id/*" element={<JournalSidebar />}/>
-                <Route path="/admin/*" element={<AdminSidebar />}/>
-                <Route path="/settings/*" element={<SettingsSidebar />}/>
+                <Route path="/journals/:journals_id/*" element={<MountHook
+                    mounted={() => set_collapse(v => v | 0b1)} 
+                    unmounted={() => set_collapse(v => v & ~0b1)}
+                    element={<JournalSidebar />}
+                />}/>
+                <Route path="/admin/*" element={<MountHook
+                    mounted={() => set_collapse(v => v | 0b10)}
+                    unmounted={() => set_collapse(v => v & ~0b10)}
+                    element={<AdminSidebar />}
+                />}/>
+                <Route path="/settings/*" element={<MountHook
+                    mounted={() => set_collapse(v => v | 0b100)}
+                    unmounted={() => set_collapse(v => v & ~0b100)}
+                    element={<SettingsSidebar />}
+                />}/>
             </Routes>
         </Sidebar>
     </Sidebar>
