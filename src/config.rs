@@ -38,6 +38,10 @@ pub struct CliArgs {
     #[arg(short = 'V', long)]
     pub verbosity: Option<Verbosity>,
 
+    /// logs output to the specified directory
+    #[arg(long)]
+    pub log_dir: Option<PathBuf>,
+
     /// attempts to generate test data for the server to use for testing
     /// purposes
     #[arg(long)]

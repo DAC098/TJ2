@@ -4,8 +4,10 @@ use axum::Router;
 use clap::Parser;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use tokio::runtime::Builder;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tokio::runtime::{Runtime, Builder};
+use tracing_subscriber::EnvFilter;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
 mod config;
 mod db;
@@ -30,6 +32,38 @@ use error::{Context, Error};
 
 fn main() {
     let args = config::CliArgs::parse();
+
+    let guard = match init_logging(&args) {
+        Ok(guard) => guard,
+        Err(err) => {
+            error::log_error(&err);
+
+            std::process::exit(1);
+        }
+    };
+
+    let code = if let Err(err) = entry(args) {
+        error::log_error(&err);
+
+        1
+    } else {
+        0
+    };
+
+    drop(guard);
+
+    std::process::exit(code);
+}
+
+fn entry(args: config::CliArgs) -> Result<(), Error> {
+    let config = config::Config::from_args(&args)?;
+
+    let rt = init_runtime(&config)?;
+
+    rt.block_on(run(args, config))
+}
+
+fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
     let mut filter = EnvFilter::from_default_env();
 
     if let Some(verbosity) = &args.verbosity {
@@ -44,55 +78,51 @@ fn main() {
         filter = filter.add_directive(log_str.parse().unwrap());
     }
 
-    if let Err(err) = FmtSubscriber::builder()
-        .with_env_filter(filter)
-        .try_init()
-        .context("failed to initialize stdout logging")
-    {
-        error::log_error(&err);
+    let log_builder = tracing_subscriber::fmt();
 
-        std::process::exit(1);
-    }
+    Ok(if let Some(dir) = &args.log_dir  {
+        let appender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix("tj2_server")
+            .filename_suffix("log")
+            .build(&dir)
+            .context("failed to initialize rotating logs")?;
 
-    let config = match config::Config::from_args(&args) {
-        Ok(config) => config,
-        Err(err) => {
-            error::log_error(&err);
+        let (non_blocking, guard) = tracing_appender::non_blocking(appender);
 
-            std::process::exit(1);
-        }
-    };
+        log_builder.with_writer(non_blocking)
+            .with_env_filter(filter)
+            .try_init()
+            .context("failed to initialize rotating logs")?;
 
-    if let Err(err) = setup(args, config) {
-        error::log_error(&err);
-
-        std::process::exit(1);
+        Some(guard)
     } else {
-        std::process::exit(0);
-    }
+        log_builder.with_env_filter(filter)
+            .try_init()
+            .context("failed to initialize stdout logging")?;
+
+        None
+    })
 }
 
 /// configures the tokio runtime and starts the init process for the server
-fn setup(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
+fn init_runtime(config: &config::Config) -> Result<Runtime, Error> {
     let mut builder = if config.settings.thread_pool == 1 {
         Builder::new_current_thread()
     } else {
         Builder::new_multi_thread()
     };
 
-    let rt = builder
+    builder
         .enable_io()
         .enable_time()
         .max_blocking_threads(config.settings.blocking_pool)
         .build()
-        .context("failed to create tokio runtime")?;
-
-    rt.block_on(init(args, config))
+        .context("failed to create tokio runtime")
 }
 
-/// initializes the server with the shared state, router configuration, and
-/// database setup
-async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
+/// initializes state, router configuration, database setup, and then starts
+async fn run(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
     let state = state::SharedState::new(&config)
         .await
         .context("failed to create SharedState")?;
@@ -114,6 +144,7 @@ async fn init(args: config::CliArgs, config: config::Config) -> Result<(), Error
         let local_handle = handle.clone();
 
         server_handles.push(handle);
+
         all_futs.push(tokio::spawn(start_server(
             listener,
             local_router,

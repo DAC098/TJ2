@@ -171,6 +171,9 @@ version = "0.1"
 version = "0.3"
 features = ["env-filter"]
 
+[workspace.dependencies.tracing-appender]
+version = "0.2"
+
 [workspace.dependencies.tracing-test]
 version = "0.2"
 
@@ -250,11 +253,15 @@ tower = { version = "0.4", features = ["timeout"] }
 tower-http = { version = "0.5", features = ["trace"] }
 mime = { version = "0.3" }
 mime_guess = { version = "2" }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 url = { version = "2" }
 urlencoding = { version = "2" }
 reqwest = { workspace = true }
+
+# logging
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 # database
 
