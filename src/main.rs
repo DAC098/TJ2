@@ -92,6 +92,7 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
 
         log_builder.with_writer(non_blocking)
             .with_env_filter(filter)
+            .with_ansi(false)
             .try_init()
             .context("failed to initialize rotating logs")?;
 
