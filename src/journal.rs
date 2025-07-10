@@ -1414,13 +1414,11 @@ impl CustomField {
             .await;
 
         match result {
-            Ok(executed) => {
-                if executed == 1 {
-                    Err(UpdateCustomFieldError::NotFound)
-                } else {
-                    Ok(())
-                }
-            }
+            Ok(executed) => match executed {
+                1 => Ok(()),
+                0 => Err(UpdateCustomFieldError::NotFound),
+                _ => unreachable!(),
+            },
             Err(err) => {
                 if let Some(kind) = db::ErrorKind::check(&err) {
                     match kind {
