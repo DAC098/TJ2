@@ -68,11 +68,11 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
 
     if let Some(verbosity) = &args.verbosity {
         let log_str = match verbosity {
-            config::Verbosity::Error => "TJ2=error",
-            config::Verbosity::Warn => "TJ2=warn",
-            config::Verbosity::Info => "TJ2=info",
-            config::Verbosity::Debug => "TJ2=debug",
-            config::Verbosity::Trace => "TJ2=trace",
+            config::Verbosity::Error => "tj2=error",
+            config::Verbosity::Warn => "tj2=warn",
+            config::Verbosity::Info => "tj2=info",
+            config::Verbosity::Debug => "tj2=debug",
+            config::Verbosity::Trace => "tj2=trace",
         };
 
         filter = filter.add_directive(log_str.parse().unwrap());

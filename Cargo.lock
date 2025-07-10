@@ -3,65 +3,6 @@
 version = 4
 
 [[package]]
-name = "TJ2"
-version = "0.1.0"
-dependencies = [
- "ammonia",
- "argon2",
- "async-trait",
- "axum",
- "axum-server",
- "base64 0.22.1",
- "blake3",
- "bytes",
- "chrono",
- "clap",
- "cron",
- "crypto_box",
- "data-encoding",
- "deadpool-postgres",
- "futures",
- "hyper",
- "mime",
- "mime_guess",
- "moka",
- "nanoid",
- "num_cpus",
- "pin-project",
- "postgres-types",
- "rand",
- "reqwest",
- "ringbuf",
- "rust-otp",
- "serde",
- "serde_json",
- "serde_repr",
- "serde_yml",
- "serdect",
- "sha2",
- "sha3",
- "strum",
- "tera",
- "thiserror 1.0.63",
- "tj2-lib",
- "tokio",
- "tokio-postgres",
- "tokio-util",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tracing-test",
- "url",
- "urlencoding",
- "uuid",
- "validator",
- "x509-cert",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2832,6 +2773,65 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "tj2"
+version = "0.1.0"
+dependencies = [
+ "ammonia",
+ "argon2",
+ "async-trait",
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "blake3",
+ "bytes",
+ "chrono",
+ "clap",
+ "cron",
+ "crypto_box",
+ "data-encoding",
+ "deadpool-postgres",
+ "futures",
+ "hyper",
+ "mime",
+ "mime_guess",
+ "moka",
+ "nanoid",
+ "num_cpus",
+ "pin-project",
+ "postgres-types",
+ "rand",
+ "reqwest",
+ "ringbuf",
+ "rust-otp",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "serde_yml",
+ "serdect",
+ "sha2",
+ "sha3",
+ "strum",
+ "tera",
+ "thiserror 1.0.63",
+ "tj2-lib",
+ "tokio",
+ "tokio-postgres",
+ "tokio-util",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "tracing-test",
+ "url",
+ "urlencoding",
+ "uuid",
+ "validator",
+ "x509-cert",
+]
 
 [[package]]
 name = "tj2-cli"
