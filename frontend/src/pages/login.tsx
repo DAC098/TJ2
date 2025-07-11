@@ -1,76 +1,48 @@
-import { EyeOff, Eye } from "lucide-react";
-import { useState } from "react";
 import { useForm, SubmitHandler } from "react-hook-form";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 
-import { res_as_json } from "@/net";
+import { ApiError, req_api_json } from "@/net";
 
 import { Input, PasswordInput } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormRootError } from "@/components/ui/form";
+import { Separator } from "@/components/ui/separator";
 
 interface LoginForm {
     username: string,
     password: string,
 }
 
-enum LoginFailure {
-    UsernameNotFound = "UsernameNotFound",
-    InvalidPassword = "InvalidPassword",
-}
-
 interface LoginSuccess {
     type: "Success"
-}
-
-interface LoginFailed {
-    type: "Failure",
-    value: LoginFailure
 }
 
 interface LoginVerify {
     type: "Verify"
 }
 
-type LoginResult = LoginSuccess | LoginVerify | LoginFailed;
-
-async function send_login(given: LoginForm) {
-    let body = JSON.stringify(given);
-    let res = await fetch("/login", {
-        method: "POST",
-        headers: {
-            "content-type": "application/json",
-            "content-length": body.length.toString(10),
-        },
-        body
-    });
-
-    return await res_as_json<LoginResult>(res);
-}
+type LoginResult = LoginSuccess | LoginVerify;
 
 export function Login() {
     const navigate = useNavigate();
     const location = useLocation();
 
-    const login_form = useForm<LoginForm>({
+    const form = useForm<LoginForm>({
         defaultValues: {
             username: "",
             password: "",
         }
     });
 
-    const [sending, setSending] = useState(false);
-    const [show_password, set_show_password] = useState(false);
+    const on_submit: SubmitHandler<LoginForm> = async (data, event) => {
+        try {
+            let res = await req_api_json<LoginResult>("POST", "/login", data);
 
-    const on_submit: SubmitHandler<LoginForm> = (data, event) => {
-        setSending(true);
-
-        send_login(data).then(result => {
             let prev = new URL(location.pathname + location.search, window.location.origin)
                 .searchParams
                 .get("prev");
 
-            switch (result.type) {
+            switch (res.type) {
                 case "Success":
                     navigate(prev ?? "/journals");
                     break;
@@ -80,53 +52,80 @@ export function Login() {
                     } else {
                         navigate("/verify");
                     }
-
                     break;
                 default:
-                    console.log("login failed:", result.type);
-
-                    setSending(false);
-
+                    console.error("unknown type from server:", res);
                     break;
             }
-        }).catch(err => {
-            console.error("error when sending login:", err);
+        } catch (err) {
+            if (err instanceof ApiError) {
+                switch (err.kind) {
+                    case "AlreadyAuthenticated":
+                        let prev = new URL(location.pathname + location.search, window.location.origin)
+                            .searchParams
+                            .get("prev");
 
-            setSending(false);
-        });
+                        navigate(prev ?? "/journals");
+                        break;
+                    case "UsernameNotFound":
+                        form.setError("username", {message: "Invalid or unknown username"});
+                        break;
+                    case "InvalidPassword":
+                        form.reset({password: ""});
+                        form.setError("password", {message: "Invalid password"});
+                        break;
+                    case "InvalidSession":
+                        form.setError("root", {message: "There was a problem with your session. Try again."});
+
+                        document.cookie = "session_id=; max-age=0";
+                        break;
+                    default:
+                        break;
+                }
+            } else {
+                console.error("error when sending login:", err);
+
+                form.setError("root", {message: "Failed to send login. client error"});
+            }
+        }
     };
 
     return <div className="flex w-full h-full">
-        <div className="mx-auto my-auto">
-            <Form {...login_form} children={
-                <form className="space-y-4" onSubmit={login_form.handleSubmit(on_submit)}>
-                    <FormField control={login_form.control} name="username" render={({field}) => {
-                        return <FormItem>
-                            <FormLabel>Username</FormLabel>
-                            <FormControl>
-                                <Input type="text" {...field}/>
-                            </FormControl>
-                        </FormItem>;
-                    }}/>
-                    <FormField control={login_form.control} name="password" render={({field}) => {
-                        return <FormItem>
-                            <FormLabel>Password</FormLabel>
-                            <FormControl>
-                                <PasswordInput
-                                    autoComplete="current-password"
-                                    {...field}
-                                />
-                            </FormControl>
-                        </FormItem>;
-                    }}/>
-                    <div className="flex flex-row gap-x-4 justify-center">
-                        <Link to="/register">
-                            <Button type="button" variant="secondary">Register</Button>
-                        </Link>
-                        <Button type="submit">Login</Button>
-                    </div>
-                </form>
-            }/>
+        <div className="mx-auto my-auto border rounded-lg">
+            <div className="p-4">
+                <Form {...form}>
+                    <form className="space-y-4" onSubmit={form.handleSubmit(on_submit)}>
+                        <FormRootError/>
+                        <FormField control={form.control} name="username" render={({field}) => {
+                            return <FormItem>
+                                <FormLabel>Username</FormLabel>
+                                <FormControl>
+                                    <Input type="text" {...field}/>
+                                </FormControl>
+                                <FormMessage/>
+                            </FormItem>;
+                        }}/>
+                        <FormField control={form.control} name="password" render={({field}) => {
+                            return <FormItem>
+                                <FormLabel>Password</FormLabel>
+                                <FormControl>
+                                    <PasswordInput autoComplete="current-password" {...field}/>
+                                </FormControl>
+                                <FormMessage/>
+                            </FormItem>;
+                        }}/>
+                        <div className="flex flex-row gap-x-4 justify-center">
+                            <Button type="submit" disabled={form.formState.isSubmitting}>Login</Button>
+                        </div>
+                    </form>
+                </Form>
+            </div>
+            <Separator/>
+            <div className="p-4 flex flex-row gap-x-4 justify-center">
+                <Link to="/register">
+                    <Button type="button" variant="secondary">Register</Button>
+                </Link>
+            </div>
         </div>
     </div>;
 }

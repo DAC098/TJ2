@@ -111,3 +111,17 @@ export async function req_api_json<T = any>(
 
     return await res_as_json<T>(response);
 }
+
+export async function req_api_json_empty(
+    method: RequestMethod,
+    url: string,
+    data?: any,
+): Promise<void> {
+    let response = await req_json(method, url, data);
+
+    if (response.status >= 400) {
+        let {error, message, ...rest} = await res_as_json<ErrorJson>(response);
+
+        throw new ApiError(error, {message, data: rest});
+    }
+}
