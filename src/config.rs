@@ -42,10 +42,21 @@ pub struct CliArgs {
     #[arg(long)]
     pub log_dir: Option<PathBuf>,
 
+    /// the format of the logging output
+    #[arg(long)]
+    pub log_format: Option<LogFormat>,
+
     /// attempts to generate test data for the server to use for testing
     /// purposes
     #[arg(long)]
     pub gen_test_data: bool,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum LogFormat {
+    Json,
+    Pretty,
+    Compact,
 }
 
 /// a stack struct used when creating the Config struct

@@ -80,7 +80,7 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
 
     let log_builder = tracing_subscriber::fmt();
 
-    Ok(if let Some(dir) = &args.log_dir  {
+    if let Some(dir) = &args.log_dir  {
         let appender = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
             .filename_prefix("tj2_server")
@@ -90,20 +90,44 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
 
         let (non_blocking, guard) = tracing_appender::non_blocking(appender);
 
-        log_builder.with_writer(non_blocking)
+        let builder = log_builder.with_writer(non_blocking)
             .with_env_filter(filter)
-            .with_ansi(false)
-            .try_init()
-            .context("failed to initialize rotating logs")?;
+            .with_ansi(false);
 
-        Some(guard)
+        let result = if let Some(format) = &args.log_format {
+            match format {
+                config::LogFormat::Json => builder.json().try_init(),
+                config::LogFormat::Pretty => builder.pretty().try_init(),
+                config::LogFormat::Compact => builder.pretty().try_init(),
+            }
+        } else {
+            builder.try_init()
+        };
+
+        if let Err(err) = result {
+            Err(Error::context_source("failed to initialize rotating logs", err))
+        } else {
+            Ok(Some(guard))
+        }
     } else {
-        log_builder.with_env_filter(filter)
-            .try_init()
-            .context("failed to initialize stdout logging")?;
+        let builder = log_builder.with_env_filter(filter);
 
-        None
-    })
+        let result = if let Some(format) = &args.log_format {
+            match format {
+                config::LogFormat::Json => builder.json().try_init(),
+                config::LogFormat::Pretty => builder.pretty().try_init(),
+                config::LogFormat::Compact => builder.pretty().try_init(),
+            }
+        } else {
+            builder.try_init()
+        };
+
+        if let Err(err) = result {
+            Err(Error::context_source("failed to initialize stdoubt logging", err))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 /// configures the tokio runtime and starts the init process for the server
