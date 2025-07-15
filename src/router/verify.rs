@@ -20,12 +20,8 @@ pub async fn get(
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum VerifyBody {
-    Totp {
-        code: String,
-    },
-    Recovery {
-        code: String,
-    }
+    Totp { code: String },
+    Recovery { code: String },
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -41,9 +37,10 @@ pub enum VerifyError {
 impl IntoResponse for VerifyError {
     fn into_response(self) -> Response {
         match self {
-            Self::InvalidSession | Self::InvalidCode | Self::AlreadyVerified | Self::InvalidRecovery => {
-                (StatusCode::BAD_REQUEST, body::Json(self)).into_response()
-            }
+            Self::InvalidSession
+            | Self::InvalidCode
+            | Self::AlreadyVerified
+            | Self::InvalidRecovery => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
             Self::MFANotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
         }
     }

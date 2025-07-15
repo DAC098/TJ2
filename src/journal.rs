@@ -21,6 +21,7 @@ use crate::sec::authz;
 use crate::sec::Hash;
 
 pub mod custom_field;
+pub mod sharing;
 
 pub async fn assert_permission(
     conn: &impl db::GenericClient,

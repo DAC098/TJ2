@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::net::{body, Error};
-use crate::sec::authn::Initiator;
 use crate::sec;
-use crate::sec::mfa::{otp, create_recovery, delete_recovery, RECOVERY_CODE_AMOUNT};
+use crate::sec::authn::Initiator;
+use crate::sec::mfa::{create_recovery, delete_recovery, otp, RECOVERY_CODE_AMOUNT};
 use crate::state::{self, Security};
 
 #[derive(Debug, Serialize)]
@@ -29,7 +29,7 @@ pub struct AuthQuery {
 
 #[derive(Debug, Deserialize)]
 pub enum AuthKind {
-    MFA
+    MFA,
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -102,7 +102,9 @@ pub enum UpdateAuth {
     // MFA totp
     EnableTotp,
     DisableTotp,
-    VerifyTotp { code: String },
+    VerifyTotp {
+        code: String,
+    },
 
     // MFA Recovery
     EnableRecovery,
@@ -113,7 +115,7 @@ pub enum UpdateAuth {
         current: String,
         updated: String,
         confirm: String,
-    }
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -127,9 +129,7 @@ pub enum ResultAuth {
     VerifiedTotp,
 
     // MFA Recovery
-    EnabledRecovery {
-        codes: Vec<String>,
-    },
+    EnabledRecovery { codes: Vec<String> },
     DisabledRecovery,
 
     // Password
@@ -184,24 +184,18 @@ pub async fn patch(
     let transaction = conn.transaction().await?;
 
     let result = match action {
-        UpdateAuth::EnableTotp => {
-            enable_totp(state.security(), &transaction, initiator).await?
-        }
-        UpdateAuth::DisableTotp => {
-            disable_totp(state.security(), &transaction, initiator).await?
-        }
+        UpdateAuth::EnableTotp => enable_totp(state.security(), &transaction, initiator).await?,
+        UpdateAuth::DisableTotp => disable_totp(state.security(), &transaction, initiator).await?,
         UpdateAuth::VerifyTotp { code } => {
             verify_totp(state.security(), &transaction, initiator, code).await?
         }
-        UpdateAuth::EnableRecovery => {
-            enable_recovery(&transaction, initiator).await?
-        }
-        UpdateAuth::DisableRecovery => {
-            disable_recovery(&transaction, initiator).await?
-        }
-        UpdateAuth::UpdatePassword { current, updated, confirm } => {
-            update_password(&transaction, initiator, current, updated, confirm).await?
-        }
+        UpdateAuth::EnableRecovery => enable_recovery(&transaction, initiator).await?,
+        UpdateAuth::DisableRecovery => disable_recovery(&transaction, initiator).await?,
+        UpdateAuth::UpdatePassword {
+            current,
+            updated,
+            confirm,
+        } => update_password(&transaction, initiator, current, updated, confirm).await?,
     };
 
     transaction.commit().await?;
@@ -304,10 +298,12 @@ async fn enable_recovery(
         return Err(Error::Inner(UpdateAuthError::NoMFAEnabled));
     }
 
-    let result = conn.execute(
-        "select used_on from authn_recovery where users_id = $1",
-        &[&initiator.user.id],
-    ).await?;
+    let result = conn
+        .execute(
+            "select used_on from authn_recovery where users_id = $1",
+            &[&initiator.user.id],
+        )
+        .await?;
 
     if result != 0 {
         return Err(Error::Inner(UpdateAuthError::RecoveryExists));
@@ -356,8 +352,9 @@ async fn update_password(
 
     conn.execute(
         "delete from authn_sessions where users_id = $1 and token != $2",
-        &[&initiator.user.id, &initiator.session.token]
-    ).await?;
+        &[&initiator.user.id, &initiator.session.token],
+    )
+    .await?;
 
     Ok(ResultAuth::UpdatedPassword)
 }

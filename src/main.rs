@@ -4,10 +4,10 @@ use axum::Router;
 use clap::Parser;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use tokio::runtime::{Runtime, Builder};
-use tracing_subscriber::EnvFilter;
+use tokio::runtime::{Builder, Runtime};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::EnvFilter;
 
 mod config;
 mod db;
@@ -80,7 +80,7 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
 
     let log_builder = tracing_subscriber::fmt();
 
-    if let Some(dir) = &args.log_dir  {
+    if let Some(dir) = &args.log_dir {
         let appender = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
             .filename_prefix("tj2_server")
@@ -90,7 +90,8 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
 
         let (non_blocking, guard) = tracing_appender::non_blocking(appender);
 
-        let builder = log_builder.with_writer(non_blocking)
+        let builder = log_builder
+            .with_writer(non_blocking)
             .with_env_filter(filter)
             .with_ansi(false);
 
@@ -105,7 +106,10 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
         };
 
         if let Err(err) = result {
-            Err(Error::context_source("failed to initialize rotating logs", err))
+            Err(Error::context_source(
+                "failed to initialize rotating logs",
+                err,
+            ))
         } else {
             Ok(Some(guard))
         }
@@ -123,7 +127,10 @@ fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
         };
 
         if let Err(err) = result {
-            Err(Error::context_source("failed to initialize stdoubt logging", err))
+            Err(Error::context_source(
+                "failed to initialize stdoubt logging",
+                err,
+            ))
         } else {
             Ok(None)
         }

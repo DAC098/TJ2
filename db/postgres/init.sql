@@ -144,6 +144,28 @@ create table custom_fields (
     unique (journals_id, name)
 );
 
+create table journal_shares (
+    id bigint primary key generated always as identity,
+    journals_id bigint not null references journals (id),
+    name varchar not null,
+    created timestamp with time zone not null,
+    updated timestamp with time zone,
+    unique (journals_id, name)
+);
+
+create table journal_share_abilities (
+    journal_shares_id bigint not null references journal_shares (id),
+    ability varchar not null,
+    unique (journal_shares_id, ability)
+);
+
+create table journal_share_users (
+    journal_shares_id bigint not null references journal_shares (id),
+    users_id bigint not null references users (id),
+    added timestamp with time zone not null,
+    unique (journal_shares_id, users_id)
+);
+
 create table entries (
     id bigint primary key generated always as identity,
     uid varchar not null unique,

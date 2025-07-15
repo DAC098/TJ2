@@ -26,6 +26,7 @@ use crate::state;
 use crate::user::peer::UserPeer;
 
 mod entries;
+mod share;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
@@ -48,6 +49,14 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
             get(entries::files::retrieve_file).put(entries::files::upload_file),
         )
         .route("/:journals_id/sync", post(sync_with_remote))
+        .route(
+            "/:journals_id/share",
+            get(share::search_shares).post(share::create_share),
+        )
+        .route(
+            "/:journals_id/share/:share_id",
+            get(share::retrieve_share).delete(share::delete_share),
+        )
 }
 
 #[derive(Debug, Serialize)]

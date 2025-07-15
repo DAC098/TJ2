@@ -27,9 +27,7 @@ pub async fn create_recovery(
 ) -> Result<Vec<String>, RecoveryError> {
     let (codes, hashes) = gen_codes()?;
 
-    let mut query = String::from(
-        "insert into authn_recovery (users_id, hash) values"
-    );
+    let mut query = String::from("insert into authn_recovery (users_id, hash) values");
     let mut params: db::ParamsVec<'_> = vec![users_id];
 
     for (index, hash) in hashes.iter().enumerate() {
@@ -65,10 +63,12 @@ pub async fn delete_recovery(
     conn: &impl db::GenericClient,
     users_id: &UserId,
 ) -> Result<u64, db::PgError> {
-    Ok(conn.execute(
-        "delete from authn_recovery where users_id = $1",
-        &[&users_id]
-    ).await?)
+    Ok(conn
+        .execute(
+            "delete from authn_recovery where users_id = $1",
+            &[&users_id],
+        )
+        .await?)
 }
 
 pub struct Recovery {
@@ -81,18 +81,20 @@ pub struct Recovery {
 impl Recovery {
     pub async fn retrieve_many(
         conn: &impl db::GenericClient,
-        given: &UserId
+        given: &UserId,
     ) -> Result<Vec<Self>, db::PgError> {
         let params: db::ParamsArray<'_, 1> = [given];
-        let stream = conn.query_raw(
-            "\
+        let stream = conn
+            .query_raw(
+                "\
             select users_id, \
                    hash, \
                    used_on \
             from authn_recovery \
             where users_id = $1",
-            params
-        ).await?;
+                params,
+            )
+            .await?;
 
         futures::pin_mut!(stream);
 
@@ -123,8 +125,9 @@ impl Recovery {
             update authn_recovery \
             set used_on = $2 \
             where hash = $1",
-            &[&self.hash, &used_on]
-        ).await?;
+            &[&self.hash, &used_on],
+        )
+        .await?;
 
         self.used_on = Some(used_on);
 
@@ -135,7 +138,7 @@ impl Recovery {
 pub async fn verify_and_mark(
     conn: &impl db::GenericClient,
     users_id: &UserId,
-    code: &str
+    code: &str,
 ) -> Result<bool, RecoveryError> {
     for mut recovery_code in Recovery::retrieve_many(conn, users_id).await? {
         if recovery_code.used_on.is_some() {
