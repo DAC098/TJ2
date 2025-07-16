@@ -166,6 +166,15 @@ create table journal_share_users (
     unique (journal_shares_id, users_id)
 );
 
+create table journal_share_invites (
+    token varchar primary key,
+    journal_shares_id bigint not null references journal_shares (id),
+    users_id bigint references users (id),
+    issued_on timestamp with time zone not null,
+    expires_on timestamp with time zone,
+    status smallint not null default 0
+);
+
 create table entries (
     id bigint primary key generated always as identity,
     uid varchar not null unique,

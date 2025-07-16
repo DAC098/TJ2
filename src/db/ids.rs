@@ -339,6 +339,7 @@ id_type!(UserClientId);
 id_type!(UserPeerId);
 
 id_type!(JournalShareId);
+uid_type!(JournalShareInviteToken, 8);
 
 /// creates a list of unique ids from a given list
 ///

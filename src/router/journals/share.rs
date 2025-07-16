@@ -4,12 +4,12 @@ use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{JournalId, JournalShareId, UserId};
-use crate::journal::sharing;
+use crate::db::ids::{JournalId, JournalShareId, UserId, JournalShareInviteToken};
+use crate::journal::sharing::{self, JournalShare, JournalShareInviteStatus};
 use crate::journal::Journal;
 use crate::net::body;
 use crate::net::Error as NetError;
@@ -36,9 +36,11 @@ pub struct JournalSharePartial {
     pub updated: Option<DateTime<Utc>>,
     pub users: i64,
     pub abilities: i64,
+    pub pending_invites: i64,
 }
 
-#[derive(Debug, strum::Display, Serialize, Deserialize)]
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
 pub enum ShareSearchError {
     JournalNotFound,
 }
@@ -61,7 +63,7 @@ pub async fn search_shares(
 
     let conn = state.db().get().await?;
 
-    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Update).await?;
+    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read).await?;
 
     let journal = Journal::retrieve(&conn, (&journals_id, &initiator.user.id))
         .await?
@@ -80,13 +82,17 @@ pub async fn search_shares(
                journal_shares.created, \
                journal_shares.updated, \
                count(journal_share_users.users_id) as users, \
-               count(journal_share_abilities.journal_share_id) as abilities \
+               count(journal_share_abilities.journal_shares_id) as abilities, \
+               count(journal_share_invites.status) as pending_invites \
         from journal_shares \
             left join journal_share_users on \
                 journal_shares.id = journal_share_users.journal_shares_id \
             left join journal_share_abilities on \
                 journal_shares.id = journal_share_abilities.journal_shares_id \
-        where journal_shares.journals_id = $2 \
+            left join journal_share_invites on \
+                journal_shares.id = journal_share_invites.journal_shares_id and
+                journal_share_invites.status = 0 \
+        where journal_shares.journals_id = $1 \
         group by journal_shares.id, \
                  journal_shares.name, \
                  journal_shares.created, \
@@ -110,6 +116,7 @@ pub async fn search_shares(
             updated: row.get(3),
             users: row.get(4),
             abilities: row.get(5),
+            pending_invites: row.get(6),
         });
     }
 
@@ -124,6 +131,7 @@ pub struct JournalShareFull {
     updated: Option<DateTime<Utc>>,
     users: Vec<AttachedUser>,
     abilities: Vec<sharing::Ability>,
+    invites: Vec<InviteFull>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,7 +141,89 @@ pub struct AttachedUser {
     added: DateTime<Utc>,
 }
 
+impl AttachedUser {
+    pub async fn retrieve(conn: &impl db::GenericClient, journal_shares_id: &JournalShareId) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
+        let params: db::ParamsArray<'_, 1> = [journal_shares_id];
+
+        Ok(conn
+            .query_raw(
+                "\
+            select users.id, \
+                   users.username, \
+                   journal_share_users.added \
+            from journal_share_users \
+                left join users on \
+                    journal_share_users.users_id = users.id \
+            where journal_share_users.journal_shares_id = $1",
+                params,
+            )
+            .await?
+            .map(|result| result.map(|row| Self {
+                id: row.get(0),
+                username: row.get(1),
+                added: row.get(2),
+            })))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteFull {
+    token: JournalShareInviteToken,
+    user: Option<InviteUser>,
+    issued_on: DateTime<Utc>,
+    expires_on: Option<DateTime<Utc>>,
+    status: JournalShareInviteStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InviteUser {
+    id: UserId,
+    username: String,
+}
+
+impl InviteFull {
+    pub async fn retrieve(conn: &impl db::GenericClient, journal_shares_id: &JournalShareId) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
+        let params: db::ParamsArray<'_, 1> = [journal_shares_id];
+
+        Ok(conn
+            .query_raw(
+                "\
+            select journal_share_invites.token, \
+                   users.id, \
+                   users.username, \
+                   journal_share_invites.issued_on, \
+                   journal_share_invites.expires_on, \
+                   journal_share_invites.status \
+            from journal_share_invites \
+                left join users on \
+                    journal_share_invites.users_id = users.id \
+            where journal_share_invites.journal_shares_id = $1",
+                  params,
+            )
+            .await?
+            .map(|result| result.map(|row| {
+                let user = if let Some(id) = row.get::<usize, Option<UserId>>(1) {
+                    Some(InviteUser {
+                        id,
+                        username: row.get(2),
+                    })
+                } else {
+                    None
+                };
+
+                Self {
+                    token: row.get(0),
+                    user,
+                    issued_on: row.get(3),
+                    expires_on: row.get(4),
+                    status: row.get(5),
+                }
+            })))
+    }
+}
+
 #[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
 pub enum RetrieveShareError {
     JournalNotFound,
     ShareNotFound,
@@ -161,6 +251,8 @@ pub async fn retrieve_share(
 
     let conn = state.db().get().await?;
 
+    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read).await?;
+
     let journal = Journal::retrieve(&conn, (&journals_id, &initiator.user.id))
         .await?
         .ok_or(NetError::Inner(RetrieveShareError::JournalNotFound))?;
@@ -169,62 +261,25 @@ pub async fn retrieve_share(
         return Err(NetError::from(authz::PermissionError::Denied));
     }
 
-    let result = conn
-        .query_opt(
-            "\
-        select journal_shares.id, \
-               journal_shares.name, \
-               journal_shares.created, \
-               journal_shares.updated, \
-        from journal_shares \
-        where journal_shares.journals_id = $1 and \
-              journal_shares.id = $2",
-            &[&journal.id, &share_id],
-        )
-        .await?;
-
-    let Some(row) = result else {
+    let Some(JournalShare {
+        id,
+        name,
+        created,
+        updated,
+        ..
+    }) = JournalShare::retrieve(&conn, (&journal.id, &share_id)).await?
+    else {
         return Err(NetError::Inner(RetrieveShareError::ShareNotFound));
     };
 
-    let id = row.get(0);
-    let name = row.get(1);
-    let created = row.get(2);
-    let updated = row.get(3);
-
-    let users = {
-        let params: db::ParamsArray<'_, 1> = [&id];
-
-        let stream = conn
-            .query_raw(
-                "\
-            select users.id, \
-                   users.username, \
-                   journal_share_users.added \
-            from journal_share_users \
-                left join users on \
-                    journal_share_users.users_id = users.id \
-            where journal_share_users.journal_shares_id = $1",
-                params,
-            )
-            .await?;
-
-        futures::pin_mut!(stream);
-
-        let mut rtn = Vec::new();
-
-        while let Some(maybe) = stream.next().await {
-            let row = maybe?;
-
-            rtn.push(AttachedUser {
-                id: row.get(0),
-                username: row.get(1),
-                added: row.get(2),
-            });
-        }
-
-        rtn
-    };
+    let users = AttachedUser::retrieve(&conn, &id)
+        .await?
+        .try_collect::<Vec<AttachedUser>>()
+        .await?;
+    let invites = InviteFull::retrieve(&conn, &id)
+        .await?
+        .try_collect::<Vec<InviteFull>>()
+        .await?;
 
     let abilities = {
         let params: db::ParamsArray<'_, 1> = [&id];
@@ -259,6 +314,7 @@ pub async fn retrieve_share(
         updated,
         users,
         abilities,
+        invites,
     }))
 }
 
@@ -266,10 +322,10 @@ pub async fn retrieve_share(
 pub struct NewJournalShare {
     name: String,
     abilities: Vec<sharing::Ability>,
-    users: Vec<UserId>,
 }
 
 #[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
 pub enum CreateShareError {
     JournalNotFound,
     NameAlreadyExists,
@@ -291,11 +347,12 @@ pub async fn create_share(
     body::Json(NewJournalShare {
         name,
         abilities,
-        users,
     }): body::Json<NewJournalShare>,
 ) -> Result<body::Json<JournalShareFull>, NetError<CreateShareError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
+
+    authz::assert_permission(&transaction, initiator.user.id, Scope::Journals, Ability::Update).await?;
 
     let journal = Journal::retrieve(&transaction, (&journals_id, &initiator.user.id))
         .await?
@@ -341,8 +398,9 @@ pub async fn create_share(
         }
     };
 
-    let attached_users = create_attached_users(&transaction, &id, &created, users).await?;
-    let attached_abilities = create_abilities(&transaction, &id, abilities).await?;
+    let abilities = create_abilities(&transaction, &id, abilities).await?;
+    let users = Vec::new();
+    let invites = Vec::new();
 
     transaction.commit().await?;
 
@@ -351,64 +409,10 @@ pub async fn create_share(
         name,
         created,
         updated: None,
-        users: attached_users,
-        abilities: attached_abilities,
+        users,
+        abilities,
+        invites,
     }))
-}
-
-async fn create_attached_users(
-    conn: &impl db::GenericClient,
-    journal_shares_id: &JournalShareId,
-    created: &DateTime<Utc>,
-    users: Vec<UserId>,
-) -> Result<Vec<AttachedUser>, NetError<CreateShareError>> {
-    let mut params: db::ParamsVec<'_> = vec![&journal_shares_id, &created];
-    let mut query = String::from(
-        "\
-        with tmp_insert as ( \
-            insert into journal_share_users (journal_shares_id, users_id) values \
-    ",
-    );
-
-    for (index, id) in users.iter().enumerate() {
-        if index > 0 {
-            query.push_str(", ");
-        }
-
-        let statement = format!("($1, ${})", db::push_param(&mut params, id));
-
-        query.push_str(&statement);
-    }
-
-    query.push_str(
-        "\
-        ) \
-        select users.id, \
-               users.username, \
-               journal_share_users.added \
-        from tmp_insert \
-            left join users on \
-                tmp_insert.users_id = users.id \
-        order by users.username",
-    );
-
-    let stream = conn.query_raw(&query, params).await?;
-
-    futures::pin_mut!(stream);
-
-    let mut rtn = Vec::new();
-
-    while let Some(maybe) = stream.next().await {
-        let row = maybe?;
-
-        rtn.push(AttachedUser {
-            id: row.get(0),
-            username: row.get(1),
-            added: row.get(2),
-        });
-    }
-
-    Ok(rtn)
 }
 
 async fn create_abilities(
@@ -416,6 +420,10 @@ async fn create_abilities(
     journal_shares_id: &JournalShareId,
     abilities: Vec<sharing::Ability>,
 ) -> Result<Vec<sharing::Ability>, NetError<CreateShareError>> {
+    if abilities.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let ability_set: HashSet<sharing::Ability> = HashSet::from_iter(abilities);
     let mut params: db::ParamsVec<'_> = vec![&journal_shares_id];
     let mut query = String::from(
@@ -433,12 +441,183 @@ async fn create_abilities(
         query.push_str(&statement);
     }
 
+    tracing::debug!("create attached users query: {query}");
+
     conn.execute(&query, &params).await?;
 
     Ok(Vec::from_iter(ability_set))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateShare {
+    name: String,
+    abilities: Vec<sharing::Ability>
+}
+
 #[derive(Debug, strum::Display, Serialize)]
+pub enum UpdateShareError {
+    JournalNotFound,
+    ShareNotFound,
+    NameAlreadyExists,
+}
+
+impl IntoResponse for UpdateShareError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::ShareNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::NameAlreadyExists => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+        }
+    }
+}
+
+pub async fn update_share(
+    state: state::SharedState,
+    initiator: Initiator,
+    Path(SharePath { journals_id, share_id }): Path<SharePath>,
+    body::Json(UpdateShare { name, abilities }): body::Json<UpdateShare>,
+) -> Result<body::Json<JournalShareFull>, NetError<UpdateShareError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
+
+    authz::assert_permission(&transaction, initiator.user.id, Scope::Journals, Ability::Update).await?;
+
+    let journal = Journal::retrieve(&transaction, (&journals_id, &initiator.user.id))
+        .await?
+        .ok_or(NetError::Inner(UpdateShareError::JournalNotFound))?;
+
+    if journal.users_id != initiator.user.id {
+        return Err(NetError::from(authz::PermissionError::Denied));
+    }
+
+    let share = JournalShare::retrieve(&transaction, (&journal.id, &share_id))
+        .await?
+        .ok_or(NetError::Inner(UpdateShareError::ShareNotFound))?;
+
+    let updated = Utc::now();
+    let result = transaction
+        .execute(
+            "\
+        update journal_shares \
+        set name = $2, \
+            updated = $3 \
+        where id = $1",
+            &[&share.id, &name, &updated],
+        )
+        .await;
+
+    if let Err(err) = result {
+        if let Some(kind) = db::ErrorKind::check(&err) {
+            return match kind {
+                db::ErrorKind::Unique(constraint) => match constraint {
+                    "journal_shares_journals_id_name_key" => {
+                        Err(NetError::Inner(UpdateShareError::NameAlreadyExists))
+                    }
+                    _ => Err(NetError::from(err)),
+                },
+                db::ErrorKind::ForeignKey(constraint) => match constraint {
+                    "journal_shares_journals_id_fkey" => Err(NetError::message(
+                        "journal id not found when journal was found",
+                    )
+                    .with_source(err)),
+                    _ => Err(NetError::from(err)),
+                },
+            };
+        } else {
+            return Err(NetError::from(err));
+        }
+    }
+
+    let abilities = update_abilities(&transaction, &share.id, abilities).await?;
+    let users = AttachedUser::retrieve(&transaction, &share.id)
+        .await?
+        .try_collect::<Vec<AttachedUser>>()
+        .await?;
+    let invites = InviteFull::retrieve(&transaction, &share.id)
+        .await?
+        .try_collect::<Vec<InviteFull>>()
+        .await?;
+
+    transaction.commit().await?;
+
+    Ok(body::Json(JournalShareFull {
+        id: share.id,
+        name,
+        created: share.created,
+        updated: Some(updated),
+        users,
+        abilities,
+        invites,
+    }))
+}
+
+async fn update_abilities(
+    conn: &impl db::GenericClient,
+    journal_shares_id: &JournalShareId,
+    abilities: Vec<sharing::Ability>,
+) -> Result<Vec<sharing::Ability>, NetError<UpdateShareError>> {
+    if abilities.is_empty() {
+        conn.execute(
+            "delete from journal_share_abilities where journal_shares_id = $1",
+            &[journal_shares_id]
+        ).await?;
+
+        return Ok(Vec::new());
+    }
+
+    let current = sharing::Ability::retrieve(conn, journal_shares_id)
+        .await?
+        .try_collect::<HashSet<sharing::Ability>>()
+        .await?;
+
+    let ability_set: HashSet<sharing::Ability> = HashSet::from_iter(abilities);
+
+    let to_add = ability_set.difference(&current);
+    let to_drop = current.difference(&ability_set);
+
+    {
+        let mut non_empty = false;
+        let mut params: db::ParamsVec<'_> = vec![&journal_shares_id];
+        let mut query = String::from(
+            "\
+            insert into journal_share_abilities (journal_shares_id, ability) values ",
+        );
+
+        for (index, id) in to_add.enumerate() {
+            non_empty = true;
+
+            if index > 0 {
+                query.push_str(", ");
+            }
+
+            let statement = format!("($1, ${})", db::push_param(&mut params, id));
+
+            query.push_str(&statement);
+        }
+
+        if non_empty {
+            tracing::debug!("create attached users query: {query}");
+
+            conn.execute(&query, &params).await?;
+        }
+    }
+
+    {
+        let list: Vec<&sharing::Ability> = to_drop.collect();
+
+        if !list.is_empty() {
+            conn.execute(
+                "delete from journal_share_abilities where journal_shares_id = $1 and ability = any($2)",
+                &[journal_shares_id, &list]
+            ).await?;
+        }
+    }
+
+    Ok(Vec::from_iter(ability_set))
+}
+
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
 pub enum DeleteShareError {
     JournalNotFound,
     ShareNotFound,
@@ -464,12 +643,21 @@ pub async fn delete_share(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
+    authz::assert_permission(&transaction, initiator.user.id, Scope::Journals, Ability::Delete).await?;
+
     let journal = Journal::retrieve(&transaction, (&journals_id, &initiator.user.id))
         .await?
         .ok_or(NetError::Inner(DeleteShareError::JournalNotFound))?;
 
     if journal.users_id != initiator.user.id {
         return Err(NetError::from(authz::PermissionError::Denied));
+    }
+
+    if JournalShare::retrieve(&transaction, (&journal.id, &share_id))
+        .await?
+        .is_none()
+    {
+        return Err(NetError::Inner(DeleteShareError::ShareNotFound));
     }
 
     let _abilities = transaction
@@ -486,12 +674,21 @@ pub async fn delete_share(
         )
         .await?;
 
+    let _invites = transaction
+        .execute(
+            "delete from journal_share_invites where journal_shares_id = $1",
+            &[&share_id]
+        )
+        .await?;
+
     let share = transaction
         .execute("delete from journal_shares where id = $1", &[&share_id])
         .await?;
 
     if share != 1 {
-        return Err(NetError::Inner(DeleteShareError::ShareNotFound));
+        return Err(NetError::message(
+            "failed to delete share when it should have been found",
+        ));
     }
 
     transaction.commit().await?;

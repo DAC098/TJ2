@@ -27,6 +27,7 @@ use crate::user::peer::UserPeer;
 
 mod entries;
 mod share;
+mod invite;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
@@ -55,7 +56,11 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         )
         .route(
             "/:journals_id/share/:share_id",
-            get(share::retrieve_share).delete(share::delete_share),
+            get(share::retrieve_share).patch(share::update_share).delete(share::delete_share),
+        )
+        .route(
+            "/:journals_id/share/:share_id/invite",
+            post(invite::create_invite).delete(invite::delete_invite)
         )
 }
 
