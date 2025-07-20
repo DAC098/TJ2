@@ -92,6 +92,19 @@ function JournalSidebar() {
                 </SidebarGroupContent>
             </SidebarGroup>
             <SidebarGroup>
+                <SidebarGroupLabel>Properties</SidebarGroupLabel>
+                <SidebarGroupContent>
+                    <SidebarMenu>
+                        <SidebarMenuLink
+                            title="Sharing"
+                            tooltip={"Shows the list of shares for the journal."}
+                            path={`/journals/${journals_id}/share`}
+                            active={location.pathname.startsWith(`/journals/${journals_id}/share`)}
+                        />
+                    </SidebarMenu>
+                </SidebarGroupContent>
+            </SidebarGroup>
+            <SidebarGroup>
                 <SidebarGroupLabel>
                     Actions
                 </SidebarGroupLabel>

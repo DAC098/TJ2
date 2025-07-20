@@ -114,10 +114,11 @@ TableCaption.displayName = "TableCaption";
 
 interface DataTableProps<Data, Value> {
     columns: ColumnDef<Data, Value>[],
-    data: Data[]
+    data: Data[],
+    empty?: React.ReactNode | string
 }
 
-const DataTable = <Data, Value>({columns, data}: DataTableProps<Data, Value>) => {
+const DataTable = <Data, Value>({columns, data, empty}: DataTableProps<Data, Value>) => {
     const table = useReactTable({
         data,
         columns,
@@ -144,7 +145,11 @@ const DataTable = <Data, Value>({columns, data}: DataTableProps<Data, Value>) =>
             {headers}
         </TableRow>
     });
-    let body_rows = row_model.rows?.length ? row_model.rows.map((row) => {
+
+    let body_rows;
+
+    if (row_model.rows.length > 0) {
+      body_rows = row_model.rows.map((row) => {
         let cells = row.getVisibleCells().map((cell) => {
             return <TableCell key={cell.id}>
                 {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -153,12 +158,25 @@ const DataTable = <Data, Value>({columns, data}: DataTableProps<Data, Value>) =>
 
         return <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
             {cells}
-        </TableRow>
-    }) : <TableRow>
+        </TableRow>;
+      });
+    } else if (empty != null) {
+      if (typeof empty === "string") {
+        body_rows = <TableRow>
+          <TableCell colSpan={columns.length} className="h-24 text-center">
+              {empty}
+          </TableCell>
+        </TableRow>;
+      } else {
+        body_rows = <TableRow>{empty}</TableRow>;
+      }
+    } else {
+      body_rows = <TableRow>
         <TableCell colSpan={columns.length} className="h-24 text-center">
             No Results
         </TableCell>
-    </TableRow>;
+      </TableRow>;
+    }
 
     return <div className="rounded-md border">
         <Table>

@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
+import { JournalShareEdit, JournalShareSearch } from "./journals/share";
 
 export function JournalRoutes() {
     return <Routes>
@@ -31,6 +32,8 @@ export function JournalRoutes() {
         <Route path="/:journals_id" element={<Journal />}/>
         <Route path="/:journals_id/entries" element={<Entries />}/>
         <Route path="/:journals_id/entries/:entries_id" element={<Entry />}/>
+        <Route path="/:journals_id/share" element={<JournalShareSearch/>}/>
+        <Route path="/:journals_id/share/:share_id" element={<JournalShareEdit/>}/>
     </Routes>;
 }
 

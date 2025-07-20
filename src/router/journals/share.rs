@@ -3,19 +3,45 @@ use std::collections::HashSet;
 use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::Router;
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{JournalId, JournalShareId, UserId, JournalShareInviteToken};
-use crate::journal::sharing::{self, JournalShare, JournalShareInviteStatus};
+use crate::db::ids::{JournalId, JournalShareId};
+use crate::journal::sharing::{self, JournalShare};
 use crate::journal::Journal;
 use crate::net::body;
 use crate::net::Error as NetError;
+use crate::router::handles;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Ability, Scope};
 use crate::state;
+
+mod invite;
+mod users;
+
+pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
+    Router::new()
+        .route("/", get(search_shares).post(create_share))
+        .route("/new", get(handles::send_html))
+        .route(
+            "/:share_id",
+            get(retrieve_share)
+                .patch(update_share)
+                .delete(delete_share),
+        )
+        .route(
+            "/:share_id/invite",
+            get(invite::search_invites).post(invite::create_invite).delete(invite::delete_invite),
+        )
+        .route(
+            "/:share_id/users",
+            get(users::search_users).delete(users::remove_user),
+        )
+}
 
 #[derive(Debug, Deserialize)]
 pub struct JournalPath {
@@ -35,7 +61,6 @@ pub struct JournalSharePartial {
     pub created: DateTime<Utc>,
     pub updated: Option<DateTime<Utc>>,
     pub users: i64,
-    pub abilities: i64,
     pub pending_invites: i64,
 }
 
@@ -82,13 +107,10 @@ pub async fn search_shares(
                journal_shares.created, \
                journal_shares.updated, \
                count(journal_share_users.users_id) as users, \
-               count(journal_share_abilities.journal_shares_id) as abilities, \
                count(journal_share_invites.status) as pending_invites \
         from journal_shares \
             left join journal_share_users on \
                 journal_shares.id = journal_share_users.journal_shares_id \
-            left join journal_share_abilities on \
-                journal_shares.id = journal_share_abilities.journal_shares_id \
             left join journal_share_invites on \
                 journal_shares.id = journal_share_invites.journal_shares_id and
                 journal_share_invites.status = 0 \
@@ -115,8 +137,7 @@ pub async fn search_shares(
             created: row.get(2),
             updated: row.get(3),
             users: row.get(4),
-            abilities: row.get(5),
-            pending_invites: row.get(6),
+            pending_invites: row.get(5),
         });
     }
 
@@ -129,97 +150,7 @@ pub struct JournalShareFull {
     name: String,
     created: DateTime<Utc>,
     updated: Option<DateTime<Utc>>,
-    users: Vec<AttachedUser>,
     abilities: Vec<sharing::Ability>,
-    invites: Vec<InviteFull>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AttachedUser {
-    id: UserId,
-    username: String,
-    added: DateTime<Utc>,
-}
-
-impl AttachedUser {
-    pub async fn retrieve(conn: &impl db::GenericClient, journal_shares_id: &JournalShareId) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
-        let params: db::ParamsArray<'_, 1> = [journal_shares_id];
-
-        Ok(conn
-            .query_raw(
-                "\
-            select users.id, \
-                   users.username, \
-                   journal_share_users.added \
-            from journal_share_users \
-                left join users on \
-                    journal_share_users.users_id = users.id \
-            where journal_share_users.journal_shares_id = $1",
-                params,
-            )
-            .await?
-            .map(|result| result.map(|row| Self {
-                id: row.get(0),
-                username: row.get(1),
-                added: row.get(2),
-            })))
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InviteFull {
-    token: JournalShareInviteToken,
-    user: Option<InviteUser>,
-    issued_on: DateTime<Utc>,
-    expires_on: Option<DateTime<Utc>>,
-    status: JournalShareInviteStatus,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InviteUser {
-    id: UserId,
-    username: String,
-}
-
-impl InviteFull {
-    pub async fn retrieve(conn: &impl db::GenericClient, journal_shares_id: &JournalShareId) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
-        let params: db::ParamsArray<'_, 1> = [journal_shares_id];
-
-        Ok(conn
-            .query_raw(
-                "\
-            select journal_share_invites.token, \
-                   users.id, \
-                   users.username, \
-                   journal_share_invites.issued_on, \
-                   journal_share_invites.expires_on, \
-                   journal_share_invites.status \
-            from journal_share_invites \
-                left join users on \
-                    journal_share_invites.users_id = users.id \
-            where journal_share_invites.journal_shares_id = $1",
-                  params,
-            )
-            .await?
-            .map(|result| result.map(|row| {
-                let user = if let Some(id) = row.get::<usize, Option<UserId>>(1) {
-                    Some(InviteUser {
-                        id,
-                        username: row.get(2),
-                    })
-                } else {
-                    None
-                };
-
-                Self {
-                    token: row.get(0),
-                    user,
-                    issued_on: row.get(3),
-                    expires_on: row.get(4),
-                    status: row.get(5),
-                }
-            })))
-    }
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -272,6 +203,7 @@ pub async fn retrieve_share(
         return Err(NetError::Inner(RetrieveShareError::ShareNotFound));
     };
 
+    /*
     let users = AttachedUser::retrieve(&conn, &id)
         .await?
         .try_collect::<Vec<AttachedUser>>()
@@ -280,6 +212,7 @@ pub async fn retrieve_share(
         .await?
         .try_collect::<Vec<InviteFull>>()
         .await?;
+    */
 
     let abilities = {
         let params: db::ParamsArray<'_, 1> = [&id];
@@ -312,9 +245,7 @@ pub async fn retrieve_share(
         name,
         created,
         updated,
-        users,
         abilities,
-        invites,
     }))
 }
 
@@ -344,15 +275,18 @@ pub async fn create_share(
     state: state::SharedState,
     initiator: Initiator,
     Path(JournalPath { journals_id }): Path<JournalPath>,
-    body::Json(NewJournalShare {
-        name,
-        abilities,
-    }): body::Json<NewJournalShare>,
+    body::Json(NewJournalShare { name, abilities }): body::Json<NewJournalShare>,
 ) -> Result<body::Json<JournalShareFull>, NetError<CreateShareError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    authz::assert_permission(&transaction, initiator.user.id, Scope::Journals, Ability::Update).await?;
+    authz::assert_permission(
+        &transaction,
+        initiator.user.id,
+        Scope::Journals,
+        Ability::Update,
+    )
+    .await?;
 
     let journal = Journal::retrieve(&transaction, (&journals_id, &initiator.user.id))
         .await?
@@ -399,8 +333,6 @@ pub async fn create_share(
     };
 
     let abilities = create_abilities(&transaction, &id, abilities).await?;
-    let users = Vec::new();
-    let invites = Vec::new();
 
     transaction.commit().await?;
 
@@ -409,9 +341,7 @@ pub async fn create_share(
         name,
         created,
         updated: None,
-        users,
         abilities,
-        invites,
     }))
 }
 
@@ -451,7 +381,7 @@ async fn create_abilities(
 #[derive(Debug, Deserialize)]
 pub struct UpdateShare {
     name: String,
-    abilities: Vec<sharing::Ability>
+    abilities: Vec<sharing::Ability>,
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -474,13 +404,22 @@ impl IntoResponse for UpdateShareError {
 pub async fn update_share(
     state: state::SharedState,
     initiator: Initiator,
-    Path(SharePath { journals_id, share_id }): Path<SharePath>,
+    Path(SharePath {
+        journals_id,
+        share_id,
+    }): Path<SharePath>,
     body::Json(UpdateShare { name, abilities }): body::Json<UpdateShare>,
 ) -> Result<body::Json<JournalShareFull>, NetError<UpdateShareError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    authz::assert_permission(&transaction, initiator.user.id, Scope::Journals, Ability::Update).await?;
+    authz::assert_permission(
+        &transaction,
+        initiator.user.id,
+        Scope::Journals,
+        Ability::Update,
+    )
+    .await?;
 
     let journal = Journal::retrieve(&transaction, (&journals_id, &initiator.user.id))
         .await?
@@ -529,14 +468,6 @@ pub async fn update_share(
     }
 
     let abilities = update_abilities(&transaction, &share.id, abilities).await?;
-    let users = AttachedUser::retrieve(&transaction, &share.id)
-        .await?
-        .try_collect::<Vec<AttachedUser>>()
-        .await?;
-    let invites = InviteFull::retrieve(&transaction, &share.id)
-        .await?
-        .try_collect::<Vec<InviteFull>>()
-        .await?;
 
     transaction.commit().await?;
 
@@ -545,9 +476,7 @@ pub async fn update_share(
         name,
         created: share.created,
         updated: Some(updated),
-        users,
         abilities,
-        invites,
     }))
 }
 
@@ -559,8 +488,9 @@ async fn update_abilities(
     if abilities.is_empty() {
         conn.execute(
             "delete from journal_share_abilities where journal_shares_id = $1",
-            &[journal_shares_id]
-        ).await?;
+            &[journal_shares_id],
+        )
+        .await?;
 
         return Ok(Vec::new());
     }
@@ -643,7 +573,13 @@ pub async fn delete_share(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    authz::assert_permission(&transaction, initiator.user.id, Scope::Journals, Ability::Delete).await?;
+    authz::assert_permission(
+        &transaction,
+        initiator.user.id,
+        Scope::Journals,
+        Ability::Delete,
+    )
+    .await?;
 
     let journal = Journal::retrieve(&transaction, (&journals_id, &initiator.user.id))
         .await?
@@ -677,7 +613,7 @@ pub async fn delete_share(
     let _invites = transaction
         .execute(
             "delete from journal_share_invites where journal_shares_id = $1",
-            &[&share_id]
+            &[&share_id],
         )
         .await?;
 

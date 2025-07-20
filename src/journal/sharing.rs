@@ -5,9 +5,10 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use postgres_types as pg_types;
 use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 
 use crate::db;
-use crate::db::ids::{UserId, JournalId, JournalShareId, JournalShareInviteToken};
+use crate::db::ids::{JournalId, JournalShareId, JournalShareInviteToken, UserId};
 use crate::error::BoxDynError;
 
 #[derive(Debug)]
@@ -76,7 +77,7 @@ pub struct JournalShareInvite {
     pub status: JournalShareInviteStatus,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize_repr, Deserialize_repr)]
 #[repr(i16)]
 pub enum JournalShareInviteStatus {
     Pending = 0,
@@ -168,16 +169,22 @@ pub enum Ability {
 pub struct InvalidAbility;
 
 impl Ability {
-    pub async fn retrieve(conn: &impl db::GenericClient, journal_shares_id: &JournalShareId) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
+    pub async fn retrieve(
+        conn: &impl db::GenericClient,
+        journal_shares_id: &JournalShareId,
+    ) -> Result<impl Stream<Item = Result<Self, db::PgError>>, db::PgError> {
         let params: db::ParamsArray<'_, 1> = [journal_shares_id];
 
-        Ok(conn.query_raw(
-            "\
+        Ok(conn
+            .query_raw(
+                "\
             select journal_share_abilities.ability \
             from journal_share_abilities \
             where journal_share_abilities.journal_shares_id = $1",
-            params
-        ).await?.map(|result| result.map(|record| record.get(0))))
+                params,
+            )
+            .await?
+            .map(|result| result.map(|record| record.get(0))))
     }
 
     pub fn as_str(&self) -> &'static str {

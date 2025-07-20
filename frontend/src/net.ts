@@ -125,3 +125,8 @@ export async function req_api_json_empty(
         throw new ApiError(error, {message, data: rest});
     }
 }
+
+// @ts-ignore
+window["req_api_json"] = req_api_json;
+// @ts-ignore
+window["req_api_json_empty"] = req_api_json_empty;
