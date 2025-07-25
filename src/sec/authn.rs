@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, Method, Uri};
 use axum::response::IntoResponse;
 
 use crate::db;
+use crate::db::ids::UserId;
 use crate::net::body;
 use crate::net::error::Error as NetError;
 use crate::net::header::{is_accepting_html, Location};
@@ -164,6 +165,12 @@ impl ApiInitiator {
         };
 
         Ok(Self { user, session })
+    }
+}
+
+impl AsRef<UserId> for Initiator {
+    fn as_ref(&self) -> &UserId {
+        &self.user.id
     }
 }
 

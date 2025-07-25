@@ -13,7 +13,7 @@ use crate::db::ids::{CustomFieldId, EntryId, FileEntryId, FileEntryUid, JournalI
 use crate::fs::RemovedFiles;
 use crate::journal::{
     self, assert_permission, custom_field, CustomField, Entry, EntryCreateError, Journal,
-    JournalDir, RequestedFile, RequestedFileBuilder,
+    JournalDir, RequestedFile, RequestedFileBuilder, sharing
 };
 use crate::net::body;
 use crate::net::Error;
@@ -63,11 +63,18 @@ pub async fn retrieve_blank(
 
     let conn = state.db().get().await?;
 
-    let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&conn, &journals_id)
         .await?
         .ok_or(Error::Inner(RetrieveBlankError::JournalNotFound))?;
 
-    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read).await?;
+    assert_permission(
+        &conn,
+        &initiator,
+        &journal,
+        Scope::Entries,
+        Ability::Read,
+        sharing::Ability::EntryRead,
+    ).await?;
 
     Ok(body::Json(
         form::EntryForm::blank(&conn, &journal.id).await?,
@@ -103,11 +110,18 @@ pub async fn retrieve_entry(
 
     let conn = state.db().get().await?;
 
-    let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&conn, &journals_id)
         .await?
         .ok_or(Error::Inner(RetrieveError::JournalNotFound))?;
 
-    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read).await?;
+    assert_permission(
+        &conn,
+        &initiator,
+        &journal,
+        Scope::Entries,
+        Ability::Read,
+        sharing::Ability::EntryRead,
+    ).await?;
 
     let rtn = form::EntryForm::retrieve_entry(&conn, &journal.id, &entries_id)
         .await?
@@ -247,7 +261,7 @@ pub async fn create_entry(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&transaction, &journals_id)
         .await?
         .ok_or(Error::Inner(CreateEntryError::JournalNotFound))?;
 
@@ -257,11 +271,12 @@ pub async fn create_entry(
         &journal,
         Scope::Entries,
         Ability::Create,
+        sharing::Ability::EntryCreate,
     )
     .await?;
 
     let entry = {
-        let mut options = Entry::create_options(journal.id, initiator.user.id, json.date);
+        let mut options = Entry::create_options(journal.id, journal.users_id, json.date);
         options.title = opt_non_empty_str(json.title);
         options.contents = opt_non_empty_str(json.contents);
 
@@ -364,7 +379,7 @@ pub async fn update_entry(
     let mut conn = state.db_conn().await?;
     let transaction = conn.transaction().await?;
 
-    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&transaction, &journals_id)
         .await?
         .ok_or(Error::Inner(UpdateEntryError::JournalNotFound))?;
 
@@ -374,10 +389,11 @@ pub async fn update_entry(
         &journal,
         Scope::Entries,
         Ability::Update,
+        sharing::Ability::EntryUpdate,
     )
     .await?;
 
-    let mut entry = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
+    let mut entry = Entry::retrieve(&transaction, (&journal.id, &entries_id))
         .await?
         .ok_or(Error::Inner(UpdateEntryError::EntryNotFound))?;
 
@@ -532,7 +548,7 @@ pub async fn delete_entry(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&transaction, &journals_id)
         .await?
         .ok_or(Error::Inner(DeleteEntryError::JournalNotFound))?;
 
@@ -542,10 +558,11 @@ pub async fn delete_entry(
         &journal,
         Scope::Entries,
         Ability::Delete,
+        sharing::Ability::EntryDelete,
     )
     .await?;
 
-    let entry = Entry::retrieve_id(&transaction, &journal.id, &initiator.user.id, &entries_id)
+    let entry = Entry::retrieve(&transaction, (&journal.id, &entries_id))
         .await?
         .ok_or(Error::Inner(DeleteEntryError::EntryNotFound))?;
 

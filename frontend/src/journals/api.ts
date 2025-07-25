@@ -200,12 +200,17 @@ export namespace custom_field {
 export interface JournalPartial {
     id: number,
     uid: string,
-    users_id: number,
     name: string,
     description: string | null,
     created: string,
     updated: string | null,
     has_peers: boolean,
+    owner: JournalOwner,
+}
+
+export interface JournalOwner {
+    id: number,
+    username: string
 }
 
 export interface JournalPeer {
@@ -485,9 +490,7 @@ export async function create_entry(
     journals_id: string,
     entry: UIEntryForm,
 ) {
-    console.log(entry);
-
-    let sending = {
+    let sending: any = {
         date: typeof entry.date === "string" ?
             entry.date : get_date(entry.date),
         title: entry.title,
@@ -548,9 +551,7 @@ export async function update_entry(
     entries_id: string,
     entry: UIEntryForm,
 ) {
-    console.log(entry);
-
-    let sending = {
+    let sending: any = {
         date: typeof entry.date === "string" ?
             entry.date : get_date(entry.date),
         title: entry.title,
@@ -625,7 +626,7 @@ export async function upload_data(
     entries_id: string | number,
     file_entry_id: string | number,
     data: Blob | File,
-): Promise<ReceivedFile> {
+): Promise<ReceivedFile | null> {
     try {
         let path = `/journals/${journals_id}/entries/${entries_id}/${file_entry_id}`;
 

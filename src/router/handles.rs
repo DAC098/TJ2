@@ -15,6 +15,7 @@ pub async fn send_html(
     Ok(body::Json("okay"))
 }
 
+#[allow(dead_code)]
 pub async fn send_json(_: Initiator) -> Result<body::Json<&'static str>, Error> {
     Ok(body::Json("okay"))
 }

@@ -77,6 +77,49 @@ pub struct JournalShareInvite {
     pub status: JournalShareInviteStatus,
 }
 
+pub enum RetrieveJournalShareInvite<'a> {
+    Token(&'a JournalShareInviteToken)
+}
+
+impl<'a> From<&'a JournalShareInviteToken> for RetrieveJournalShareInvite<'a> {
+    fn from(given: &'a JournalShareInviteToken) -> Self {
+        Self::Token(given)
+    }
+}
+
+impl JournalShareInvite {
+    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<RetrieveJournalShareInvite<'a>>
+    {
+        let result = match given.into() {
+            RetrieveJournalShareInvite::Token(token) => {
+                conn.query_opt(
+                    "\
+                    select journal_share_invites.token, \
+                           journal_share_invites.journal_shares_id, \
+                           journal_share_invites.users_id, \
+                           journal_share_invites.issued_on, \
+                           journal_share_invites.expires_on, \
+                           journal_share_invites.status \
+                    from journal_share_invites \
+                    where journal_share_invites.token = $1",
+                    &[token]
+                ).await?
+            }
+        };
+
+        Ok(result.map(|row| Self {
+            token: row.get(0),
+            journal_shares_id: row.get(1),
+            users_id: row.get(2),
+            issued_on: row.get(3),
+            expires_on: row.get(4),
+            status: row.get(5),
+        }))
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize_repr, Deserialize_repr)]
 #[repr(i16)]
 pub enum JournalShareInviteStatus {
@@ -158,7 +201,9 @@ pub struct JournalShareAbility {
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ability {
+    JournalRead,
     JournalUpdate,
+    EntryRead,
     EntryCreate,
     EntryUpdate,
     EntryDelete,
@@ -189,7 +234,9 @@ impl Ability {
 
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::JournalRead => "journal_read",
             Self::JournalUpdate => "journal_update",
+            Self::EntryRead => "entry_read",
             Self::EntryCreate => "entry_create",
             Self::EntryUpdate => "entry_update",
             Self::EntryDelete => "entry_delete",
@@ -202,7 +249,9 @@ impl FromStr for Ability {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "journal_read" => Ok(Self::JournalRead),
             "journal_update" => Ok(Self::JournalUpdate),
+            "entry_read" => Ok(Self::EntryRead),
             "entry_create" => Ok(Self::EntryCreate),
             "entry_update" => Ok(Self::EntryUpdate),
             "entry_delete" => Ok(Self::EntryDelete),
@@ -237,4 +286,27 @@ impl pg_types::ToSql for Ability {
     }
 
     pg_types::to_sql_checked!();
+}
+
+pub async fn has_permission(
+    conn: &impl db::GenericClient,
+    journals_id: &JournalId,
+    users_id: &UserId,
+    ability: Ability
+) -> Result<bool, db::PgError> {
+    let found = conn.execute(
+        "\
+        select journal_shares.id \
+        from journal_share_users \
+            join journal_shares on \
+                journal_share_users.journal_shares_id = journal_shares.id and \
+                journal_shares.journals_id = $1 \
+            join journal_share_abilities on \
+                journal_shares.id = journal_share_abilities.journal_shares_id and \
+                journal_share_abilities.ability = $3 \
+        where journal_share_users.users_id = $2",
+        &[journals_id, users_id, &ability]
+    ).await?;
+
+    Ok(found >= 1)
 }

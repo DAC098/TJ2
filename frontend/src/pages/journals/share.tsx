@@ -196,7 +196,9 @@ export function JournalShareEdit() {
 interface JournalShareForm {
     name: string,
     abilities: {
+        "JournalRead": boolean,
         "JournalUpdate": boolean,
+        "EntryRead": boolean,
         "EntryCreate": boolean,
         "EntryUpdate": boolean,
         "EntryDelete": boolean,
@@ -207,7 +209,9 @@ function get_form_state(given: JournalShareFull): JournalShareForm {
     let rtn = {
         name: given.name.slice(0),
         abilities: {
+            "JournalRead": false,
             "JournalUpdate": false,
+            "EntryRead": false,
             "EntryCreate": false,
             "EntryUpdate": false,
             "EntryDelete": false,
@@ -373,6 +377,19 @@ function JournalShareCoreEdit({journals_id, share_id, journal_share}: JournalSha
                 <FormRootError/>
                 <h2 className="text-xl font-medium">Journal</h2>
                 <div className="grid grid-cols-2 gap-2">
+                    <FormField control={form.control} name="abilities.JournalRead" render={({field}) => {
+                        return <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                            <FormControl>
+                                <Checkbox checked={field.value} onCheckedChange={field.onChange}/>
+                            </FormControl>
+                            <div className="space-y-1 leading-none">
+                                <FormLabel>Journal Read</FormLabel>
+                                <FormDescription>
+                                    Allows for the ability to read information about the journal.
+                                </FormDescription>
+                            </div>
+                        </FormItem>;
+                    }}/>
                     <FormField control={form.control} name="abilities.JournalUpdate" render={({field}) => {
                         return <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
                             <FormControl>
@@ -381,7 +398,7 @@ function JournalShareCoreEdit({journals_id, share_id, journal_share}: JournalSha
                             <div className="space-y-1 leading-none">
                                 <FormLabel>Journal Update</FormLabel>
                                 <FormDescription>
-                                    Allows for the ability to update certain parts of the journal itself.
+                                    Allows for the ability to update certain parts of the journal.
                                 </FormDescription>
                             </div>
                         </FormItem>;
@@ -389,6 +406,19 @@ function JournalShareCoreEdit({journals_id, share_id, journal_share}: JournalSha
                 </div>
                 <h2 className="text-xl font-medium">Entries</h2>
                 <div className="grid grid-cols-2 gap-2">
+                    <FormField control={form.control} name="abilities.EntryRead" render={({field}) => {
+                        return <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                            <FormControl>
+                                <Checkbox checked={field.value} onCheckedChange={field.onChange}/>
+                            </FormControl>
+                            <div className="space-y-1 leading-none">
+                                <FormLabel>Entry Read</FormLabel>
+                                <FormDescription>
+                                    Allows for the ability to read entries for the journal.
+                                </FormDescription>
+                            </div>
+                        </FormItem>;
+                    }}/>
                     <FormField control={form.control} name="abilities.EntryCreate" render={({field}) => {
                         return <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
                             <FormControl>
@@ -397,7 +427,7 @@ function JournalShareCoreEdit({journals_id, share_id, journal_share}: JournalSha
                             <div className="space-y-1 leading-none">
                                 <FormLabel>Entry Create</FormLabel>
                                 <FormDescription>
-                                    Allows for the ability to create new entries for a journal.
+                                    Allows for the ability to create new entries for the journal.
                                 </FormDescription>
                             </div>
                         </FormItem>;
@@ -410,7 +440,7 @@ function JournalShareCoreEdit({journals_id, share_id, journal_share}: JournalSha
                             <div className="space-y-1 leading-none">
                                 <FormLabel>Entry Update</FormLabel>
                                 <FormDescription>
-                                    Allows for the ability to update existing entries for a journal.
+                                    Allows for the ability to update existing entries for read journal.
                                 </FormDescription>
                             </div>
                         </FormItem>;
@@ -423,7 +453,7 @@ function JournalShareCoreEdit({journals_id, share_id, journal_share}: JournalSha
                             <div className="space-y-1 leading-none">
                                 <FormLabel>Entry Delete</FormLabel>
                                 <FormDescription>
-                                    Allows for the ability to delete existing entries for a journal.
+                                    Allows for the ability to delete existing entries for read journal.
                                 </FormDescription>
                             </div>
                         </FormItem>;

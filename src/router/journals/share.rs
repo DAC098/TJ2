@@ -203,17 +203,6 @@ pub async fn retrieve_share(
         return Err(NetError::Inner(RetrieveShareError::ShareNotFound));
     };
 
-    /*
-    let users = AttachedUser::retrieve(&conn, &id)
-        .await?
-        .try_collect::<Vec<AttachedUser>>()
-        .await?;
-    let invites = InviteFull::retrieve(&conn, &id)
-        .await?
-        .try_collect::<Vec<InviteFull>>()
-        .await?;
-    */
-
     let abilities = {
         let params: db::ParamsArray<'_, 1> = [&id];
 

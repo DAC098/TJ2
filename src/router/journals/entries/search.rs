@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::{CustomFieldId, EntryId, EntryUid, JournalId, UserId};
-use crate::journal::{assert_permission, custom_field, CustomField, Journal};
+use crate::journal::{assert_permission, custom_field, CustomField, Journal, sharing};
 use crate::net::body;
 use crate::net::Error;
 use crate::sec::authn::Initiator;
@@ -101,7 +101,7 @@ pub async fn search_entries(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&transaction, &journals_id)
         .await?
         .ok_or(Error::Inner(SearchEntriesError::JournalNotFound))?;
 
@@ -111,6 +111,7 @@ pub async fn search_entries(
         &journal,
         Scope::Entries,
         Ability::Read,
+        sharing::Ability::EntryRead,
     )
     .await?;
 

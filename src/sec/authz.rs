@@ -393,44 +393,6 @@ pub async fn has_permission(
     Ok(result > 0)
 }
 
-pub async fn has_permission_ref<'a, T>(
-    conn: &impl db::GenericClient,
-    users_id: UserId,
-    scope: Scope,
-    ability: Ability,
-    ref_id: T,
-) -> Result<bool, db::PgError>
-where
-    T: AsRef<i64>,
-{
-    let id = ref_id.as_ref();
-
-    let result = conn
-        .execute(
-            "\
-        select authz_permissions.role_id \
-        from authz_permissions \
-            join authz_roles on \
-                authz_permissions.role_id = authz_roles.id \
-            left join group_roles on \
-                authz_roles.id = group_roles.role_id \
-            left join groups on \
-                group_roles.groups_id = groups.id \
-            left join group_users on \
-                groups.id = group_users.groups_id \
-            left join user_roles on \
-                authz_roles.id = user_roles.role_id \
-        where (user_roles.users_id = $1 or group_users.users_id = $1) and \
-            authz_permissions.scope = $2 and \
-            authz_permissions.ability = $3 and \
-            authz_permissions.ref_id = $4",
-            &[&users_id, &scope, &ability, id],
-        )
-        .await?;
-
-    Ok(result > 0)
-}
-
 pub async fn assert_permission(
     conn: &impl db::GenericClient,
     users_id: UserId,
@@ -438,23 +400,6 @@ pub async fn assert_permission(
     ability: Ability,
 ) -> Result<(), PermissionError> {
     if has_permission(conn, users_id, scope, ability).await? {
-        Ok(())
-    } else {
-        Err(PermissionError::Denied)
-    }
-}
-
-pub async fn assert_permission_ref<T>(
-    conn: &impl db::GenericClient,
-    users_id: UserId,
-    scope: Scope,
-    ability: Ability,
-    ref_id: T,
-) -> Result<(), PermissionError>
-where
-    T: AsRef<i64>,
-{
-    if has_permission_ref(conn, users_id, scope, ability, ref_id).await? {
         Ok(())
     } else {
         Err(PermissionError::Denied)

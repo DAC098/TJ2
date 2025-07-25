@@ -6,17 +6,18 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserId, UserPeerId};
+use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserId, UserPeerId, JournalShareInviteToken};
 use crate::error;
 use crate::jobs;
 use crate::journal::{
     assert_permission, custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError,
     JournalUpdateError,
 };
+use crate::journal::sharing;
 use crate::net::body;
 use crate::net::Error as NetError;
 use crate::router::handles;
@@ -31,6 +32,7 @@ mod share;
 pub fn build(state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
         .route("/", get(retrieve_journals).post(create_journal))
+        .route("/invite/:code", get(retrieve_journal_invite).patch(decide_journal_invite))
         .route("/new", get(handles::send_html))
         .route("/:journals_id", get(retrieve_journal).patch(update_journal))
         .route(
@@ -53,23 +55,28 @@ pub fn build(state: &state::SharedState) -> Router<state::SharedState> {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
 pub struct JournalPartial {
     id: JournalId,
     uid: JournalUid,
-    users_id: UserId,
     name: String,
     description: Option<String>,
     created: DateTime<Utc>,
     updated: Option<DateTime<Utc>>,
     has_peers: bool,
+    owner: JournalOwner,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JournalOwner {
+    id: UserId,
+    username: String,
 }
 
 async fn retrieve_journals(
     state: state::SharedState,
     initiator: Initiator,
     headers: HeaderMap,
-) -> Result<Response, NetError> {
+) -> Result<body::Json<Vec<JournalPartial>>, NetError> {
     body::assert_html(state.templates(), &headers)?;
 
     let conn = state.db().get().await?;
@@ -87,43 +94,48 @@ async fn retrieve_journals(
                journals.description, \
                journals.created, \
                journals.updated, \
-               count(journal_peers.user_peers_id) > 0 as has_peers \
+               count(journal_peers.user_peers_id) > 0 as has_peers, \
+               users.username \
         from journals \
             left join journal_peers on \
                 journals.id = journal_peers.journals_id \
-        where journals.users_id = $1 \
+            left join journal_shares on \
+                journals.id = journal_shares.journals_id \
+            left join journal_share_users on \
+                journal_shares.id = journal_share_users.journal_shares_id \
+            join users on \
+                journals.users_id = users.id \
+        where journals.users_id = $1 or journal_share_users.users_id = $1 \
         group by journals.id, \
                  journals.uid, \
                  journals.users_id, \
                  journals.name, \
                  journals.description, \
                  journals.created, \
-                 journals.updated \
-        order by journals.name",
+                 journals.updated, \
+                 users.username \
+        order by journals.users_id = $1 desc, \
+                 journals.name",
             params,
         )
-        .await?;
-
-    futures::pin_mut!(journals);
-
-    let mut found = Vec::new();
-
-    while let Some(try_record) = journals.next().await {
-        let record = try_record?;
-
-        found.push(JournalPartial {
+        .await?
+        .map(|maybe| maybe.map(|record| JournalPartial {
             id: record.get(0),
             uid: record.get(1),
-            users_id: record.get(2),
             name: record.get(3),
             description: record.get(4),
             created: record.get(5),
             updated: record.get(6),
             has_peers: record.get(7),
-        });
-    }
+            owner: JournalOwner {
+                id: record.get(2),
+                username: record.get(8),
+            }
+        }))
+        .try_collect::<Vec<JournalPartial>>()
+        .await?;
 
-    Ok(body::Json(found).into_response())
+    Ok(body::Json(journals))
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,11 +244,18 @@ async fn retrieve_journal(
 
     let conn = state.db().get().await?;
 
-    let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&conn, &journals_id)
         .await?
         .ok_or(NetError::Inner(RetrieveJournalError::JournalNotFound))?;
 
-    assert_permission(&conn, &initiator, &journal, Scope::Journals, Ability::Read).await?;
+    assert_permission(
+        &conn,
+        &initiator,
+        &journal,
+        Scope::Journals,
+        Ability::Read,
+        sharing::Ability::JournalRead,
+    ).await?;
 
     let custom_fields = {
         let fields = CustomField::retrieve_journal_stream(&conn, &journals_id).await?;
@@ -451,17 +470,19 @@ async fn update_journal(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    authz::assert_permission(
-        &transaction,
-        initiator.user.id,
-        Scope::Journals,
-        Ability::Update,
-    )
-    .await?;
-
-    let mut journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+    let mut journal = Journal::retrieve(&transaction, &journals_id)
         .await?
         .ok_or(NetError::Inner(UpdateJournalError::JournalNotFound))?;
+
+    assert_permission(
+        &transaction,
+        &initiator,
+        &journal,
+        Scope::Journals,
+        Ability::Update,
+        sharing::Ability::JournalUpdate,
+    )
+    .await?;
 
     journal.name = json.name;
     journal.description = json.description;
@@ -910,4 +931,175 @@ async fn sync_with_remote(
     } else {
         Ok(SyncResult::Queued { successful })
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InvitePath {
+    code: JournalShareInviteToken
+}
+
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum RetrieveJournalInviteError {
+    InviteNotFound,
+    InviteExpired,
+    InviteUsed,
+}
+
+impl IntoResponse for RetrieveJournalInviteError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::InviteNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::InviteExpired => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::InviteUsed => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+        }
+    }
+}
+
+async fn retrieve_journal_invite(
+    state: state::SharedState,
+    initiator: Initiator,
+    Path(InvitePath { code }): Path<InvitePath>
+) -> Result<body::Json<JournalPartial>, NetError<RetrieveJournalInviteError>> {
+    let conn = state.db().get().await?;
+
+    let invite = sharing::JournalShareInvite::retrieve(&conn, &code)
+        .await?
+        .ok_or(NetError::Inner(RetrieveJournalInviteError::InviteNotFound))?;
+
+    if !invite.status.is_pending() {
+        return Err(NetError::Inner(RetrieveJournalInviteError::InviteUsed));
+    }
+
+    let now = Utc::now();
+
+    if let Some(expires_on) = &invite.expires_on {
+        if *expires_on < now {
+            return Err(NetError::Inner(RetrieveJournalInviteError::InviteExpired));
+        }
+    }
+
+    let result = conn.query_opt(
+        "\
+        select journals.id, \
+               journals.uid, \
+               journals.users_id, \
+               journals.name, \
+               journals.description, \
+               journals.created, \
+               journals.updated, \
+               false as has_peers, \
+               users.username \
+        from journals \
+            left join journal_peers on \
+                journals.id = journal_peers.journals_id \
+            join journal_shares on \
+                journals.id = journal_shares.journals_id \
+            join journal_share_invites on \
+                journal_shares.id = journal_share_invites.journal_shares_id \
+            join users on \
+                journals.users_id = users.id \
+        where journal_share_invites.token = $1",
+        &[&invite.token]
+    ).await?;
+
+    if let Some(record) = result {
+        Ok(body::Json(JournalPartial {
+            id: record.get(0),
+            uid: record.get(1),
+            name: record.get(3),
+            description: record.get(4),
+            created: record.get(5),
+            updated: record.get(6),
+            has_peers: record.get(7),
+            owner: JournalOwner {
+                id: record.get(2),
+                username: record.get(8),
+            }
+        }))
+    } else {
+        Err(NetError::Inner(RetrieveJournalInviteError::InviteNotFound))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum InviteChoice {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum DecideJournalInviteError {
+    InviteNotFound,
+    InviteExpired,
+    InviteUsed,
+}
+
+impl IntoResponse for DecideJournalInviteError{
+    fn into_response(self) -> Response {
+        match self {
+            Self::InviteNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::InviteExpired => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::InviteUsed => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+        }
+    }
+}
+
+async fn decide_journal_invite(
+    state: state::SharedState,
+    initiator: Initiator,
+    Path(InvitePath { code }): Path<InvitePath>,
+    body::Json(choice): body::Json<InviteChoice>
+) -> Result<StatusCode, NetError<DecideJournalInviteError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
+
+    let invite = sharing::JournalShareInvite::retrieve(&transaction, &code)
+        .await?
+        .ok_or(NetError::Inner(DecideJournalInviteError::InviteNotFound))?;
+
+    if !invite.status.is_pending() {
+        return Err(NetError::Inner(DecideJournalInviteError::InviteUsed));
+    }
+
+    let now = Utc::now();
+
+    if let Some(expires_on) = &invite.expires_on {
+        if *expires_on < now {
+            return Err(NetError::Inner(DecideJournalInviteError::InviteExpired));
+        }
+    }
+
+    match choice {
+        InviteChoice::Accept => {
+            let status = sharing::JournalShareInviteStatus::Accepted;
+
+            transaction.execute(
+                "update journal_share_invites set status = $2, users_id = $3 where token = $1",
+                &[&invite.token, &status, &initiator.user.id]
+            ).await?;
+
+            transaction.execute(
+                "\
+                insert into journal_share_users (journal_shares_id, users_id, added) values \
+                ($1, $2, $3) \
+                on conflict on constraint journal_share_users_journal_shares_id_users_id_key do nothing",
+                &[&invite.journal_shares_id, &initiator.user.id, &now]
+            ).await?;
+        }
+        InviteChoice::Reject => {
+            let status = sharing::JournalShareInviteStatus::Rejected;
+
+            transaction.execute(
+                "update journal_share_invites set status = $2 where token = $1",
+                &[&invite.token, &status]
+            ).await?;
+        }
+    }
+
+    transaction.commit().await?;
+
+    Ok(StatusCode::OK)
 }

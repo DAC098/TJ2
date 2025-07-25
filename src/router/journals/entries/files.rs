@@ -15,7 +15,7 @@ use crate::db;
 use crate::db::ids::{EntryId, FileEntryId, JournalId};
 use crate::fs::FileCreater;
 use crate::journal::{
-    assert_permission, FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile,
+    assert_permission, FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile, sharing,
 };
 use crate::net::body;
 use crate::net::Error;
@@ -67,11 +67,18 @@ pub async fn retrieve_file(
 ) -> Result<Response, Error<RetrieveError>> {
     let conn = state.db_conn().await?;
 
-    let journal = Journal::retrieve_id(&conn, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&conn, &journals_id)
         .await?
         .ok_or(Error::Inner(RetrieveError::JournalNotFound))?;
 
-    assert_permission(&conn, &initiator, &journal, Scope::Entries, Ability::Read).await?;
+    assert_permission(
+        &conn,
+        &initiator,
+        &journal,
+        Scope::Entries,
+        Ability::Read,
+        sharing::Ability::EntryRead,
+    ).await?;
 
     let file_entry = FileEntry::retrieve_file_entry(&conn, &entries_id, &file_entry_id)
         .await?
@@ -150,7 +157,7 @@ pub async fn upload_file(
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
 
-    let journal = Journal::retrieve_id(&transaction, &journals_id, &initiator.user.id)
+    let journal = Journal::retrieve(&transaction, &journals_id)
         .await?
         .ok_or(Error::Inner(UploadError::JournalNotFound))?;
 
@@ -160,6 +167,7 @@ pub async fn upload_file(
         &journal,
         Scope::Entries,
         Ability::Update,
+        sharing::Ability::EntryUpdate,
     )
     .await?;
 

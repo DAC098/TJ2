@@ -16,7 +16,6 @@ use crate::db::ids::{
 };
 use crate::db::{self, GenericClient, PgError};
 use crate::error::BoxDynError;
-use crate::sec::authn::Initiator;
 use crate::sec::authz;
 use crate::sec::Hash;
 
@@ -25,18 +24,23 @@ pub mod sharing;
 
 pub async fn assert_permission(
     conn: &impl db::GenericClient,
-    initiator: &Initiator,
+    user: impl AsRef<UserId>,
     journal: &Journal,
     scope: authz::Scope,
     ability: authz::Ability,
+    share_ability: sharing::Ability,
 ) -> Result<(), authz::PermissionError> {
-    if journal.users_id == initiator.user.id {
-        tracing::debug!("assert permission");
-        authz::assert_permission(conn, initiator.user.id, scope, ability).await
-    } else {
-        tracing::debug!("assert permission ref");
-        authz::assert_permission_ref(conn, initiator.user.id, scope, ability, journal.id).await
+    let users_id = user.as_ref();
+
+    authz::assert_permission(conn, *users_id, scope, ability).await?;
+
+    if journal.users_id != *users_id {
+        if !sharing::has_permission(conn, &journal.id, users_id, share_ability).await? {
+            return Err(authz::PermissionError::Denied)
+        }
     }
+
+    Ok(())
 }
 
 /// the potential errors when creating a journal
@@ -128,8 +132,15 @@ pub struct Journal {
 }
 
 pub enum RetrieveQuery<'a> {
+    Id(&'a JournalId),
     IdAndUser((&'a JournalId, &'a UserId)),
     Uid(&'a JournalUid),
+}
+
+impl<'a> From<&'a JournalId> for RetrieveQuery<'a> {
+    fn from(given: &'a JournalId) -> Self {
+        Self::Id(given)
+    }
 }
 
 impl<'a> From<(&'a JournalId, &'a UserId)> for RetrieveQuery<'a> {
@@ -164,6 +175,14 @@ impl Journal {
             from journals";
 
         match given.into() {
+            RetrieveQuery::Id(journals_id) => {
+                let query = format!(
+                    "{base} \
+                    where journals.id = $1"
+                );
+
+                conn.query_opt(&query, &[journals_id]).await
+            }
             RetrieveQuery::IdAndUser((journals_id, users_id)) => {
                 let query = format!(
                     "{base} \
@@ -380,6 +399,23 @@ pub struct Entry {
     pub updated: Option<DateTime<Utc>>,
 }
 
+pub enum EntryRetrieveOne<'a> {
+    JournalAndId((&'a JournalId, &'a EntryId)),
+    JournalAndUserAndId((&'a JournalId, &'a UserId, &'a EntryId)),
+}
+
+impl<'a> From<(&'a JournalId, &'a EntryId)> for EntryRetrieveOne<'a> {
+    fn from(given: (&'a JournalId, &'a EntryId)) -> Self {
+        Self::JournalAndId(given)
+    }
+}
+
+impl<'a> From<(&'a JournalId, &'a UserId, &'a EntryId)> for EntryRetrieveOne<'a> {
+    fn from(given: (&'a JournalId, &'a UserId, &'a EntryId)) -> Self {
+        Self::JournalAndUserAndId(given)
+    }
+}
+
 impl Entry {
     pub fn create_options(
         journals_id: JournalId,
@@ -462,16 +498,11 @@ impl Entry {
         }
     }
 
-    /// attempts to retrieve the specified entry for the [`JournalId`],
-    /// [`UserId`], and [`EntryId`]
-    pub async fn retrieve_id(
-        conn: &impl GenericClient,
-        journals_id: &JournalId,
-        users_id: &UserId,
-        entries_id: &EntryId,
-    ) -> Result<Option<Self>, PgError> {
-        conn.query_opt(
-            "\
+    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<EntryRetrieveOne<'a>>
+    {
+        let base = "\
             select entries.id, \
                    entries.uid, \
                    entries.journals_id, \
@@ -481,26 +512,41 @@ impl Entry {
                    entries.contents, \
                    entries.created, \
                    entries.updated \
-            from entries \
-            where entries.journals_id = $1 and \
-                  entries.id = $3 and \
-                  entries.users_id = $2",
-            &[journals_id, users_id, entries_id],
-        )
-        .await
-        .map(|maybe| {
-            maybe.map(|found| Self {
-                id: found.get(0),
-                uid: found.get(1),
-                journals_id: found.get(2),
-                users_id: found.get(3),
-                date: found.get(4),
-                title: found.get(5),
-                contents: found.get(6),
-                created: found.get(7),
-                updated: found.get(8),
-            })
-        })
+            from entries";
+
+        let result = match given.into() {
+            EntryRetrieveOne::JournalAndId((journals_id, entries_id)) => {
+                let query = format!(
+                "{base} \
+                where entries.journals_id = $1 and \
+                      entries.id = $2"
+                );
+
+                conn.query_opt(&query, &[journals_id, entries_id]).await
+            }
+            EntryRetrieveOne::JournalAndUserAndId((journals_id, users_id, entries_id)) => {
+                let query = format!(
+                    "{base} \
+                    where entries.journals_id = $1 and \
+                          entries.users_id = $2 and \
+                          entries.id = $3"
+                );
+
+                conn.query_opt(&query, &[journals_id, users_id, entries_id]).await
+            }
+        };
+
+        Ok(result?.map(|found| Self {
+            id: found.get(0),
+            uid: found.get(1),
+            journals_id: found.get(2),
+            users_id: found.get(3),
+            date: found.get(4),
+            title: found.get(5),
+            contents: found.get(6),
+            created: found.get(7),
+            updated: found.get(8),
+        }))
     }
 
     pub async fn update(&mut self, conn: &impl GenericClient) -> Result<(), EntryUpdateError> {
