@@ -320,7 +320,7 @@ function JournalShareCoreEdit({journals_id, share_id, journal_share}: JournalSha
             }
 
             if (share_id === "new") {
-                let res = await req_api_json<JournalShareFull>("POST", `/journals${journals_id}/share`, body);
+                let res = await req_api_json<JournalShareFull>("POST", `/journals/${journals_id}/share`, body);
 
                 client.setQueryData(edit_query_key(journals_id, res.id.toString(10)), res);
 
