@@ -17,7 +17,6 @@ mod jobs;
 mod net;
 mod path;
 mod sec;
-mod serde;
 mod state;
 mod sync;
 mod templates;

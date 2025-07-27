@@ -14,6 +14,7 @@ use crate::error::BoxDynError;
 #[derive(Debug)]
 pub struct JournalShare {
     pub id: JournalShareId,
+    #[allow(dead_code)]
     pub journals_id: JournalId,
     pub name: String,
     pub created: DateTime<Utc>,
@@ -71,7 +72,9 @@ impl JournalShare {
 pub struct JournalShareInvite {
     pub token: JournalShareInviteToken,
     pub journal_shares_id: JournalShareId,
+    #[allow(dead_code)]
     pub users_id: Option<UserId>,
+    #[allow(dead_code)]
     pub issued_on: DateTime<Utc>,
     pub expires_on: Option<DateTime<Utc>>,
     pub status: JournalShareInviteStatus,
@@ -192,11 +195,6 @@ impl pg_types::ToSql for JournalShareInviteStatus {
     }
 
     pg_types::to_sql_checked!();
-}
-
-pub struct JournalShareAbility {
-    pub journal_shares_id: JournalShareId,
-    pub ability: Ability,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]

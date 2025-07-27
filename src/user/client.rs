@@ -4,12 +4,17 @@ use tj2_lib::sec::pki::PublicKey;
 use crate::db;
 use crate::db::ids::{UserClientId, UserId};
 
+#[derive(Debug)]
 pub struct UserClient {
     pub id: UserClientId,
     pub users_id: UserId,
+    #[allow(dead_code)]
     pub name: String,
+    #[allow(dead_code)]
     pub public_key: PublicKey,
+    #[allow(dead_code)]
     pub created: DateTime<Utc>,
+    #[allow(dead_code)]
     pub updated: Option<DateTime<Utc>>,
 }
 

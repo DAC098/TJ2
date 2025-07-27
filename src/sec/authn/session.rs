@@ -18,6 +18,7 @@ pub type SessionToken = Token<SESSION_TOKEN_LEN>;
 pub struct Session {
     pub token: SessionToken,
     pub users_id: UserId,
+    #[allow(dead_code)]
     pub issued_on: DateTime<Utc>,
     pub expires_on: DateTime<Utc>,
     pub authenticated: bool,
@@ -28,7 +29,9 @@ pub struct Session {
 pub struct ApiSession {
     pub token: ApiSessionToken,
     pub users_id: UserId,
+    #[allow(dead_code)]
     pub user_clients_id: UserClientId,
+    #[allow(dead_code)]
     pub issued_on: DateTime<Utc>,
     pub expires_on: DateTime<Utc>,
     pub authenticated: bool,
@@ -383,17 +386,6 @@ impl ApiSession {
                 authenticated = $3 \
             where token = $1",
                 &[&self.token, &self.expires_on, &self.authenticated],
-            )
-            .await?;
-
-        Ok(result == 1)
-    }
-
-    pub async fn delete(&self, conn: &impl db::GenericClient) -> Result<bool, db::PgError> {
-        let result = conn
-            .execute(
-                "delete from authn_api_sessions where token = $1",
-                &[&self.token],
             )
             .await?;
 

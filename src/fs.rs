@@ -12,6 +12,7 @@ use crate::error;
 use crate::path::{add_extension, tokio_metadata};
 
 /// the possible error variants when working with a FileUpdater struct
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum FileUpdaterError {
     #[error("the provided file has no file_name value")]
@@ -67,6 +68,7 @@ pub struct FileUpdater {
     prev: PathBuf,
 }
 
+#[allow(dead_code)]
 impl FileUpdater {
     pub async fn new(path: PathBuf) -> Result<Self, FileUpdaterError> {
         // replace with path_add_extension when available
@@ -225,12 +227,14 @@ pub enum UpdateError {
 }
 
 /// the resulting files after a file has been updated
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct UpdatedFile {
     curr: PathBuf,
     prev: PathBuf,
 }
 
+#[allow(dead_code)]
 impl UpdatedFile {
     /// attempts to rollback the changes of an update by moving "prev" back
     /// to "curr"

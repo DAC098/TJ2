@@ -79,6 +79,7 @@ pub struct Initiator {
 #[derive(Debug)]
 pub struct ApiInitiator {
     pub user: user::User,
+    #[allow(dead_code)]
     pub session: ApiSession,
 }
 

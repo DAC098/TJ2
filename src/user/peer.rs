@@ -15,18 +15,10 @@ pub struct UserPeer {
     pub port: u16,
     pub secure: bool,
     pub ssc: bool,
+    #[allow(dead_code)]
     pub created: DateTime<Utc>,
+    #[allow(dead_code)]
     pub updated: Option<DateTime<Utc>>,
-}
-
-pub enum RetrieveOne<'a> {
-    Id(&'a UserPeerId),
-}
-
-impl<'a> From<&'a UserPeerId> for RetrieveOne<'a> {
-    fn from(given: &'a UserPeerId) -> Self {
-        Self::Id(given)
-    }
 }
 
 pub enum RetrieveMany<'a> {
@@ -47,55 +39,6 @@ impl<'a> From<&'a JournalId> for RetrieveMany<'a> {
 }
 
 impl UserPeer {
-    pub async fn retrieve<'a, T>(
-        conn: &impl db::GenericClient,
-        given: T,
-    ) -> Result<Option<Self>, db::PgError>
-    where
-        T: Into<RetrieveOne<'a>>,
-    {
-        let result = match given.into() {
-            RetrieveOne::Id(id) => {
-                conn.query_opt(
-                    "\
-                select user_peers.id, \
-                       user_peers.users_id, \
-                       user_peers.name, \
-                       user_peers.public_key, \
-                       user_peers.addr, \
-                       user_peers.port, \
-                       user_peers.secure, \
-                       user_peers.ssc, \
-                       user_peers.created, \
-                       user_peers.updated \
-                from user_peers \
-                where user_peers.id = $1",
-                    &[id],
-                )
-                .await?
-            }
-        };
-
-        Ok(result.map(|record| {
-            let port: u16 = db::try_from_int(record.get(5)).expect("invalid peer port from db");
-            let public_key: PublicKey =
-                db::try_from_bytea(record.get(3)).expect("invalid public key data from db");
-
-            Self {
-                id: record.get(0),
-                users_id: record.get(1),
-                name: record.get(2),
-                public_key,
-                addr: record.get(4),
-                port,
-                secure: record.get(6),
-                ssc: record.get(7),
-                created: record.get(8),
-                updated: record.get(9),
-            }
-        }))
-    }
-
     pub async fn retrieve_many<'a, T>(
         conn: &impl db::GenericClient,
         given: T,

@@ -90,32 +90,11 @@ impl PeerClient {
         &self.peer
     }
 
-    pub fn get<P>(&self, path: P) -> reqwest::RequestBuilder
-    where
-        P: AsRef<str>,
-    {
-        self.client.get(origin_url(&self.origin, path))
-    }
-
     pub fn post<P>(&self, path: P) -> reqwest::RequestBuilder
     where
         P: AsRef<str>,
     {
         self.client.post(origin_url(&self.origin, path))
-    }
-
-    pub fn patch<P>(&self, path: P) -> reqwest::RequestBuilder
-    where
-        P: AsRef<str>,
-    {
-        self.client.patch(origin_url(&self.origin, path))
-    }
-
-    pub fn put<P>(&self, path: P) -> reqwest::RequestBuilder
-    where
-        P: AsRef<str>,
-    {
-        self.client.put(origin_url(&self.origin, path))
     }
 }
 

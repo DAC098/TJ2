@@ -958,7 +958,7 @@ impl IntoResponse for RetrieveJournalInviteError {
 
 async fn retrieve_journal_invite(
     state: state::SharedState,
-    initiator: Initiator,
+    _initiator: Initiator,
     Path(InvitePath { code }): Path<InvitePath>
 ) -> Result<body::Json<JournalPartial>, NetError<RetrieveJournalInviteError>> {
     let conn = state.db().get().await?;

@@ -378,9 +378,11 @@ pub struct Entry {
     pub uid: EntryUid,
 
     /// the journal that the entry belongs to
+    #[allow(dead_code)]
     pub journals_id: JournalId,
 
     /// the user that created the entry
+    #[allow(dead_code)]
     pub users_id: UserId,
 
     /// the associated date the entry is for
@@ -1328,6 +1330,7 @@ pub enum UpdateCustomFieldError {
 pub struct CustomField {
     pub id: CustomFieldId,
     pub uid: CustomFieldUid,
+    #[allow(dead_code)]
     pub journals_id: JournalId,
     pub name: String,
     pub order: i32,
