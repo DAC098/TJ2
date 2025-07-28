@@ -10,3 +10,6 @@ tokio = { workspace = true }
 crypto_box = { workspace = true }
 anyhow = { version = "1" }
 rand = { workspace = true }
+refinery = { version = "0.8.16", features = ["tokio-postgres"] }
+tokio-postgres = { workspace = true }
+rpassword = "7"

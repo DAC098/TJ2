@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 
+mod db;
 mod sec;
 
 /// a command line utility for managing / developing a TJ2 server
@@ -14,6 +15,9 @@ struct AppCli {
 enum AppCmd {
     /// commands specific to security related features of the server
     Sec(sec::SecArg),
+
+    /// commands specific to the database
+    Db(db::DbArg),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -29,5 +33,6 @@ fn main() -> anyhow::Result<()> {
 async fn run(args: AppCli) -> anyhow::Result<()> {
     match args.cmd {
         AppCmd::Sec(sec) => sec::handle(sec).await,
+        AppCmd::Db(db) => db::handle(db).await,
     }
 }
