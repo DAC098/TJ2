@@ -6,7 +6,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{UserId, JournalId, JournalShareId, JournalShareInviteToken};
+use crate::db::ids::{JournalId, JournalShareId, JournalShareInviteToken, UserId};
 use crate::journal::sharing::{JournalShare, JournalShareInviteStatus};
 use crate::journal::Journal;
 use crate::net::body;
@@ -105,17 +105,14 @@ impl IntoResponse for SearchInvitesError {
 pub async fn search_invites(
     state: state::SharedState,
     initiator: Initiator,
-    Path(SharePath { journals_id, share_id }): Path<SharePath>
+    Path(SharePath {
+        journals_id,
+        share_id,
+    }): Path<SharePath>,
 ) -> Result<body::Json<Vec<InviteFull>>, Error<SearchInvitesError>> {
     let conn = state.db().get().await?;
 
-    authz::assert_permission(
-        &conn,
-        initiator.user.id,
-        Scope::Journals,
-        Ability::Read,
-    )
-    .await?;
+    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read).await?;
 
     let journal = Journal::retrieve(&conn, (&journals_id, &initiator.user.id))
         .await?
@@ -170,10 +167,7 @@ pub async fn create_invite(
         journals_id,
         share_id,
     }): Path<SharePath>,
-    body::Json(NewInvite {
-        amount,
-        expires_on,
-    }): body::Json<NewInvite>,
+    body::Json(NewInvite { amount, expires_on }): body::Json<NewInvite>,
 ) -> Result<body::Json<Vec<InviteFull>>, Error<CreateInviteError>> {
     if amount == 0 || amount > 10 {
         return Err(Error::Inner(CreateInviteError::InvalidAmount));
@@ -220,7 +214,7 @@ pub async fn create_invite(
             issued_on,
             expires_on,
             status,
-            user: None
+            user: None,
         });
     }
 
@@ -243,9 +237,7 @@ pub async fn create_invite(
             query.push_str(&segment);
         }
 
-        transaction
-            .execute(&query, params.as_slice())
-            .await?;
+        transaction.execute(&query, params.as_slice()).await?;
     }
 
     transaction.commit().await?;
@@ -256,9 +248,7 @@ pub async fn create_invite(
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum DeleteInvite {
-    Single {
-        token: JournalShareInviteToken
-    },
+    Single { token: JournalShareInviteToken },
 }
 
 #[derive(Debug, strum::Display, Serialize)]

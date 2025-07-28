@@ -36,7 +36,7 @@ pub async fn assert_permission(
 
     if journal.users_id != *users_id {
         if !sharing::has_permission(conn, &journal.id, users_id, share_ability).await? {
-            return Err(authz::PermissionError::Denied)
+            return Err(authz::PermissionError::Denied);
         }
     }
 
@@ -500,9 +500,12 @@ impl Entry {
         }
     }
 
-    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    pub async fn retrieve<'a, T>(
+        conn: &impl db::GenericClient,
+        given: T,
+    ) -> Result<Option<Self>, db::PgError>
     where
-        T: Into<EntryRetrieveOne<'a>>
+        T: Into<EntryRetrieveOne<'a>>,
     {
         let base = "\
             select entries.id, \
@@ -519,7 +522,7 @@ impl Entry {
         let result = match given.into() {
             EntryRetrieveOne::JournalAndId((journals_id, entries_id)) => {
                 let query = format!(
-                "{base} \
+                    "{base} \
                 where entries.journals_id = $1 and \
                       entries.id = $2"
                 );
@@ -534,7 +537,8 @@ impl Entry {
                           entries.id = $3"
                 );
 
-                conn.query_opt(&query, &[journals_id, users_id, entries_id]).await
+                conn.query_opt(&query, &[journals_id, users_id, entries_id])
+                    .await
             }
         };
 

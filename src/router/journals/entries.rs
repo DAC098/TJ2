@@ -12,8 +12,8 @@ use crate::db;
 use crate::db::ids::{CustomFieldId, EntryId, FileEntryId, FileEntryUid, JournalId};
 use crate::fs::RemovedFiles;
 use crate::journal::{
-    self, assert_permission, custom_field, CustomField, Entry, EntryCreateError, Journal,
-    JournalDir, RequestedFile, RequestedFileBuilder, sharing
+    self, assert_permission, custom_field, sharing, CustomField, Entry, EntryCreateError, Journal,
+    JournalDir, RequestedFile, RequestedFileBuilder,
 };
 use crate::net::body;
 use crate::net::Error;
@@ -74,7 +74,8 @@ pub async fn retrieve_blank(
         Scope::Entries,
         Ability::Read,
         sharing::Ability::EntryRead,
-    ).await?;
+    )
+    .await?;
 
     Ok(body::Json(
         form::EntryForm::blank(&conn, &journal.id).await?,
@@ -121,7 +122,8 @@ pub async fn retrieve_entry(
         Scope::Entries,
         Ability::Read,
         sharing::Ability::EntryRead,
-    ).await?;
+    )
+    .await?;
 
     let rtn = form::EntryForm::retrieve_entry(&conn, &journal.id, &entries_id)
         .await?

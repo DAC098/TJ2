@@ -81,7 +81,7 @@ pub struct JournalShareInvite {
 }
 
 pub enum RetrieveJournalShareInvite<'a> {
-    Token(&'a JournalShareInviteToken)
+    Token(&'a JournalShareInviteToken),
 }
 
 impl<'a> From<&'a JournalShareInviteToken> for RetrieveJournalShareInvite<'a> {
@@ -91,9 +91,12 @@ impl<'a> From<&'a JournalShareInviteToken> for RetrieveJournalShareInvite<'a> {
 }
 
 impl JournalShareInvite {
-    pub async fn retrieve<'a, T>(conn: &impl db::GenericClient, given: T) -> Result<Option<Self>, db::PgError>
+    pub async fn retrieve<'a, T>(
+        conn: &impl db::GenericClient,
+        given: T,
+    ) -> Result<Option<Self>, db::PgError>
     where
-        T: Into<RetrieveJournalShareInvite<'a>>
+        T: Into<RetrieveJournalShareInvite<'a>>,
     {
         let result = match given.into() {
             RetrieveJournalShareInvite::Token(token) => {
@@ -107,8 +110,9 @@ impl JournalShareInvite {
                            journal_share_invites.status \
                     from journal_share_invites \
                     where journal_share_invites.token = $1",
-                    &[token]
-                ).await?
+                    &[token],
+                )
+                .await?
             }
         };
 
@@ -290,10 +294,11 @@ pub async fn has_permission(
     conn: &impl db::GenericClient,
     journals_id: &JournalId,
     users_id: &UserId,
-    ability: Ability
+    ability: Ability,
 ) -> Result<bool, db::PgError> {
-    let found = conn.execute(
-        "\
+    let found = conn
+        .execute(
+            "\
         select journal_shares.id \
         from journal_share_users \
             join journal_shares on \
@@ -303,8 +308,9 @@ pub async fn has_permission(
                 journal_shares.id = journal_share_abilities.journal_shares_id and \
                 journal_share_abilities.ability = $3 \
         where journal_share_users.users_id = $2",
-        &[journals_id, users_id, &ability]
-    ).await?;
+            &[journals_id, users_id, &ability],
+        )
+        .await?;
 
     Ok(found >= 1)
 }

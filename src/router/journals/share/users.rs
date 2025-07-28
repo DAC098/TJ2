@@ -77,17 +77,14 @@ impl IntoResponse for SearchUsersError {
 pub async fn search_users(
     state: state::SharedState,
     initiator: Initiator,
-    Path(ShareId { journals_id, share_id }): Path<ShareId>,
+    Path(ShareId {
+        journals_id,
+        share_id,
+    }): Path<ShareId>,
 ) -> Result<body::Json<Vec<AttachedUser>>, Error<SearchUsersError>> {
     let conn = state.db().get().await?;
 
-    authz::assert_permission(
-        &conn,
-        initiator.user.id,
-        Scope::Journals,
-        Ability::Read,
-    )
-    .await?;
+    authz::assert_permission(&conn, initiator.user.id, Scope::Journals, Ability::Read).await?;
 
     let journal = Journal::retrieve(&conn, (&journals_id, &initiator.user.id))
         .await?
@@ -112,9 +109,7 @@ pub async fn search_users(
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum RemoveUser {
-    Single {
-        users_id: UserId,
-    }
+    Single { users_id: UserId },
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -122,9 +117,7 @@ pub enum RemoveUser {
 pub enum RemoveUserError {
     JournalNotFound,
     ShareNotFound,
-    UserNotFound {
-        users_id: Vec<UserId>
-    },
+    UserNotFound { users_id: Vec<UserId> },
 }
 
 impl IntoResponse for RemoveUserError {
@@ -140,8 +133,11 @@ impl IntoResponse for RemoveUserError {
 pub async fn remove_user(
     state: state::SharedState,
     initiator: Initiator,
-    Path(ShareId { journals_id, share_id }): Path<ShareId>,
-    body::Json(kind): body::Json<RemoveUser>
+    Path(ShareId {
+        journals_id,
+        share_id,
+    }): Path<ShareId>,
+    body::Json(kind): body::Json<RemoveUser>,
 ) -> Result<StatusCode, Error<RemoveUserError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
@@ -177,7 +173,7 @@ pub async fn remove_user(
 
             if result != 1 {
                 return Err(Error::Inner(RemoveUserError::UserNotFound {
-                    users_id: vec![users_id]
+                    users_id: vec![users_id],
                 }));
             }
         }

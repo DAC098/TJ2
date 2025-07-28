@@ -10,14 +10,17 @@ use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{CustomFieldId, CustomFieldUid, JournalId, JournalUid, UserId, UserPeerId, JournalShareInviteToken};
+use crate::db::ids::{
+    CustomFieldId, CustomFieldUid, JournalId, JournalShareInviteToken, JournalUid, UserId,
+    UserPeerId,
+};
 use crate::error;
 use crate::jobs;
+use crate::journal::sharing;
 use crate::journal::{
     assert_permission, custom_field, CustomField, CustomFieldBuilder, Journal, JournalCreateError,
     JournalUpdateError,
 };
-use crate::journal::sharing;
 use crate::net::body;
 use crate::net::Error as NetError;
 use crate::router::handles;
@@ -32,7 +35,10 @@ mod share;
 pub fn build(state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
         .route("/", get(retrieve_journals).post(create_journal))
-        .route("/invite/:code", get(retrieve_journal_invite).patch(decide_journal_invite))
+        .route(
+            "/invite/:code",
+            get(retrieve_journal_invite).patch(decide_journal_invite),
+        )
         .route("/new", get(handles::send_html))
         .route("/:journals_id", get(retrieve_journal).patch(update_journal))
         .route(
@@ -119,19 +125,21 @@ async fn retrieve_journals(
             params,
         )
         .await?
-        .map(|maybe| maybe.map(|record| JournalPartial {
-            id: record.get(0),
-            uid: record.get(1),
-            name: record.get(3),
-            description: record.get(4),
-            created: record.get(5),
-            updated: record.get(6),
-            has_peers: record.get(7),
-            owner: JournalOwner {
-                id: record.get(2),
-                username: record.get(8),
-            }
-        }))
+        .map(|maybe| {
+            maybe.map(|record| JournalPartial {
+                id: record.get(0),
+                uid: record.get(1),
+                name: record.get(3),
+                description: record.get(4),
+                created: record.get(5),
+                updated: record.get(6),
+                has_peers: record.get(7),
+                owner: JournalOwner {
+                    id: record.get(2),
+                    username: record.get(8),
+                },
+            })
+        })
         .try_collect::<Vec<JournalPartial>>()
         .await?;
 
@@ -255,7 +263,8 @@ async fn retrieve_journal(
         Scope::Journals,
         Ability::Read,
         sharing::Ability::JournalRead,
-    ).await?;
+    )
+    .await?;
 
     let custom_fields = {
         let fields = CustomField::retrieve_journal_stream(&conn, &journals_id).await?;
@@ -935,7 +944,7 @@ async fn sync_with_remote(
 
 #[derive(Debug, Deserialize)]
 pub struct InvitePath {
-    code: JournalShareInviteToken
+    code: JournalShareInviteToken,
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -959,7 +968,7 @@ impl IntoResponse for RetrieveJournalInviteError {
 async fn retrieve_journal_invite(
     state: state::SharedState,
     _initiator: Initiator,
-    Path(InvitePath { code }): Path<InvitePath>
+    Path(InvitePath { code }): Path<InvitePath>,
 ) -> Result<body::Json<JournalPartial>, NetError<RetrieveJournalInviteError>> {
     let conn = state.db().get().await?;
 
@@ -979,8 +988,9 @@ async fn retrieve_journal_invite(
         }
     }
 
-    let result = conn.query_opt(
-        "\
+    let result = conn
+        .query_opt(
+            "\
         select journals.id, \
                journals.uid, \
                journals.users_id, \
@@ -1000,8 +1010,9 @@ async fn retrieve_journal_invite(
             join users on \
                 journals.users_id = users.id \
         where journal_share_invites.token = $1",
-        &[&invite.token]
-    ).await?;
+            &[&invite.token],
+        )
+        .await?;
 
     if let Some(record) = result {
         Ok(body::Json(JournalPartial {
@@ -1015,7 +1026,7 @@ async fn retrieve_journal_invite(
             owner: JournalOwner {
                 id: record.get(2),
                 username: record.get(8),
-            }
+            },
         }))
     } else {
         Err(NetError::Inner(RetrieveJournalInviteError::InviteNotFound))
@@ -1037,7 +1048,7 @@ pub enum DecideJournalInviteError {
     InviteUsed,
 }
 
-impl IntoResponse for DecideJournalInviteError{
+impl IntoResponse for DecideJournalInviteError {
     fn into_response(self) -> Response {
         match self {
             Self::InviteNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
@@ -1051,7 +1062,7 @@ async fn decide_journal_invite(
     state: state::SharedState,
     initiator: Initiator,
     Path(InvitePath { code }): Path<InvitePath>,
-    body::Json(choice): body::Json<InviteChoice>
+    body::Json(choice): body::Json<InviteChoice>,
 ) -> Result<StatusCode, NetError<DecideJournalInviteError>> {
     let mut conn = state.db().get().await?;
     let transaction = conn.transaction().await?;
@@ -1076,10 +1087,12 @@ async fn decide_journal_invite(
         InviteChoice::Accept => {
             let status = sharing::JournalShareInviteStatus::Accepted;
 
-            transaction.execute(
-                "update journal_share_invites set status = $2, users_id = $3 where token = $1",
-                &[&invite.token, &status, &initiator.user.id]
-            ).await?;
+            transaction
+                .execute(
+                    "update journal_share_invites set status = $2, users_id = $3 where token = $1",
+                    &[&invite.token, &status, &initiator.user.id],
+                )
+                .await?;
 
             transaction.execute(
                 "\
@@ -1092,10 +1105,12 @@ async fn decide_journal_invite(
         InviteChoice::Reject => {
             let status = sharing::JournalShareInviteStatus::Rejected;
 
-            transaction.execute(
-                "update journal_share_invites set status = $2 where token = $1",
-                &[&invite.token, &status]
-            ).await?;
+            transaction
+                .execute(
+                    "update journal_share_invites set status = $2 where token = $1",
+                    &[&invite.token, &status],
+                )
+                .await?;
         }
     }
 

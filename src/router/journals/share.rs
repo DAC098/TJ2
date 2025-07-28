@@ -29,13 +29,13 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         .route("/new", get(handles::send_html))
         .route(
             "/:share_id",
-            get(retrieve_share)
-                .patch(update_share)
-                .delete(delete_share),
+            get(retrieve_share).patch(update_share).delete(delete_share),
         )
         .route(
             "/:share_id/invite",
-            get(invite::search_invites).post(invite::create_invite).delete(invite::delete_invite),
+            get(invite::search_invites)
+                .post(invite::create_invite)
+                .delete(invite::delete_invite),
         )
         .route(
             "/:share_id/users",

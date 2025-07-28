@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db;
 use crate::db::ids::{CustomFieldId, EntryId, EntryUid, JournalId, UserId};
-use crate::journal::{assert_permission, custom_field, CustomField, Journal, sharing};
+use crate::journal::{assert_permission, custom_field, sharing, CustomField, Journal};
 use crate::net::body;
 use crate::net::Error;
 use crate::sec::authn::Initiator;

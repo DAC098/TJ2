@@ -15,7 +15,7 @@ use crate::db;
 use crate::db::ids::{EntryId, FileEntryId, JournalId};
 use crate::fs::FileCreater;
 use crate::journal::{
-    assert_permission, FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile, sharing,
+    assert_permission, sharing, FileEntry, Journal, PromoteOptions, ReceivedFile, RequestedFile,
 };
 use crate::net::body;
 use crate::net::Error;
@@ -78,7 +78,8 @@ pub async fn retrieve_file(
         Scope::Entries,
         Ability::Read,
         sharing::Ability::EntryRead,
-    ).await?;
+    )
+    .await?;
 
     let file_entry = FileEntry::retrieve_file_entry(&conn, &entries_id, &file_entry_id)
         .await?
