@@ -1,423 +1,325 @@
-use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
-use crate::db::ids::{InviteToken, UserId};
-use crate::error::{self, Context};
-use crate::router::{body, macros};
+use crate::db::ids::{GroupId, InviteToken, RoleId, UserId};
+use crate::net::body;
+use crate::net::Error;
 use crate::sec::authn::Initiator;
+use crate::sec::authz::{self, Role};
 use crate::state;
-use crate::user::invite::{Invite, InviteStatus};
+use crate::user::group::Group;
+use crate::user::invite::InviteStatus;
 
 #[derive(Debug, Serialize)]
-pub struct PartialInvite {
+pub struct InviteFull {
     token: InviteToken,
-    name: String,
     issued_on: DateTime<Utc>,
     expires_on: Option<DateTime<Utc>>,
     status: InviteStatus,
-}
-
-pub async fn search_invites(
-    state: state::SharedState,
-    _initiator: Initiator,
-    headers: HeaderMap,
-) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), &headers);
-
-    let conn = state.db_conn().await?;
-
-    // check if the user has permission to view invites
-
-    let params: db::ParamsArray<'_, 0> = [];
-    let stream = conn
-        .query_raw(
-            "\
-        select user_invites.token, \
-               user_invites.name, \
-               user_invites.issued_on, \
-               user_invites.expires_on, \
-               user_invites.status \
-        from user_invites",
-            params,
-        )
-        .await
-        .context("failed to query user invites")?;
-
-    futures::pin_mut!(stream);
-
-    let mut rtn = Vec::new();
-
-    while let Some(try_record) = stream.next().await {
-        let record = try_record.context("failed to retrieve record")?;
-
-        rtn.push(PartialInvite {
-            token: record.get(0),
-            name: record.get(1),
-            issued_on: record.get(2),
-            expires_on: record.get(3),
-            status: record.get(4),
-        });
-    }
-
-    Ok((StatusCode::OK, body::Json(rtn)).into_response())
-}
-
-#[derive(Debug, Deserialize)]
-pub struct InvitePath {
-    token: InviteToken,
-}
-
-#[derive(Debug, Serialize)]
-pub struct InviteForm {
-    token: InviteToken,
-    name: String,
-    issued_on: DateTime<Utc>,
-    expires_on: InviteExpires,
-    status: InviteStatus,
     user: Option<InviteUser>,
+    role: Option<InviteRole>,
+    group: Option<InviteGroup>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct InviteUser {
-    pub id: UserId,
-    pub username: String,
-    pub created: DateTime<Utc>,
-    pub updated: Option<DateTime<Utc>>,
+    id: UserId,
+    username: String,
 }
 
-impl InviteForm {
-    pub async fn retrieve(
-        conn: &impl db::GenericClient,
-        token: &InviteToken,
-    ) -> Result<Option<Self>, db::PgError> {
-        let result = conn
-            .query_opt(
-                "\
-            select user_invites.token, \
-                   user_invites.name, \
-                   user_invites.issued_on, \
-                   user_invites.expires_on, \
-                   user_invites.status, \
-                   users.id, \
-                   users.username, \
-                   users.created, \
-                   users.updated \
-            from user_invites \
-                left join users on \
-                    user_invites.users_id = users.id \
-            where user_invites.token = $1",
-                &[token],
-            )
-            .await?;
-
-        Ok(result.map(|record| {
-            let expires_on: Option<DateTime<Utc>> = record.get(3);
-            let user = if let Some(id) = record.get::<usize, Option<UserId>>(5) {
-                Some(InviteUser {
-                    id,
-                    username: record.get(6),
-                    created: record.get(7),
-                    updated: record.get(8),
-                })
-            } else {
-                None
-            };
-
-            Self {
-                token: record.get(0),
-                name: record.get(1),
-                issued_on: record.get(2),
-                expires_on: InviteExpires {
-                    enabled: expires_on.is_some(),
-                    date: expires_on.unwrap_or_default(),
-                },
-                status: record.get(4),
-                user,
-            }
-        }))
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct InviteRole {
+    id: RoleId,
+    name: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct InviteExpires {
-    enabled: bool,
-    date: DateTime<Utc>,
+#[derive(Debug, Clone, Serialize)]
+pub struct InviteGroup {
+    id: GroupId,
+    name: String,
 }
 
-pub async fn retrieve_invite(
+pub async fn search_invites(
     state: state::SharedState,
-    _initiator: Initiator,
+    initiator: Initiator,
     headers: HeaderMap,
-    Path(InvitePath { token }): Path<InvitePath>,
-) -> Result<Response, error::Error> {
-    macros::res_if_html!(state.templates(), &headers);
+) -> Result<body::Json<Vec<InviteFull>>, Error> {
+    body::assert_html(state.templates(), &headers)?;
 
     let conn = state.db_conn().await?;
 
-    // check if the user has permission to view invites
+    authz::assert_permission(
+        &conn,
+        initiator.user.id,
+        authz::Scope::Users,
+        authz::Ability::Read,
+    )
+    .await?;
 
-    let maybe = InviteForm::retrieve(&conn, &token)
-        .await
-        .context("failed to retrieve user invite")?;
+    let params: db::ParamsArray<'_, 0> = [];
+    let rtn = conn
+        .query_raw(
+            "\
+        select user_invites.token, \
+               user_invites.issued_on, \
+               user_invites.expires_on, \
+               user_invites.status, \
+               users.id, \
+               users.username, \
+               authz_roles.id, \
+               authz_roles.name, \
+               groups.id, \
+               groups.name \
+        from user_invites
+            left join users on \
+                user_invites.users_id = users.id \
+            left join authz_roles on \
+                user_invites.role_id = authz_roles.id \
+            left join groups on \
+                user_invites.groups_id = groups.id \
+        order by user_invites.status = 1 desc, \
+                 user_invites.status = 2 desc, \
+                 user_invites.status = 0 desc, \
+                 user_invites.issued_on, \
+                 users.username, \
+                 user_invites.token",
+            params,
+        )
+        .await?
+        .map(|maybe| {
+            maybe.map(|row| {
+                let user = if let Some(id) = row.get::<usize, Option<UserId>>(4) {
+                    Some(InviteUser {
+                        id,
+                        username: row.get(5),
+                    })
+                } else {
+                    None
+                };
 
-    let Some(record) = maybe else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
+                let role = if let Some(id) = row.get(6) {
+                    Some(InviteRole {
+                        id,
+                        name: row.get(7),
+                    })
+                } else {
+                    None
+                };
 
-    Ok(body::Json(record).into_response())
+                let group = if let Some(id) = row.get(8) {
+                    Some(InviteGroup {
+                        id,
+                        name: row.get(9),
+                    })
+                } else {
+                    None
+                };
+
+                InviteFull {
+                    token: row.get(0),
+                    issued_on: row.get(1),
+                    expires_on: row.get(2),
+                    status: row.get(3),
+                    user,
+                    role,
+                    group,
+                }
+            })
+        })
+        .try_collect::<Vec<InviteFull>>()
+        .await?;
+
+    Ok(body::Json(rtn))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct NewInvite {
-    name: String,
+    amount: u32,
     expires_on: Option<DateTime<Utc>>,
+    role_id: Option<RoleId>,
+    groups_id: Option<GroupId>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum CreateResult {
-    NameExists,
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum CreateInviteError {
+    InvalidAmount,
     InvalidExpiresOn,
-    Created(InviteForm),
+    RoleNotFound,
+    GroupNotFound,
 }
 
-impl IntoResponse for CreateResult {
+impl IntoResponse for CreateInviteError {
     fn into_response(self) -> Response {
         match self {
-            Self::NameExists => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
+            Self::InvalidAmount => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
             Self::InvalidExpiresOn => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-            Self::Created(invite) => (StatusCode::CREATED, body::Json(invite)).into_response(),
+            Self::RoleNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::GroupNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
         }
     }
 }
 
 pub async fn create_invite(
     state: state::SharedState,
-    _initiator: Initiator,
-    body::Json(NewInvite { name, expires_on }): body::Json<NewInvite>,
-) -> Result<CreateResult, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+    initiator: Initiator,
+    body::Json(NewInvite {
+        amount,
+        expires_on,
+        role_id,
+        groups_id,
+    }): body::Json<NewInvite>,
+) -> Result<body::Json<Vec<InviteFull>>, Error<CreateInviteError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    // check if user has permission to create invites
+    authz::assert_permission(
+        &transaction,
+        initiator.user.id,
+        authz::Scope::Users,
+        authz::Ability::Create,
+    )
+    .await?;
+
+    if amount == 0 || amount > 10 {
+        return Err(Error::Inner(CreateInviteError::InvalidAmount));
+    }
 
     let now = Utc::now();
 
     if let Some(given) = expires_on.as_ref() {
-        if *given < now {
-            return Ok(CreateResult::InvalidExpiresOn);
+        if *given <= now {
+            return Err(Error::Inner(CreateInviteError::InvalidExpiresOn));
         }
     }
 
-    let token = InviteToken::gen();
+    let role = if let Some(role_id) = role_id {
+        Some(
+            Role::retrieve(&transaction, &role_id)
+                .await?
+                .map(|role| InviteRole {
+                    id: role.id,
+                    name: role.name,
+                })
+                .ok_or(Error::Inner(CreateInviteError::RoleNotFound))?,
+        )
+    } else {
+        None
+    };
+
+    let group = if let Some(groups_id) = groups_id {
+        Some(
+            Group::retrieve(&transaction, &groups_id)
+                .await?
+                .map(|group| InviteGroup {
+                    id: group.id,
+                    name: group.name,
+                })
+                .ok_or(Error::Inner(CreateInviteError::GroupNotFound))?,
+        )
+    } else {
+        None
+    };
+
     let issued_on = Utc::now();
     let status = InviteStatus::Pending;
+    let mut invites = Vec::with_capacity(amount as usize);
 
-    let result = transaction
-        .execute(
-            "\
-        insert into user_invites (token, name, issued_on, expires_on, status) values \
-        ($1, $2, $3, $4, $5)",
-            &[&token, &name, &issued_on, &expires_on, &status],
-        )
-        .await;
-
-    if let Err(err) = result {
-        if let Some(kind) = db::ErrorKind::check(&err) {
-            match kind {
-                db::ErrorKind::Unique(constraint) => {
-                    if constraint == "user_invites_name_key" {
-                        return Ok(CreateResult::NameExists);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        return Err(error::Error::context_source("failed to create invite", err));
+    for _ in 0..amount {
+        invites.push(InviteFull {
+            token: InviteToken::gen(),
+            issued_on,
+            expires_on,
+            status,
+            user: None,
+            role: role.clone(),
+            group: group.clone(),
+        });
     }
 
-    transaction
-        .commit()
-        .await
-        .context("failed to create transaction")?;
+    {
+        let mut params: db::ParamsVec<'_> =
+            vec![&issued_on, &expires_on, &status, &role_id, &groups_id];
+        let mut query = String::from(
+            "insert into user_invites (token, issued_on, expires_on, status, role_id, groups_id) values "
+        );
 
-    Ok(CreateResult::Created(InviteForm {
-        token,
-        name,
-        issued_on,
-        expires_on: InviteExpires {
-            enabled: expires_on.is_some(),
-            date: expires_on.unwrap_or_default(),
-        },
-        status,
-        user: None,
-    }))
+        for (index, record) in invites.iter().enumerate() {
+            if index > 0 {
+                query.push_str(", ");
+            }
+
+            let segment = format!(
+                "(${}, $1, $2, $3, $4, $5)",
+                db::push_param(&mut params, &record.token)
+            );
+
+            query.push_str(&segment);
+        }
+
+        transaction.execute(&query, params.as_slice()).await?;
+    }
+
+    transaction.commit().await?;
+
+    Ok(body::Json(invites))
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpdateInvite {
-    name: String,
-    expires_on: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
 #[serde(tag = "type")]
-pub enum UpdateResult {
-    NotFound,
-    NotPending,
-    NameExists,
-    InvalidExpiresOn,
-    Updated(InviteForm),
+pub enum DeleteInvite {
+    Single { token: InviteToken },
 }
 
-impl IntoResponse for UpdateResult {
+#[derive(Debug, strum::Display, Serialize)]
+#[serde(tag = "error")]
+pub enum DeleteError {
+    NotFound { tokens: Vec<InviteToken> },
+}
+
+impl IntoResponse for DeleteError {
     fn into_response(self) -> Response {
         match self {
-            Self::NotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
-            Self::NotPending => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-            Self::NameExists => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-            Self::InvalidExpiresOn => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-            Self::Updated(invite) => (StatusCode::OK, body::Json(invite)).into_response(),
-        }
-    }
-}
-
-pub async fn update_invite(
-    state: state::SharedState,
-    _initiator: Initiator,
-    Path(InvitePath { token }): Path<InvitePath>,
-    body::Json(UpdateInvite { name, expires_on }): body::Json<UpdateInvite>,
-) -> Result<UpdateResult, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
-
-    let result = Invite::retrieve(&transaction, &token)
-        .await
-        .context("failed to retrieve user invite")?;
-
-    let now = Utc::now();
-
-    let Some(Invite {
-        issued_on, status, ..
-    }) = result
-    else {
-        return Ok(UpdateResult::NotFound);
-    };
-
-    if !status.is_pending() {
-        return Ok(UpdateResult::NotPending);
-    }
-
-    if let Some(given) = expires_on.as_ref() {
-        if *given < now {
-            return Ok(UpdateResult::InvalidExpiresOn);
-        }
-    }
-
-    let result = transaction
-        .execute(
-            "\
-        update user_invites \
-        set name = $2, \
-            expires_on = $3 \
-        where token = $1",
-            &[&token, &name, &expires_on],
-        )
-        .await;
-
-    if let Err(err) = result {
-        if let Some(kind) = db::ErrorKind::check(&err) {
-            match kind {
-                db::ErrorKind::Unique(constraint) => {
-                    if constraint == "user_invites_name_key" {
-                        return Ok(UpdateResult::NameExists);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        return Err(error::Error::context_source(
-            "failed to update user invite",
-            err,
-        ));
-    }
-
-    transaction
-        .commit()
-        .await
-        .context("failed to commit transaction")?;
-
-    Ok(UpdateResult::Updated(InviteForm {
-        token,
-        name,
-        issued_on,
-        expires_on: InviteExpires {
-            enabled: expires_on.is_some(),
-            date: expires_on.unwrap_or_default(),
-        },
-        status,
-        user: None,
-    }))
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum DeleteResult {
-    NotFound,
-    Deleted,
-}
-
-impl IntoResponse for DeleteResult {
-    fn into_response(self) -> Response {
-        match self {
-            Self::NotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
-            Self::Deleted => (StatusCode::OK, body::Json(self)).into_response(),
+            Self::NotFound { .. } => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
         }
     }
 }
 
 pub async fn delete_invite(
     state: state::SharedState,
-    _initiator: Initiator,
-    Path(InvitePath { token }): Path<InvitePath>,
-) -> Result<DeleteResult, error::Error> {
-    let mut conn = state.db_conn().await?;
-    let transaction = conn
-        .transaction()
-        .await
-        .context("failed to create transaction")?;
+    initiator: Initiator,
+    body::Json(kind): body::Json<DeleteInvite>,
+) -> Result<StatusCode, Error<DeleteError>> {
+    let mut conn = state.db().get().await?;
+    let transaction = conn.transaction().await?;
 
-    let result = transaction
-        .execute(
-            "\
-        delete from user_invites \
-        where token = $1",
-            &[&token],
-        )
-        .await
-        .context("failed to delete user invite")?;
+    authz::assert_permission(
+        &transaction,
+        initiator.user.id,
+        authz::Scope::Users,
+        authz::Ability::Create,
+    )
+    .await?;
 
-    transaction
-        .commit()
-        .await
-        .context("failed to commit transaction")?;
+    match kind {
+        DeleteInvite::Single { token } => {
+            let result = transaction
+                .execute("delete from user_invites where token = $1", &[&token])
+                .await?;
 
-    if result == 1 {
-        Ok(DeleteResult::Deleted)
-    } else {
-        Ok(DeleteResult::NotFound)
+            if result != 1 {
+                return Err(Error::Inner(DeleteError::NotFound {
+                    tokens: vec![token],
+                }));
+            }
+        }
     }
+
+    transaction.commit().await?;
+
+    Ok(StatusCode::OK)
 }

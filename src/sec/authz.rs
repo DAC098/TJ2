@@ -217,23 +217,40 @@ pub struct Role {
     pub updated: Option<DateTime<Utc>>,
 }
 
+pub enum RetrieveRole<'a> {
+    Id(&'a RoleId),
+}
+
+impl<'a> From<&'a RoleId> for RetrieveRole<'a> {
+    fn from(given: &'a RoleId) -> Self {
+        Self::Id(given)
+    }
+}
+
 impl Role {
-    pub async fn retrieve_id(
+    pub async fn retrieve<'a, T>(
         conn: &impl db::GenericClient,
-        role_id: &RoleId,
-    ) -> Result<Option<Self>, db::PgError> {
-        conn.query_opt(
-            "\
-            select authz_roles.id, \
-                   authz_roles.uid, \
-                   authz_roles.name, \
-                   authz_roles.created, \
-                   authz_roles.updated \
-            from authz_roles \
-            where authz_roles.id = $1",
-            &[role_id],
-        )
-        .await
+        given: T,
+    ) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<RetrieveRole<'a>>,
+    {
+        match given.into() {
+            RetrieveRole::Id(role_id) => {
+                conn.query_opt(
+                    "\
+                select authz_roles.id, \
+                       authz_roles.uid, \
+                       authz_roles.name, \
+                       authz_roles.created, \
+                       authz_roles.updated \
+                from authz_roles \
+                where authz_roles.id = $1",
+                    &[role_id],
+                )
+                .await
+            }
+        }
         .map(|result| {
             result.map(|row| Self {
                 id: row.get(0),
@@ -243,6 +260,13 @@ impl Role {
                 updated: row.get(4),
             })
         })
+    }
+
+    pub async fn retrieve_id(
+        conn: &impl db::GenericClient,
+        role_id: &RoleId,
+    ) -> Result<Option<Self>, db::PgError> {
+        Self::retrieve(conn, role_id).await
     }
 
     pub async fn create(

@@ -19,25 +19,42 @@ pub struct Group {
     pub updated: Option<DateTime<Utc>>,
 }
 
+pub enum RetrieveGroup<'a> {
+    Id(&'a GroupId),
+}
+
+impl<'a> From<&'a GroupId> for RetrieveGroup<'a> {
+    fn from(given: &'a GroupId) -> Self {
+        Self::Id(given)
+    }
+}
+
 impl Group {
-    pub async fn retrieve_id(
+    pub async fn retrieve<'a, T>(
         conn: &impl db::GenericClient,
-        groups_id: GroupId,
-    ) -> Result<Option<Self>, db::PgError> {
-        conn.query_opt(
-            "\
-            select id, \
-                   uid, \
-                   name, \
-                   created, \
-                   updated \
-            from groups \
-            where id = $1",
-            &[&groups_id],
-        )
-        .await
-        .map(|maybe| {
-            maybe.map(|row| Self {
+        given: T,
+    ) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<RetrieveGroup<'a>>,
+    {
+        match given.into() {
+            RetrieveGroup::Id(groups_id) => {
+                conn.query_opt(
+                    "\
+                select groups.id, \
+                       groups.uid, \
+                       groups.name, \
+                       groups.created, \
+                       groups.updated \
+                from groups \
+                where groups.id = $1",
+                    &[&groups_id],
+                )
+                .await
+            }
+        }
+        .map(|result| {
+            result.map(|row| Self {
                 id: row.get(0),
                 uid: row.get(1),
                 name: row.get(2),
@@ -45,6 +62,13 @@ impl Group {
                 updated: row.get(4),
             })
         })
+    }
+
+    pub async fn retrieve_id(
+        conn: &impl db::GenericClient,
+        groups_id: GroupId,
+    ) -> Result<Option<Self>, db::PgError> {
+        Self::retrieve(conn, &groups_id).await
     }
 
     pub async fn create(

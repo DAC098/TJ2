@@ -22,6 +22,23 @@ export function ErrorMsg({
     </div>
 }
 
+interface MiniErrorMsgProps {
+    title?: string,
+    message: string,
+    className?: string,
+}
+
+export function MiniErrorMsg({
+    title = "Error",
+    message,
+    className,
+}: MiniErrorMsgProps) {
+    return <div className={cn("flex flex-row gap-2", className)}>
+        <span className="text-base">{title}</span>
+        <span className="text-sm">{message}</span>
+    </div>
+}
+
 interface ApiErrorMsgProps {
     err: ApiError
 }

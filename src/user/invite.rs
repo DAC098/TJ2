@@ -1,13 +1,13 @@
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 use postgres_types as pg_types;
-use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 
 use crate::db;
-use crate::db::ids::{InviteToken, UserId};
+use crate::db::ids::{GroupId, InviteToken, RoleId, UserId};
 use crate::error::BoxDynError;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize_repr, Deserialize_repr)]
 #[repr(i16)]
 pub enum InviteStatus {
     Pending = 0,
@@ -84,11 +84,13 @@ impl pg_types::ToSql for InviteStatus {
 #[derive(Debug)]
 pub struct Invite {
     pub token: InviteToken,
-    pub name: String,
+    #[allow(dead_code)]
     pub issued_on: DateTime<Utc>,
     pub expires_on: Option<DateTime<Utc>>,
     pub status: InviteStatus,
     pub users_id: Option<UserId>,
+    pub groups_id: Option<GroupId>,
+    pub role_id: Option<RoleId>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -126,11 +128,12 @@ impl Invite {
                 conn.query_opt(
                     "\
                     select user_invites.token, \
-                           user_invites.name, \
                            user_invites.issued_on, \
                            user_invites.expires_on, \
                            user_invites.status, \
-                           user_invites.users_id \
+                           user_invites.users_id, \
+                           user_invites.role_id, \
+                           user_invites.groups_id \
                     from user_invites \
                     where token = $1",
                     &[token],
@@ -141,11 +144,12 @@ impl Invite {
 
         Ok(result.map(|v| Self {
             token: v.get(0),
-            name: v.get(1),
-            issued_on: v.get(2),
-            expires_on: v.get(3),
-            status: v.get(4),
-            users_id: v.get(5),
+            issued_on: v.get(1),
+            expires_on: v.get(2),
+            status: v.get(3),
+            users_id: v.get(4),
+            role_id: v.get(5),
+            groups_id: v.get(6),
         }))
     }
 
@@ -181,11 +185,10 @@ impl Invite {
         if let Err(err) = result {
             if let Some(kind) = db::ErrorKind::check(&err) {
                 match kind {
-                    db::ErrorKind::ForeignKey(constraint) => {
-                        if constraint == "user_invites_users_id_fkey" {
-                            return Err(InviteError::UserNotFound);
-                        }
-                    }
+                    db::ErrorKind::ForeignKey(constraint) => match constraint {
+                        "user_invites_users_id_fkey" => return Err(InviteError::UserNotFound),
+                        _ => {}
+                    },
                     _ => {}
                 }
             }

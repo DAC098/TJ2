@@ -840,7 +840,13 @@ function CreateInvite({journals_id, share_id}: CreateInviteProps) {
                             return <FormItem>
                                 <FormLabel>Amount</FormLabel>
                                 <FormControl>
-                                    <Input type="number" min={1} max={10} {...field}/>
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        max={10}
+                                        {...field}
+                                        onChange={e => field.onChange(parseInt(e.target.value, 10))}
+                                    />
                                 </FormControl>
                                 <FormMessage/>
                             </FormItem>

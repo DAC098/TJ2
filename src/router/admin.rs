@@ -44,13 +44,8 @@ pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
         )
         .route(
             "/invites",
-            get(invites::search_invites).post(invites::create_invite),
-        )
-        .route("/invites/new", get(send_html))
-        .route(
-            "/invites/:token",
-            get(invites::retrieve_invite)
-                .patch(invites::update_invite)
+            get(invites::search_invites)
+                .post(invites::create_invite)
                 .delete(invites::delete_invite),
         )
 }

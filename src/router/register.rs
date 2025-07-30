@@ -7,7 +7,9 @@ use crate::db::ids::InviteToken;
 use crate::net::{body, Error};
 use crate::sec::authn::session::SessionOptions;
 use crate::sec::authn::Session;
+use crate::sec::authz::assign_user_role;
 use crate::state;
+use crate::user::group::assign_user_group;
 use crate::user::invite::{Invite, InviteError};
 use crate::user::{User, UserBuilder, UserBuilderError};
 
@@ -111,6 +113,14 @@ async fn register_user(
             })
         }
     };
+
+    if let Some(role_id) = invite.role_id {
+        assign_user_role(conn, role_id, user.id).await?;
+    }
+
+    if let Some(groups_id) = invite.groups_id {
+        assign_user_group(conn, user.id, groups_id).await?;
+    }
 
     // we have pre-checked that the invite is pending and the user
     // was just created so the id should be valid as well the only
