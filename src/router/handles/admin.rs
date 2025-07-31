@@ -1,7 +1,7 @@
 use axum::routing::get;
 use axum::Router;
 
-use crate::router::handles::send_html;
+use crate::net::response::send_html;
 use crate::state;
 
 mod groups;

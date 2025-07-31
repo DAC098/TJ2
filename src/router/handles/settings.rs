@@ -1,7 +1,7 @@
 use axum::routing::get;
 use axum::Router;
 
-use crate::router::handles;
+use crate::net::response::send_html;
 use crate::state;
 
 mod auth;
@@ -9,7 +9,7 @@ mod peer_client;
 
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
-        .route("/", get(handles::send_html))
+        .route("/", get(send_html))
         .route("/auth", get(auth::get).patch(auth::patch))
         .route(
             "/peer_client",

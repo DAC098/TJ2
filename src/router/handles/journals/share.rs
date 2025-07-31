@@ -15,7 +15,7 @@ use crate::journal::sharing::{self, JournalShare};
 use crate::journal::Journal;
 use crate::net::body;
 use crate::net::Error as NetError;
-use crate::router::handles;
+use crate::net::response::send_html;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Ability, Scope};
 use crate::state;
@@ -26,7 +26,7 @@ mod users;
 pub fn build(_state: &state::SharedState) -> Router<state::SharedState> {
     Router::new()
         .route("/", get(search_shares).post(create_share))
-        .route("/new", get(handles::send_html))
+        .route("/new", get(send_html))
         .route(
             "/:share_id",
             get(retrieve_share).patch(update_share).delete(delete_share),

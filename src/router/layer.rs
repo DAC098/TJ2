@@ -5,12 +5,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use axum::http::{Extensions, Request};
+use axum::http::{StatusCode, Extensions, Request};
 use pin_project::pin_project;
 use tokio::time::Sleep;
 use tower::{Layer, Service};
 
-use crate::error;
+use crate::net::Error;
+use crate::net::body::json_error_response;
 
 type Counter = Arc<AtomicU64>;
 
@@ -101,14 +102,22 @@ impl<E> From<E> for TimeoutError<E> {
     }
 }
 
-impl<E> From<TimeoutError<E>> for error::Error
+impl<E> From<TimeoutError<E>> for Error
 where
-    E: Into<error::Error>,
+    E: Into<Error>,
 {
     fn from(err: TimeoutError<E>) -> Self {
         match err {
             TimeoutError::Service(e) => e.into(),
-            TimeoutError::Timeout => error::Error::context("response timeout"),
+            TimeoutError::Timeout => Error::Defined {
+                response: json_error_response(
+                    StatusCode::REQUEST_TIMEOUT,
+                    "RequestTimeout",
+                    "the request took too long to execute"
+                ),
+                msg: None,
+                src: None
+            }
         }
     }
 }

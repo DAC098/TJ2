@@ -4,89 +4,44 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::ConnectInfo;
-use axum::http::{HeaderMap, Request, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
+use axum::http::Request;
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
-use serde::Serialize;
 use tower::ServiceBuilder;
 use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
-use crate::error::{self, Context};
 use crate::state;
+use crate::net;
+use crate::net::response::send_html;
 
 mod assets;
 mod layer;
 
-pub mod body;
 pub mod handles;
-pub mod macros;
 
-mod admin;
-mod api;
-mod journals;
-mod login;
-mod logout;
-mod peers;
-mod register;
-mod settings;
-mod verify;
-
-pub async fn ping() -> (StatusCode, &'static str) {
-    (StatusCode::OK, "pong")
-}
-
-#[derive(Debug, Serialize)]
-pub struct RootJson {
-    message: String,
-}
-
-async fn retrieve_root(
-    state: state::SharedState,
-    uri: Uri,
-    headers: HeaderMap,
-) -> Result<Response, error::Error> {
-    let conn = state
-        .db()
-        .get()
-        .await
-        .context("failed to retrieve database connection")?;
-
-    macros::require_initiator!(&conn, &headers, Some(uri));
-    macros::res_if_html!(state.templates(), &headers);
-
-    Ok(body::Json(RootJson {
-        message: String::from("okay"),
-    })
-    .into_response())
-}
-
-async fn handle_error<E>(error: E) -> error::Error
+async fn handle_error<E>(error: E) -> net::Error
 where
-    E: Into<error::Error>,
+    E: Into<net::Error>,
 {
-    let wrapper = error.into();
-
-    error::log_prefix_error("uncaught error in middleware", &wrapper);
-
-    wrapper
+    error.into()
 }
 
 pub fn build(state: &state::SharedState) -> Router {
     Router::new()
-        .route("/", get(retrieve_root))
-        .route("/ping", get(ping))
-        .route("/login", get(login::get).post(login::post))
-        .route("/verify", get(verify::get).post(verify::post))
-        .route("/logout", post(logout::post))
-        .route("/register", get(handles::send_html).post(register::post))
-        .route("/peers", get(peers::get))
-        .nest("/journals", journals::build(state))
-        .nest("/settings", settings::build(state))
-        .nest("/admin", admin::build(state))
-        .nest("/api", api::build(state))
+        .route("/", get(handles::retrieve_root))
+        .route("/ping", get(handles::ping))
+        .route("/login", get(handles::login::get).post(handles::login::post))
+        .route("/verify", get(handles::verify::get).post(handles::verify::post))
+        .route("/logout", post(handles::logout::post))
+        .route("/register", get(send_html).post(handles::register::post))
+        .route("/peers", get(handles::peers::get))
+        .nest("/journals", handles::journals::build(state))
+        .nest("/settings", handles::settings::build(state))
+        .nest("/admin", handles::admin::build(state))
+        .nest("/api", handles::api::build(state))
         .fallback(assets::handle)
         .layer(
             ServiceBuilder::new()

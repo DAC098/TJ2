@@ -3,7 +3,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::net::Error as NetError;
-use crate::router::{body, macros};
+use crate::net::body;
 use crate::sec::authn::{Initiator, InitiatorError};
 use crate::sec::mfa::{self, otp};
 use crate::state;
@@ -11,10 +11,10 @@ use crate::state;
 pub async fn get(
     state: state::SharedState,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, NetError> {
-    macros::res_if_html!(state.templates(), &headers);
+) -> Result<body::Json<&'static str>, NetError> {
+    body::assert_html(state.templates(), &headers)?;
 
-    Ok(body::Json("okay").into_response())
+    Ok(body::Json("okay"))
 }
 
 #[derive(Debug, Deserialize)]

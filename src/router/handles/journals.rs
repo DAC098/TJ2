@@ -23,7 +23,7 @@ use crate::journal::{
 };
 use crate::net::body;
 use crate::net::Error as NetError;
-use crate::router::handles;
+use crate::net::response::send_html;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Ability, Scope};
 use crate::state;
@@ -39,7 +39,7 @@ pub fn build(state: &state::SharedState) -> Router<state::SharedState> {
             "/invite/:code",
             get(retrieve_journal_invite).patch(decide_journal_invite),
         )
-        .route("/new", get(handles::send_html))
+        .route("/new", get(send_html))
         .route("/:journals_id", get(retrieve_journal).patch(update_journal))
         .route(
             "/:journals_id/entries",
