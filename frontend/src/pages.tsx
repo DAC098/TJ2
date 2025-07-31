@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 
 import { Login } from "@/pages/login";
 import { Register } from "@/pages/register";
@@ -20,5 +21,10 @@ export function MainRouter() {
             </Routes>
         </BrowserRouter>
         <Toaster/>
+        <QueryDevTools/>
     </QueryClientProvider>;
+}
+
+function QueryDevTools() {
+    return <ReactQueryDevtools initialIsOpen={true}/>
 }

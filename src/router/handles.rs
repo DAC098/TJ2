@@ -5,6 +5,7 @@ use crate::net::Error;
 use crate::sec::authn::Initiator;
 use crate::state;
 
+pub mod me;
 pub mod admin;
 pub mod api;
 pub mod journals;

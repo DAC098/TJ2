@@ -3,6 +3,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::db::ids::UserId;
 use crate::error;
 use crate::net::header::{is_accepting_html, Location};
 use crate::net::{body, Error as NetError};
@@ -104,7 +105,10 @@ pub struct LoginRequest {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
 pub enum LoginResult {
-    Success,
+    Success {
+        id: UserId,
+        username: String,
+    },
     Verify,
 }
 
@@ -170,7 +174,10 @@ pub async fn post(
     } else {
         options.verified = true;
 
-        LoginResult::Success
+        LoginResult::Success {
+            id: user.id,
+            username: user.username
+        }
     };
 
     let session = Session::create(&transaction, options).await?;

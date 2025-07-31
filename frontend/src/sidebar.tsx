@@ -26,7 +26,6 @@ import {
     Sidebar,
     SidebarContent,
     SidebarGroup,
-    SidebarGroupLabel,
     SidebarGroupContent,
     SidebarHeader,
     SidebarMenu,
@@ -35,6 +34,7 @@ import {
     SidebarMenuLink,
     useSidebar,
 } from "@/components/ui/sidebar";
+import { useCurrUser } from "@/components/hooks/user";
 
 import { JournalSidebar } from "@/sidebar/journals";
 import { AdminSidebar } from "@/sidebar/admin";
@@ -43,6 +43,7 @@ import { toggle_theme } from "@/theme";
 import { ReactElement, useEffect, useState } from "react";
 import { cn } from "./utils";
 import { Button } from "@/components/ui/button";
+import { req_api_json_empty } from "./net";
 
 async function send_logout() {
     let res = await fetch("/logout", {
@@ -58,6 +59,7 @@ interface UserBadgeProps {
     name: string,
     email: string,
     avatar?: string,
+    loading?: boolean,
     show_details?: boolean
 }
 
@@ -65,8 +67,24 @@ function UserBadge({
     name,
     email,
     avatar,
+    loading = false,
     show_details = false
 }: UserBadgeProps) {
+    if (loading) {
+        return <>
+            <Avatar className="h-8 w-8 rounded-lg">
+                <AvatarFallback className="rounded-lg">TJ2</AvatarFallback>
+            </Avatar>
+            {show_details ?
+                <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-semibold">Loading</span>
+                </div>
+                :
+                null
+            }
+        </>
+    }
+
     return <>
         <Avatar className="h-8 w-8 rounded-lg">
             {avatar != null ? <AvatarImage src={avatar} alt={name} /> : null}
@@ -91,8 +109,9 @@ function UserMenu({collapsed}: UserMenuProps) {
     const { isMobile } = useSidebar();
     const navigate = useNavigate();
 
-    let name = "The Dude";
-    let email = "the_dude@laboski.drink";
+    const {user, is_loading, error} = useCurrUser();
+
+    let email = "";
 
     return <SidebarMenu>
         <SidebarMenuItem>
@@ -102,7 +121,7 @@ function UserMenu({collapsed}: UserMenuProps) {
                         size="lg"
                         className={cn("data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground", {"md:h-8 md:p-0": collapsed})}
                     >
-                        <UserBadge name={name} email={email} show_details={!collapsed}/>
+                        <UserBadge name={user.username} email={email} loading={is_loading} show_details={!collapsed}/>
                         <ChevronsUpDown className="ml-auto size-4" />
                     </SidebarMenuButton>
                 </DropdownMenuTrigger>
@@ -115,7 +134,7 @@ function UserMenu({collapsed}: UserMenuProps) {
                     {collapsed ?
                         <DropdownMenuLabel className="p-0 font-normal">
                             <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                                <UserBadge name={name} email={email} show_details={true}/>
+                                <UserBadge name={user.username} email={email} loading={is_loading} show_details={true}/>
                             </div>
                         </DropdownMenuLabel>
                         :
@@ -131,8 +150,8 @@ function UserMenu({collapsed}: UserMenuProps) {
                     </DropdownMenuItem>
                     <DropdownMenuSeparator/>
                     <DropdownMenuItem onSelect={(ev) => {
-                        send_logout().then(() => {
-                            navigate("/login");
+                        req_api_json_empty("POST", "/logout").then(() => {
+                            window.location.pathname = "/login";
                         }).catch(err => {
                             console.error("failed to logout:", err);
                         });

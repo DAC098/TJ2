@@ -2,11 +2,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::db::ids::UserId;
 use crate::net::Error as NetError;
 use crate::net::body;
 use crate::sec::authn::{Initiator, InitiatorError};
 use crate::sec::mfa::{self, otp};
 use crate::state;
+use crate::user::User;
 
 pub async fn get(
     state: state::SharedState,
@@ -24,6 +26,12 @@ pub enum VerifyBody {
     Recovery { code: String },
 }
 
+#[derive(Debug, Serialize)]
+struct VerifySuccess {
+    id: UserId,
+    username: String,
+}
+
 #[derive(Debug, strum::Display, Serialize)]
 #[serde(tag = "error")]
 pub enum VerifyError {
@@ -32,6 +40,7 @@ pub enum VerifyError {
     InvalidRecovery,
     AlreadyVerified,
     InvalidSession,
+    UserNotFound,
 }
 
 impl IntoResponse for VerifyError {
@@ -41,7 +50,8 @@ impl IntoResponse for VerifyError {
             | Self::InvalidCode
             | Self::AlreadyVerified
             | Self::InvalidRecovery => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-            Self::MFANotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::MFANotFound
+            | Self::UserNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
         }
     }
 }
@@ -84,11 +94,18 @@ pub async fn post(
         }
     }
 
+    let User { id, username, .. } = User::retrieve(&transaction, &session.users_id)
+        .await?
+        .ok_or(NetError::Inner(VerifyError::UserNotFound))?;
+
     session.verified = true;
 
     session.update(&transaction).await?;
 
     transaction.commit().await?;
 
-    Ok(StatusCode::OK)
+    Ok(body::Json(VerifySuccess {
+        id,
+        username,
+    }))
 }

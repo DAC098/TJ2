@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useForm, SubmitHandler } from "react-hook-form";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
 
-import { send_json } from "@/net";
+import { ApiError, req_api_json, send_json } from "@/net";
 
 import {
     InputOTP,
@@ -10,8 +10,10 @@ import {
     InputOTPSlot,
 } from "@/components/ui/input-otp"
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormRootError } from "@/components/ui/form";
 import { PasswordInput } from "@/components/ui/input";
+import { useQueryClient } from "@tanstack/react-query";
+import { curr_user_query_key } from "@/components/hooks/user";
 
 interface VerifyForm {
     code: string
@@ -33,8 +35,9 @@ function get_mfa_type(given: MFAType) {
 
 export function Verify() {
     const navigate = useNavigate();
-    const location = useLocation();
+    const [search_params, _] = useSearchParams();
 
+    const client = useQueryClient();
     const [mfa_type, set_mfa_type] = useState<MFAType>(MFAType.Totp);
 
     const verify_form = useForm<VerifyForm>({
@@ -44,56 +47,46 @@ export function Verify() {
     });
 
     const on_submit: SubmitHandler<VerifyForm> = async (data, event) => {
+        let prev = search_params.get("prev");
+
         try {
             verify_form.clearErrors();
 
-            let res = await send_json("POST", "/verify", {type: get_mfa_type(mfa_type), ...data});
-            let prev = new URL(location.pathname + location.search, window.location.origin)
-                .searchParams
-                .get("prev");
+            let res = await req_api_json("POST", "/verify", {type: get_mfa_type(mfa_type), ...data});
 
-            switch (res.status) {
-                case 200:
-                    navigate(prev ?? "/journals");
+            client.setQueryData(curr_user_query_key(), {
+                id: res.id,
+                username: res.username,
+            });
 
-                    break;
-                case 400: {
-                    let json = await res.json();
-
-                    if (json.error === "InvalidCode") {
-                        verify_form.setError("code", {type: "custom", message: "Invalid TOTP code."});
-                    } else if (json.error === "InvalidRecovery") {
-                        verify_form.setError("code", {type: "custom", message: "Invalid recovery code."});
-                    } else if (json.error === "InvalidSession") {
-                        verify_form.setError("code", {type: "custom", message: "Invalid session. Return to login and try again."})
-                    } else if (json.error === "AlreadyVerified") {
-                        navigate(prev ?? "/journals");
-                    } else {
-                        console.warn("unknown json.error:", json.error);
-                    }
-
-                    break;
-                }
-                case 404: {
-                    let json = await res.json();
-
-                    if (json.error === "MFANotFound") {
-                        verify_form.setError("code", {type: "custom", message: "MFA not enabled for this account."});
-                    } else {
-                        console.warn("uknown json.error:", json.error);
-                    }
-
-                    break;
-                }
-                default:
-                    console.warn("unhandled status code:", res.status);
-
-                    break;
-            }
+            navigate(prev ?? "/journals");
         } catch (err) {
-            console.error("failed to send verification", err);
+            if (err instanceof ApiError) {
+                switch (err.kind) {
+                    case "InvalidCode":
+                        verify_form.setError("code", {type: "custom", message: "Invalid TOTP code."});
+                        break;
+                    case "InvalidRecovery":
+                        verify_form.setError("code", {type: "custom", message: "Invalid recovery code."});
+                        break;
+                    case "InvalidSession":
+                        verify_form.setError("code", {type: "custom", message: "Invalid session. Return to login and try again."})
+                        break;
+                    case "AlreadyVerified":
+                        navigate(prev ?? "/journals");
+                        break;
+                    case "MFANotFound":
+                        verify_form.setError("code", {type: "custom", message: "MFA not enabled for this account."});
+                        break;
+                    default:
+                        verify_form.setError("root", {message: "Failed to verify TOTP"});
+                        break;
+                }
+            } else {
+                console.error("failed to send verification", err);
 
-            verify_form.setError("code", {type: "custom", message: "Error when sending verification. Try again."});
+                verify_form.setError("root", {message: "Error when sending verification. Try again."});
+            }
         }
     };
 
@@ -140,6 +133,7 @@ export function Verify() {
         <div className="mx-auto my-auto">
             <Form {...verify_form} children={
                 <form className="space-y-4" onSubmit={verify_form.handleSubmit(on_submit)}>
+                    <FormRootError/>
                     {input}
                     <div className="flex flex-row gap-x-4 justify-center">
                         <Button

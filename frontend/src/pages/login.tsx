@@ -1,5 +1,5 @@
 import { useForm, SubmitHandler } from "react-hook-form";
-import { useNavigate, useLocation, Link } from "react-router-dom";
+import { useNavigate, useLocation, Link, useSearchParams } from "react-router-dom";
 
 import { ApiError, req_api_json } from "@/net";
 
@@ -7,6 +7,8 @@ import { Input, PasswordInput } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormRootError } from "@/components/ui/form";
 import { Separator } from "@/components/ui/separator";
+import { useQueryClient } from "@tanstack/react-query";
+import { curr_user_query_key } from "@/components/hooks/user";
 
 interface LoginForm {
     username: string,
@@ -14,7 +16,9 @@ interface LoginForm {
 }
 
 interface LoginSuccess {
-    type: "Success"
+    type: "Success",
+    id: number,
+    username: string,
 }
 
 interface LoginVerify {
@@ -25,7 +29,9 @@ type LoginResult = LoginSuccess | LoginVerify;
 
 export function Login() {
     const navigate = useNavigate();
-    const location = useLocation();
+    const [search_params, _] = useSearchParams();
+
+    const client = useQueryClient();
 
     const form = useForm<LoginForm>({
         defaultValues: {
@@ -35,15 +41,18 @@ export function Login() {
     });
 
     const on_submit: SubmitHandler<LoginForm> = async (data, event) => {
+        let prev = search_params.get("prev");
+
         try {
             let res = await req_api_json<LoginResult>("POST", "/login", data);
 
-            let prev = new URL(location.pathname + location.search, window.location.origin)
-                .searchParams
-                .get("prev");
-
             switch (res.type) {
                 case "Success":
+                    client.setQueryData(curr_user_query_key(), {
+                        id: res.id,
+                        username: res.username,
+                    });
+
                     navigate(prev ?? "/journals");
                     break;
                 case "Verify":
@@ -61,10 +70,6 @@ export function Login() {
             if (err instanceof ApiError) {
                 switch (err.kind) {
                     case "AlreadyAuthenticated":
-                        let prev = new URL(location.pathname + location.search, window.location.origin)
-                            .searchParams
-                            .get("prev");
-
                         navigate(prev ?? "/journals");
                         break;
                     case "UsernameNotFound":
