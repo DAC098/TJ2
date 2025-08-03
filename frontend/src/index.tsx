@@ -5,6 +5,8 @@ import { init_theme } from "@/theme";
 
 import "@/media";
 
+import "../styles/input.css"
+
 init_theme();
 
 document.addEventListener("DOMContentLoaded", () => {

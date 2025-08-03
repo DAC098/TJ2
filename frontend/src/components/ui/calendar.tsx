@@ -19,8 +19,6 @@ export function Calendar({
     showOutsideDays = true,
     ...props
 }: CalendarProps) {
-    console.log("rendering day picker");
-
     return <DayPicker
         showOutsideDays={showOutsideDays}
         className={cn("p-3", className)}
@@ -90,7 +88,10 @@ interface TimePickerProps {
     on_change?: (value: Date) => void,
 }
 
-export function TimePicker({value, on_change}: TimePickerProps) {
+export function TimePicker({
+    value,
+    on_change = (v) => {}
+}: TimePickerProps) {
     return <div className="flex flex-col sm:flex-row sm:h-[300px] divide-y sm:divide-y-0 sm:divide-x">
         <ScrollArea className="w-64 sm:w-auto">
             <div className="flex sm:flex-col p-2">

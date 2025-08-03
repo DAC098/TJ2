@@ -3,7 +3,7 @@ module.exports = {
     darkMode: ["class"],
     content: [
         "./frontend/templates/pages/spa.html",
-        "./frontend/src/**/*.{ts,tsx}"
+        "./frontend/src/**/*.{js,ts,jsx,tsx}",
     ],
     theme: {
         extend: {

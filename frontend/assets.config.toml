@@ -2,10 +2,8 @@
 directory = "./templates"
 
 [assets.directories]
-"assets" = "./assets"
+"static" = "./static"
 "src" = "./src"
 
 [assets.files]
-"assets/htmx.min.js" = "../node_modules/htmx.org/dist/htmx.min.js"
-"assets/react-day-picker.css" = "../node_modules/react-day-picker/src/style.css"
-
+"favicon.ico" = "./static/assets/favicon.ico"

@@ -226,8 +226,8 @@ export function IntegerValue({index, config}: IntegerValueProps) {
                         ref={int_field.ref}
                         name={int_field.name}
                         type="number"
-                        min={config.minimum}
-                        max={config.maximum}
+                        min={config.minimum ?? undefined}
+                        max={config.maximum ?? undefined}
                         disabled={!enabled || int_field.disabled}
                         value={int_field.value}
                         onBlur={int_field.onBlur}
@@ -259,8 +259,8 @@ export function IntegerRangeValue({index, config}: IntegerRangeValueProps) {
                         ref={low_field.ref}
                         name={low_field.name}
                         type="number"
-                        min={config.minimum}
-                        max={config.maximum}
+                        min={config.minimum ?? undefined}
+                        max={config.maximum ?? undefined}
                         disabled={!enabled || low_field.disabled}
                         value={low_field.value}
                         onBlur={low_field.onBlur}
@@ -279,8 +279,8 @@ export function IntegerRangeValue({index, config}: IntegerRangeValueProps) {
                         ref={high_field.ref}
                         name={high_field.name}
                         type="number"
-                        min={config.minimum}
-                        max={config.maximum}
+                        min={config.minimum ?? undefined}
+                        max={config.maximum ?? undefined}
                         disabled={!enabled || high_field.disabled}
                         value={high_field.value}
                         onBlur={high_field.onBlur}
@@ -435,8 +435,8 @@ export function FloatValue({index, config}: FloatValueProps) {
                     ref={flt_field.ref}
                     name={flt_field.name}
                     type="number"
-                    min={config.minimum}
-                    max={config.maximum}
+                    min={config.minimum ?? undefined}
+                    max={config.maximum ?? undefined}
                     step={config.step}
                     disabled={!enabled || flt_field.disabled}
                     value={flt_field.value ?? 0.0}
@@ -468,8 +468,8 @@ export function FloatRangeValue({index, config}: FloatRangeValueProps) {
                         ref={low_field.ref}
                         name={low_field.name}
                         type="number"
-                        min={config.minimum}
-                        max={config.maximum}
+                        min={config.minimum ?? undefined}
+                        max={config.maximum ?? undefined}
                         step={config.step}
                         disabled={!enabled || low_field.disabled}
                         value={low_field.value}
@@ -489,8 +489,8 @@ export function FloatRangeValue({index, config}: FloatRangeValueProps) {
                         ref={high_field.ref}
                         name={high_field.name}
                         type="number"
-                        min={config.minimum}
-                        max={config.maximum}
+                        min={config.minimum ?? undefined}
+                        max={config.maximum ?? undefined}
                         step={config.step}
                         disabled={!enabled || high_field.disabled}
                         value={high_field.value}
@@ -523,7 +523,7 @@ export function TimeRangeConfig({config, index}: TimeRangeConfigProps) {
                 </FormDescription>
             </div>
             <FormControl>
-                <Switch {...sd_field} checked={sd_field.value} onCheckedChange={sd_field.onChange}/>
+                <Switch checked={sd_field.value} onCheckedChange={sd_field.onChange}/>
             </FormControl>
         </FormItem>;
     }}/>;
@@ -556,17 +556,17 @@ export function TimeRangeValue({index, config}: TimeRangeValueProps) {
                             </Button>
                         </FormControl>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" aligh="start">
+                    <PopoverContent className="w-auto p-0" align="start">
                         <div className="sm:flex">
                             <Calendar
-                                name={low_field.name}
                                 mode="single"
                                 selected={date_value}
-                                onBlur={low_field.onBlur}
                                 onSelect={(selected) => {
-                                    selected.setHours(date_value.getHours());
-                                    selected.setMinutes(date_value.getMinutes());
-                                    selected.setSeconds(date_value.getSeconds());
+                                    if (selected != null) {
+                                        selected.setHours(date_value.getHours());
+                                        selected.setMinutes(date_value.getMinutes());
+                                        selected.setSeconds(date_value.getSeconds());
+                                    }
 
                                     low_field.onChange(selected);
                                 }}
@@ -597,17 +597,17 @@ export function TimeRangeValue({index, config}: TimeRangeValueProps) {
                             </Button>
                         </FormControl>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" aligh="start">
+                    <PopoverContent className="w-auto p-0" align="start">
                         <div className="sm:flex">
                             <Calendar
-                                name={high_field.name}
                                 mode="single"
                                 selected={date_value}
-                                onBlur={high_field.onBlur}
                                 onSelect={(selected) => {
-                                    selected.setHours(date_value.getHours());
-                                    selected.setMinutes(date_value.getMinutes());
-                                    selected.setSeconds(date_value.getSeconds());
+                                    if (selected != null) {
+                                        selected.setHours(date_value.getHours());
+                                        selected.setMinutes(date_value.getMinutes());
+                                        selected.setSeconds(date_value.getSeconds());
+                                    }
 
                                     high_field.onChange(selected);
                                 }}

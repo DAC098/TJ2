@@ -29,13 +29,17 @@ function context_test(reg) {
     };
 }
 
+const is_dev = process.env.NODE_ENV === "development" || true;
+
+console.log("process.env.NODE_ENV", process.env.NODE_ENV);
+
 export default defineConfig({
-    mode: "development",
+    mode: is_dev ? "development" : "production",
     entry: {
         index: "./frontend/src/index.tsx"
     },
     output: {
-        path: path.resolve(__dirname, "./frontend/assets/js"),
+        path: path.resolve(__dirname, "./frontend/static"),
         filename: "[name].bundle.js",
     },
     resolve: {
@@ -60,7 +64,7 @@ export default defineConfig({
                                     //pragma: "React.createElement",
                                     //pragmaFrag: "React.Fragment",
                                     //throwIfNamespace: true,
-                                    //development: false,
+                                    development: is_dev,
                                     //useBuiltins: false,
                                 }
                             }
@@ -89,6 +93,11 @@ export default defineConfig({
                 },
                 type: 'javascript/auto',
             },
+            {
+                test: /\.css$/,
+                use: ["postcss-loader"],
+                type: "css"
+            }
         ]
     },
     optimization: {
@@ -126,4 +135,7 @@ export default defineConfig({
         new TsCheckerRspackPlugin(),
     ],
     stats: "normal",
+    experiments: {
+        css: true
+    }
 });

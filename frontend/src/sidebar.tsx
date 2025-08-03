@@ -143,9 +143,7 @@ function UserMenu({collapsed}: UserMenuProps) {
                     <Link to="/settings">
                         <DropdownMenuItem>Settings</DropdownMenuItem>
                     </Link>
-                    <DropdownMenuItem onSelect={() => {
-                        toggle_theme();
-                    }}>
+                    <DropdownMenuItem onSelect={() => toggle_theme()}>
                         Switch Theme
                     </DropdownMenuItem>
                     <DropdownMenuSeparator/>
