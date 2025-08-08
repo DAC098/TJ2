@@ -105,10 +105,7 @@ pub struct LoginRequest {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value")]
 pub enum LoginResult {
-    Success {
-        id: UserId,
-        username: String,
-    },
+    Success { id: UserId, username: String },
     Verify,
 }
 
@@ -176,7 +173,7 @@ pub async fn post(
 
         LoginResult::Success {
             id: user.id,
-            username: user.username
+            username: user.username,
         }
     };
 

@@ -22,8 +22,8 @@ use crate::journal::{
     JournalUpdateError,
 };
 use crate::net::body;
-use crate::net::Error as NetError;
 use crate::net::response::send_html;
+use crate::net::Error as NetError;
 use crate::sec::authn::Initiator;
 use crate::sec::authz::{self, Ability, Scope};
 use crate::state;

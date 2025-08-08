@@ -2,13 +2,13 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 
 use crate::db::ids::UserId;
-use crate::net::{header, body, Error};
+use crate::net::{body, header, Error};
 use crate::sec::authn::Initiator;
 
 #[derive(Debug, serde::Serialize)]
 pub struct MyInfo {
     id: UserId,
-    username: String
+    username: String,
 }
 
 pub async fn retrieve_me(
@@ -21,6 +21,7 @@ pub async fn retrieve_me(
         Ok(body::Json(MyInfo {
             id: initiator.user.id,
             username: initiator.user.username,
-        }).into_response())
+        })
+        .into_response())
     }
 }

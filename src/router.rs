@@ -13,9 +13,9 @@ use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
-use crate::state;
 use crate::net;
 use crate::net::response::send_html;
+use crate::state;
 
 mod assets;
 mod layer;
@@ -33,8 +33,14 @@ pub fn build(state: &state::SharedState) -> Router {
     Router::new()
         .route("/", get(handles::retrieve_root))
         .route("/ping", get(handles::ping))
-        .route("/login", get(handles::login::get).post(handles::login::post))
-        .route("/verify", get(handles::verify::get).post(handles::verify::post))
+        .route(
+            "/login",
+            get(handles::login::get).post(handles::login::post),
+        )
+        .route(
+            "/verify",
+            get(handles::verify::get).post(handles::verify::post),
+        )
         .route("/logout", post(handles::logout::post))
         .route("/register", get(send_html).post(handles::register::post))
         .route("/me", get(handles::me::retrieve_me))

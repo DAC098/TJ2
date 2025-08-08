@@ -1,4 +1,5 @@
 import { year, month, week, day, hour, minute, second, millisecond } from "@/duration";
+import { parse } from "date-fns";
 
 const diff_names = ["years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds"];
 const diff_names_short = ["y", "m", "w", "d", "h", "m", "s", "ms"];
@@ -43,4 +44,22 @@ export function diff_dates(lhs: Date, rhs: Date, show_milli: boolean = true, sho
     let diff = lhs.getTime() - rhs.getTime();
 
     return time_to_string(diff, show_milli, short_hand);
+}
+
+export function date_to_naive_date(given: Date): string {
+    let year = given.getFullYear();
+    let month = (given.getMonth() + 1).toString(10).padStart(2, '0');
+    let day = given.getDate().toString(10).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
+
+export function naive_date_to_date(given: string): Date | null {
+    let rtn = parse(given, "yyyy-MM-dd", new Date());
+
+    if (isNaN(rtn.getTime())) {
+        return null;
+    } else {
+        return rtn;
+    }
 }

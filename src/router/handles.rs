@@ -1,16 +1,16 @@
-use axum::http::{StatusCode, HeaderMap};
+use axum::http::{HeaderMap, StatusCode};
 
 use crate::net::body;
 use crate::net::Error;
 use crate::sec::authn::Initiator;
 use crate::state;
 
-pub mod me;
 pub mod admin;
 pub mod api;
 pub mod journals;
 pub mod login;
 pub mod logout;
+pub mod me;
 pub mod peers;
 pub mod register;
 pub mod settings;

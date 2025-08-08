@@ -5,13 +5,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use axum::http::{StatusCode, Extensions, Request};
+use axum::http::{Extensions, Request, StatusCode};
 use pin_project::pin_project;
 use tokio::time::Sleep;
 use tower::{Layer, Service};
 
-use crate::net::Error;
 use crate::net::body::json_error_response;
+use crate::net::Error;
 
 type Counter = Arc<AtomicU64>;
 
@@ -113,11 +113,11 @@ where
                 response: json_error_response(
                     StatusCode::REQUEST_TIMEOUT,
                     "RequestTimeout",
-                    "the request took too long to execute"
+                    "the request took too long to execute",
                 ),
                 msg: None,
-                src: None
-            }
+                src: None,
+            },
         }
     }
 }

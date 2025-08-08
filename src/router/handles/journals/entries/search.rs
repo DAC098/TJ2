@@ -1,11 +1,13 @@
+use std::cmp;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, NaiveDate, Utc};
 use deadpool_postgres::Transaction;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
@@ -22,6 +24,85 @@ pub struct JournalPath {
     journals_id: JournalId,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SearchQuery {
+    start_date: Option<NaiveDate>,
+    end_date: Option<NaiveDate>,
+
+    // used for both page and keyset pagination
+    #[serde(default)]
+    size: SearchSize,
+    // page based pagination
+    //#[serde(default)]
+    //page: u32,
+
+    // keyset based pagination
+    // if present will override page
+    //prev: Option<NaiveDate>,
+    //#[serde(default)]
+    //dir: SearchDir,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize)]
+#[repr(i32)]
+enum SearchSize {
+    Month = 31,
+    HalfYear = 366 / 2,
+    Year = 366,
+}
+
+impl cmp::PartialEq<i32> for SearchSize {
+    fn eq(&self, other: &i32) -> bool {
+        let v = *self as i32;
+
+        v.eq(other)
+    }
+}
+
+impl cmp::PartialOrd<i32> for SearchSize {
+    fn partial_cmp(&self, other: &i32) -> Option<cmp::Ordering> {
+        let v = *self as i32;
+
+        v.partial_cmp(other)
+    }
+}
+
+impl<'a> From<&'a SearchSize> for i32 {
+    fn from(v: &'a SearchSize) -> Self {
+        *v as i32
+    }
+}
+
+impl<'a> From<&'a SearchSize> for usize {
+    fn from(v: &'a SearchSize) -> Self {
+        (*v as i32) as usize
+    }
+}
+
+impl Default for SearchSize {
+    fn default() -> Self {
+        Self::Year
+    }
+}
+
+impl fmt::Display for SearchSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", *self as i32)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+enum SearchDir {
+    Frwd,
+    Back,
+}
+
+impl Default for SearchDir {
+    fn default() -> Self {
+        Self::Frwd
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct EntryPartial {
     pub id: EntryId,
@@ -34,6 +115,35 @@ pub struct EntryPartial {
     pub updated: Option<DateTime<Utc>>,
     pub tags: BTreeMap<String, Option<String>>,
     pub custom_fields: HashMap<CustomFieldId, custom_field::Value>,
+}
+
+impl
+    From<(
+        EntryRow,
+        BTreeMap<String, Option<String>>,
+        HashMap<CustomFieldId, custom_field::Value>,
+    )> for EntryPartial
+{
+    fn from(
+        (entry, tags, custom_fields): (
+            EntryRow,
+            BTreeMap<String, Option<String>>,
+            HashMap<CustomFieldId, custom_field::Value>,
+        ),
+    ) -> Self {
+        Self {
+            id: entry.id,
+            uid: entry.uid,
+            journals_id: entry.journals_id,
+            users_id: entry.users_id,
+            title: entry.title,
+            date: entry.date,
+            created: entry.created,
+            updated: entry.updated,
+            tags,
+            custom_fields,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -56,18 +166,6 @@ struct EntryRow {
     updated: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug)]
-struct TagRow {
-    key: String,
-    value: Option<String>,
-}
-
-#[derive(Debug)]
-struct CFValueRow {
-    custom_fields_id: CustomFieldId,
-    value: custom_field::Value,
-}
-
 #[derive(Debug, Serialize)]
 pub struct SearchResults {
     total: u64,
@@ -79,12 +177,14 @@ pub struct SearchResults {
 #[serde(tag = "error")]
 pub enum SearchEntriesError {
     JournalNotFound,
+    InvalidEndDate,
 }
 
 impl IntoResponse for SearchEntriesError {
     fn into_response(self) -> Response {
         match self {
             Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::InvalidEndDate => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
         }
     }
 }
@@ -95,6 +195,7 @@ pub async fn search_entries(
     initiator: Initiator,
     headers: HeaderMap,
     Path(JournalPath { journals_id }): Path<JournalPath>,
+    Query(query): Query<SearchQuery>,
 ) -> Result<body::Json<SearchResults>, Error<SearchEntriesError>> {
     body::assert_html(state.templates(), &headers)?;
 
@@ -121,7 +222,7 @@ pub async fn search_entries(
         None
     };
 
-    let rtn = multi_query_search(&transaction, &journal.id, 75).await?;
+    let rtn = multi_query_search(&transaction, &journal.id, query, 75).await?;
 
     transaction.rollback().await?;
 
@@ -136,106 +237,174 @@ async fn retrieve_journal_cfs(
     conn: &impl db::GenericClient,
     journals_id: &JournalId,
 ) -> Result<Vec<CustomFieldPartial>, Error<SearchEntriesError>> {
-    let stream = CustomField::retrieve_journal_stream(conn, journals_id).await?;
-
-    futures::pin_mut!(stream);
-
-    let mut rtn = Vec::new();
-
-    while let Some(try_record) = stream.next().await {
-        let CustomField {
-            id,
-            name,
-            description,
-            config,
-            ..
-        } = try_record?;
-
-        rtn.push(CustomFieldPartial {
-            id,
-            name,
-            description,
-            config,
-        });
-    }
-
-    Ok(rtn)
+    Ok(CustomField::retrieve_journal_stream(conn, journals_id)
+        .await?
+        .map(|maybe| {
+            maybe.map(
+                |CustomField {
+                     id,
+                     name,
+                     description,
+                     config,
+                     ..
+                 }| CustomFieldPartial {
+                    id,
+                    name,
+                    description,
+                    config,
+                },
+            )
+        })
+        .try_collect::<Vec<CustomFieldPartial>>()
+        .await?)
 }
 
 async fn multi_query_search(
     conn: &Transaction<'_>,
     journals_id: &JournalId,
+    SearchQuery {
+        start_date,
+        end_date,
+        size,
+        //page,
+        //prev,
+        //dir,
+        ..
+    }: SearchQuery,
     batch_size: i32,
 ) -> Result<Vec<EntryPartial>, Error<SearchEntriesError>> {
-    let params: db::ParamsArray<'_, 1> = [journals_id];
+    let mut params: db::ParamsVec<'_> = vec![journals_id];
+    let query = {
+        let select_stmt = "\
+            select entries.id, \
+                   entries.uid, \
+                   entries.journals_id, \
+                   entries.users_id, \
+                   entries.title, \
+                   entries.entry_date, \
+                   entries.created, \
+                   entries.updated \
+            from entries ";
+        let mut where_parts = vec![String::from("entries.journals_id = $1")];
+        //let mut offset_stmt = String::new();
+        let order_parts = vec![String::from("entries.entry_date desc")];
 
-    let portal = conn
-        .bind_raw(
-            "\
-        select entries.id, \
-               entries.uid, \
-               entries.journals_id, \
-               entries.users_id, \
-               entries.title, \
-               entries.entry_date, \
-               entries.created, \
-               entries.updated \
-        from entries \
-        where entries.journals_id = $1 \
-        order by entries.entry_date desc",
-            params,
-        )
-        .await?;
+        if start_date.is_some() && end_date.is_some() {
+            if start_date > end_date {
+                return Err(Error::Inner(SearchEntriesError::InvalidEndDate));
+            }
+        }
 
-    let mut rtn = Vec::new();
+        if let Some(date) = &start_date {
+            where_parts.push(format!(
+                "entries.entry_date >= ${}",
+                db::push_param(&mut params, date)
+            ));
+        }
 
-    loop {
-        let stream = conn
-            .query_portal_raw(&portal, batch_size)
-            .await?
-            .map(|result| {
-                result.map(|row| EntryRow {
-                    id: row.get(0),
-                    uid: row.get(1),
-                    journals_id: row.get(2),
-                    users_id: row.get(3),
-                    title: row.get(4),
-                    date: row.get(5),
-                    created: row.get(6),
-                    updated: row.get(7),
-                })
-            });
+        if let Some(date) = &end_date {
+            where_parts.push(format!(
+                "entries.entry_date <= ${}",
+                db::push_param(&mut params, date)
+            ));
+        }
+
+        /*
+        if let Some(date) = &prev {
+            match &dir {
+                SearchDir::Frwd => where_parts.push(format!(
+                    "entries.entry_date > ${}",
+                    db::push_param(&mut params, date)
+                )),
+                SearchDir::Back => where_parts.push(format!(
+                    "entries.entry_date <= ${}",
+                    db::push_param(&mut params, date)
+                )),
+            }
+        } else {
+            write!(&mut offset_stmt, "offset {page}").unwrap();
+        }
+        */
+
+        let where_stmt = where_parts.join(" and ");
+        let order_stmt = order_parts.join(", ");
+
+        //format!("{select_stmt} where {where_stmt} order by {order_stmt} {offset_stmt} limit {size}")
+        format!("{select_stmt} where {where_stmt} order by {order_stmt}")
+    };
+
+    let start = std::time::Instant::now();
+
+    let mut rtn = Vec::with_capacity((&size).into());
+
+    if size > batch_size {
+        let portal = conn.bind_raw(&query, params).await?;
+
+        loop {
+            let stream = conn
+                .query_portal_raw(&portal, batch_size)
+                .await?
+                .map(|result| {
+                    result.map(|row| EntryRow {
+                        id: row.get(0),
+                        uid: row.get(1),
+                        journals_id: row.get(2),
+                        users_id: row.get(3),
+                        title: row.get(4),
+                        date: row.get(5),
+                        created: row.get(6),
+                        updated: row.get(7),
+                    })
+                });
+
+            futures::pin_mut!(stream);
+
+            while let Some(result) = stream.next().await {
+                let row = result?;
+
+                let (tags, custom_fields) = tokio::join!(
+                    multi_query_tags(conn, &row.id),
+                    multi_query_cfs(conn, &row.id)
+                );
+
+                rtn.push(EntryPartial::from((row, tags?, custom_fields?)));
+            }
+
+            if let Some(affected) = stream.get_ref().rows_affected() {
+                if affected == 0 {
+                    break;
+                }
+            }
+        }
+    } else {
+        let stream = conn.query_raw(&query, params).await?.map(|result| {
+            result.map(|row| EntryRow {
+                id: row.get(0),
+                uid: row.get(1),
+                journals_id: row.get(2),
+                users_id: row.get(3),
+                title: row.get(4),
+                date: row.get(5),
+                created: row.get(6),
+                updated: row.get(7),
+            })
+        });
 
         futures::pin_mut!(stream);
 
         while let Some(result) = stream.next().await {
             let row = result?;
 
-            let (tags_res, custom_fields_res) = tokio::join!(
+            let (tags, custom_fields) = tokio::join!(
                 multi_query_tags(conn, &row.id),
                 multi_query_cfs(conn, &row.id)
             );
 
-            rtn.push(EntryPartial {
-                id: row.id,
-                uid: row.uid,
-                journals_id: row.journals_id,
-                users_id: row.users_id,
-                title: row.title,
-                date: row.date,
-                created: row.created,
-                updated: row.updated,
-                tags: tags_res?,
-                custom_fields: custom_fields_res?,
-            });
-        }
-
-        if let Some(affected) = stream.get_ref().rows_affected() {
-            if affected == 0 {
-                break;
-            }
+            rtn.push(EntryPartial::from((row, tags?, custom_fields?)));
         }
     }
+
+    tracing::debug!("query time: {:#?}", start.elapsed());
 
     Ok(rtn)
 }
@@ -245,7 +414,8 @@ async fn multi_query_tags(
     entries_id: &EntryId,
 ) -> Result<BTreeMap<String, Option<String>>, Error<SearchEntriesError>> {
     let params: db::ParamsArray<'_, 1> = [entries_id];
-    let stream = conn
+
+    Ok(conn
         .query_raw(
             "\
         select entry_tags.key, \
@@ -259,23 +429,15 @@ async fn multi_query_tags(
         )
         .await?
         .map(|result| {
-            result.map(|row| TagRow {
-                key: row.get(0),
-                value: row.get(1),
+            result.map(|row| {
+                (
+                    row.get::<usize, String>(0),
+                    row.get::<usize, Option<String>>(1),
+                )
             })
-        });
-
-    futures::pin_mut!(stream);
-
-    let mut tags = BTreeMap::new();
-
-    while let Some(result) = stream.next().await {
-        let record = result?;
-
-        tags.insert(record.key, record.value);
-    }
-
-    Ok(tags)
+        })
+        .try_collect::<BTreeMap<String, Option<String>>>()
+        .await?)
 }
 
 async fn multi_query_cfs(
@@ -283,7 +445,7 @@ async fn multi_query_cfs(
     entries_id: &EntryId,
 ) -> Result<HashMap<CustomFieldId, custom_field::Value>, Error<SearchEntriesError>> {
     let params: db::ParamsArray<'_, 1> = [entries_id];
-    let stream = conn
+    Ok(conn
         .query_raw(
             "\
         select custom_field_entries.custom_fields_id, \
@@ -297,21 +459,13 @@ async fn multi_query_cfs(
         )
         .await?
         .map(|result| {
-            result.map(|row| CFValueRow {
-                custom_fields_id: row.get(0),
-                value: row.get(1),
+            result.map(|row| {
+                (
+                    row.get::<usize, CustomFieldId>(0),
+                    row.get::<usize, custom_field::Value>(1),
+                )
             })
-        });
-
-    futures::pin_mut!(stream);
-
-    let mut rtn = HashMap::new();
-
-    while let Some(result) = stream.next().await {
-        let record = result?;
-
-        rtn.insert(record.custom_fields_id, record.value);
-    }
-
-    Ok(rtn)
+        })
+        .try_collect::<HashMap<CustomFieldId, custom_field::Value>>()
+        .await?)
 }

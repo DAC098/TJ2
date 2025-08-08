@@ -3,8 +3,8 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::db::ids::UserId;
-use crate::net::Error as NetError;
 use crate::net::body;
+use crate::net::Error as NetError;
 use crate::sec::authn::{Initiator, InitiatorError};
 use crate::sec::mfa::{self, otp};
 use crate::state;
@@ -50,8 +50,9 @@ impl IntoResponse for VerifyError {
             | Self::InvalidCode
             | Self::AlreadyVerified
             | Self::InvalidRecovery => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
-            Self::MFANotFound
-            | Self::UserNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::MFANotFound | Self::UserNotFound => {
+                (StatusCode::NOT_FOUND, body::Json(self)).into_response()
+            }
         }
     }
 }
@@ -104,8 +105,5 @@ pub async fn post(
 
     transaction.commit().await?;
 
-    Ok(body::Json(VerifySuccess {
-        id,
-        username,
-    }))
+    Ok(body::Json(VerifySuccess { id, username }))
 }

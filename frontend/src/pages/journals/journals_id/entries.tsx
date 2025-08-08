@@ -1,8 +1,9 @@
 import { format, formatDistanceToNow } from "date-fns";
-import { useState, useMemo } from "react";
-import { Link, useParams } from "react-router-dom";
-import { Plus, Search, ChevronUp, ChevronDown, CalendarIcon } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Plus, Search, ChevronUp, ChevronDown, CalendarIcon, RefreshCw } from "lucide-react";
 import { useForm, FormProvider, SubmitHandler,  } from "react-hook-form";
+import { useQuery } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,14 +26,14 @@ import {
     custom_field,
 } from "@/journals/api";
 import { CustomFieldEntryCell } from "@/journals/custom_fields";
-import { useQuery } from "@tanstack/react-query";
 import { req_api_json } from "@/net";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/utils";
-import { toast } from "sonner";
+import { date_to_naive_date, naive_date_to_date } from "@/time";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface CustomFieldPartial {
     id: number,
@@ -47,43 +48,28 @@ interface SearchEntriesResults {
 }
 
 interface SearchQuery {
-    name: string,
-    date_start: {
-        enabled: boolean,
-        value: Date,
-    },
-    date_end: {
-        enabled: boolean,
-        value: Date,
-    }
+    start_date: Date | null,
+    end_date: Date | null,
 }
 
-function search_entries_query_key(journals_id: string): ["search_entries", string] {
-    return ["search_entries", journals_id];
+function search_entries_query_key(journals_id: string, query: string): ["search_entries", string, string] {
+    return ["search_entries", journals_id, query];
 }
 
 export function Entries() {
     const { journals_id } = useParams();
+    const [search_params, set_search_params] = useSearchParams();
 
     if (journals_id == null) {
         throw new Error("missing journals_id param");
     }
 
-    const [search_query, set_search_query] = useState<SearchQuery>({
-        name: "",
-        date_start: {
-            enabled: false,
-            value: new Date(),
-        },
-        date_end: {
-            enabled: false,
-            value: new Date(),
-        }
-    });
     const {data, isFetching, error, refetch} = useQuery<SearchEntriesResults, Error, SearchEntriesResults, ReturnType<typeof search_entries_query_key>>({
-        queryKey: search_entries_query_key(journals_id),
+        queryKey: search_entries_query_key(journals_id, search_params.toString()),
         queryFn: async ({queryKey}) => {
-            return await req_api_json<SearchEntriesResults>("GET", `/journals/${queryKey[1]}/entries`);
+            let [_, journals_id, query] = queryKey;
+
+            return await req_api_json<SearchEntriesResults>("GET", `/journals/${journals_id}/entries?${query}`);
         }
     });
 
@@ -146,45 +132,34 @@ export function Entries() {
 
                     return <div className="max-w-96 flex flex-row flex-wrap gap-1">{list}</div>;
                 }
-            },
-            {
-                header: "Mod",
-                cell: ({ row }) => {
-                    let created = new Date(row.original.created);
-                    let updated = row.original.updated != null ? new Date(row.original.updated) : null;
-
-                    let distance = formatDistanceToNow(updated ?? created, {
-                        addSuffix: true,
-                        includeSeconds: true,
-                    });
-
-                    return <Tooltip>
-                        <TooltipTrigger>
-                            <span className="text-nowrap">{distance}</span>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
-                                <span className="text-right">created:</span><span>{created.toString()}</span>
-                                {updated != null ? <><span className="text-right">updated:</span><span>{updated.toString()}</span></> : null}
-                            </div>
-                        </TooltipContent>
-                    </Tooltip>;
-                }
             }
         );
 
         return columns;
     }, [custom_fields]);
 
-    console.log("rendering entries view");
-
     return <CenterPage className="max-w-6xl">
         <SearchHeader
-            query={search_query}
+            query={{
+                start_date: naive_date_to_date(decodeURIComponent(search_params.get("start_date") ?? "")),
+                end_date: naive_date_to_date(decodeURIComponent(search_params.get("end_date") ?? "")),
+            }}
             journals_id={journals_id}
             is_fetching={isFetching}
-            on_search={set_search_query}
             on_refetch={refetch}
+            on_search={data => {
+                let params: any = {};
+
+                if (data.start_date != null) {
+                    params["start_date"] = date_to_naive_date(data.start_date);
+                }
+
+                if (data.end_date != null) {
+                    params["end_date"] = date_to_naive_date(data.end_date);
+                }
+
+                set_search_params(params);
+            }}
         />
         <DataTable
             columns={columns}
@@ -202,44 +177,80 @@ interface SearchHeaderProps {
     on_refetch: () => void,
 }
 
+interface SearchForm {
+    start_date: {
+        enabled: boolean,
+        value: Date,
+    },
+    end_date: {
+        enabled: boolean,
+        value: Date,
+    },
+}
+
+function get_search_form(query: SearchQuery): SearchForm {
+    return {
+        start_date: {
+            enabled: query.start_date != null,
+            value: query.start_date ?? new Date(),
+        },
+        end_date: {
+            enabled: query.end_date != null,
+            value: query.end_date ?? new Date(),
+        },
+    };
+}
+
 function SearchHeader({query, journals_id, is_fetching, on_search, on_refetch}: SearchHeaderProps) {
     const [view_options, set_view_options] = useState(false);
 
-    const form = useForm({
-        defaultValues: query,
+    const form = useForm<SearchForm>({
+        defaultValues: get_search_form(query),
     });
 
-    const on_submit: SubmitHandler<SearchQuery> = (data, ev) => {
-        if (form.formState.isDirty) {
-            on_search(data);
-        } else {
-            on_refetch();
+    const on_submit: SubmitHandler<SearchForm> = (data, ev) => {
+        let is_valid = true;
+
+        if (data.start_date.enabled && data.end_date.enabled) {
+            if (data.start_date.value > data.end_date.value) {
+                form.setError("end_date.value", {
+                    message: "End date must be greater than the start date"
+                });
+
+                is_valid = false;
+            }
         }
+
+        if (!is_valid) {
+            return;
+        }
+
+        on_search({
+            start_date: data.start_date.enabled ? data.start_date.value : null,
+            end_date: data.end_date.enabled ? data.end_date.value : null,
+        });
     };
+
+    useEffect(() => {
+        form.reset(get_search_form(query));
+    }, [query]);
 
     return <FormProvider {...form}>
         <form className="sticky top-0 bg-background z-10 py-4 border-b" onSubmit={form.handleSubmit(on_submit)}>
             <Collapsible open={view_options} className="space-y-4" onOpenChange={set_view_options}>
                 <div className="flex flex-row flex-nowrap items-center gap-x-4">
                     <div className="w-1/2 relative">
-                        <FormField control={form.control} name="name" render={({field}) => {
-                            return <FormItem>
-                                <FormControl>
-                                    <Input
-                                        type="text"
-                                        placeholder="Search"
-                                        className="pr-10"
-                                        {...field}
-                                        disabled={field.disabled || is_fetching}
-                                    />
-                                </FormControl>
-                                <FormMessage/>
-                            </FormItem>;
-                        }}/>
+                        <Input type="text" placeholder="Search" disabled={is_fetching}/>
                     </div>
-                    <Button type="submit" variant="secondary" size="icon" disabled={is_fetching}>
-                        <Search/>
-                    </Button>
+                    {form.formState.isDirty ?
+                        <Button type="submit" variant="secondary" size="icon" disabled={is_fetching}>
+                            <Search/>
+                        </Button>
+                        :
+                        <Button type="button" variant="secondary" size="icon" disabled={is_fetching} onClick={() => on_refetch()}>
+                            <RefreshCw/>
+                        </Button>
+                    }
                     <Link to={`/journals/${journals_id}/entries/new`}>
                         <Button type="button"><Plus/>New Entry</Button>
                     </Link>
@@ -252,17 +263,18 @@ function SearchHeader({query, journals_id, is_fetching, on_search, on_refetch}: 
                     </CollapsibleTrigger>
                 </div>
                 <CollapsibleContent className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                        <FormField control={form.control} name="date_start.enabled" render={({field}) => {
-                            return <FormItem className="flex flex-row flex-nowrap items-center gap-x-2 space-y-0">
+                    <div className="space-y-2 pt-1">
+                        <FormField control={form.control} name="start_date.enabled" render={({field}) => {
+                            return <FormItem className="flex flex-row flex-nowrap items-center gap-2 space-y-0">
                                 <FormControl>
+                                    {/* we should be getting only boolean and not indeterminate */}
                                     <Checkbox checked={field.value} onCheckedChange={field.onChange}/>
                                 </FormControl>
                                 <FormLabel>Start Date</FormLabel>
                             </FormItem>
                         }}/>
-                        <FormField control={form.control} name="date_start.value" render={({field}) => {
-                            let enabled = form.getValues("date_start.enabled");
+                        <FormField control={form.control} name="start_date.value" render={({field}) => {
+                            let enabled = form.getValues("start_date.enabled");
 
                             return <FormItem>
                                 <Popover>
@@ -283,20 +295,21 @@ function SearchHeader({query, journals_id, is_fetching, on_search, on_refetch}: 
                                         <Calendar mode="single" selected={field.value} onSelect={field.onChange} captionLayout="dropdown"/>
                                     </PopoverContent>
                                 </Popover>
+                                <FormMessage/>
                             </FormItem>
                         }}/>
                     </div>
-                    <div  className="space-y-2">
-                        <FormField control={form.control} name="date_end.enabled" render={({field}) => {
+                    <div  className="space-y-2 pt-1">
+                        <FormField control={form.control} name="end_date.enabled" render={({field}) => {
                             return <FormItem className="flex flex-row flex-nowrap items-center gap-x-2 space-y-0">
                                 <FormControl>
                                     <Checkbox checked={field.value} onCheckedChange={field.onChange}/>
                                 </FormControl>
-                                <FormLabel>Start Date</FormLabel>
+                                <FormLabel>End Date</FormLabel>
                             </FormItem>
                         }}/>
-                        <FormField control={form.control} name="date_end.value" render={({field}) => {
-                            let enabled = form.getValues("date_end.enabled");
+                        <FormField control={form.control} name="end_date.value" render={({field}) => {
+                            let enabled = form.getValues("end_date.enabled");
 
                             return <FormItem>
                                 <Popover>
@@ -317,6 +330,7 @@ function SearchHeader({query, journals_id, is_fetching, on_search, on_refetch}: 
                                         <Calendar mode="single" selected={field.value} onSelect={field.onChange} captionLayout="dropdown"/>
                                     </PopoverContent>
                                 </Popover>
+                                <FormMessage/>
                             </FormItem>
                         }}/>
                     </div>
