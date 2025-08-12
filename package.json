@@ -3,12 +3,10 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "build-css": "npx tailwindcss -i ./frontend/styles/input.css -o ./frontend/assets/stylesheet.css",
-    "watch-css": "npx tailwindcss -w -i ./frontend/styles/input.css -o ./frontend/assets/stylesheet.css",
-    "build-tsx": "npx rspack build",
-    "watch-tsx": "npx rspack build --watch",
-    "build-dev-tsx": "npx rspack dev",
-    "watch-dev-tsx": "npx rspack dev --watch"
+    "build": "npx rspack build",
+    "watch": "npx rspack build --watch",
+    "build-dev": "npx rspack --node-env=development build",
+    "watch-dev": "npx rspack --node-env=development build --watch"
   },
   "type": "module",
   "dependencies": {
