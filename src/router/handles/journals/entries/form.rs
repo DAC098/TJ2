@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use chrono::{NaiveDate, Utc};
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
 
 use crate::db;
 use crate::db::ids::{CustomFieldId, EntryId, EntryUid, FileEntryId, FileEntryUid, JournalId};
-use crate::journal::{custom_field, FileEntry, ReceivedFile, RequestedFile};
+use crate::journal::{custom_field, FileEntry, ReceivedFile, RequestedFile, Entry, EntryRetrieve};
 
 #[derive(Debug, Serialize)]
 pub struct EntryForm<FileT = EntryFileForm> {
@@ -40,31 +40,20 @@ impl EntryForm {
         })
     }
 
-    pub async fn retrieve_entry(
+    pub async fn retrieve_entry<'a, T>(
         conn: &impl db::GenericClient,
-        journals_id: &JournalId,
-        entries_id: &EntryId,
-    ) -> Result<Option<Self>, db::PgError> {
-        let maybe = conn
-            .query_opt(
-                "\
-            select entries.id, \
-                   entries.uid, \
-                   entries.entry_date, \
-                   entries.title, \
-                   entries.contents \
-            from entries \
-            where entries.journals_id = $1 and \
-                  entries.id = $2",
-                &[journals_id, entries_id],
-            )
-            .await?;
+        given: T
+    ) -> Result<Option<Self>, db::PgError>
+    where
+        T: Into<EntryRetrieve<'a>>,
+    {
+        let maybe = Entry::retrieve(conn, given).await?;
 
-        if let Some(found) = maybe {
+        if let Some(Entry { id, uid, journals_id, date, title, contents, .. }) = maybe {
             let (tags_res, files_res, custom_fields_res) = tokio::join!(
-                EntryTagForm::retrieve_entry(conn, entries_id),
-                EntryFileForm::retrieve_entry(conn, entries_id),
-                EntryCustomFieldForm::retrieve_entry(conn, journals_id, entries_id),
+                EntryTagForm::retrieve_entry(conn, &id),
+                EntryFileForm::retrieve_entry(conn, &id),
+                EntryCustomFieldForm::retrieve_entry(conn, &journals_id, &id),
             );
 
             let tags = tags_res?;
@@ -72,11 +61,11 @@ impl EntryForm {
             let custom_fields = custom_fields_res?;
 
             Ok(Some(Self {
-                id: found.get(0),
-                uid: found.get(1),
-                date: found.get(2),
-                title: found.get(3),
-                contents: found.get(4),
+                id: Some(id),
+                uid: Some(uid),
+                date,
+                title,
+                contents,
                 tags,
                 files,
                 custom_fields,
@@ -123,17 +112,10 @@ impl EntryTagForm {
         conn: &impl db::GenericClient,
         entries_id: &EntryId,
     ) -> Result<Vec<Self>, db::PgError> {
-        let stream = Self::retrieve_entry_stream(conn, entries_id).await?;
-
-        futures::pin_mut!(stream);
-
-        let mut rtn = Vec::new();
-
-        while let Some(try_record) = stream.next().await {
-            rtn.push(try_record?);
-        }
-
-        Ok(rtn)
+        Ok(Self::retrieve_entry_stream(conn, entries_id)
+           .await?
+           .try_collect::<Vec<Self>>()
+           .await?)
     }
 }
 

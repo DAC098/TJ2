@@ -2,7 +2,7 @@ import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { VariantProps, cva } from "class-variance-authority";
 import { PanelLeft } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, Path } from "react-router-dom";
 
 import { cn } from "@/utils";
 import { useIsMobile } from "@/components/hooks/use-mobile";
@@ -734,7 +734,7 @@ SidebarMenuSubButton.displayName = "SidebarMenuSubButton";
 
 interface SidebarMenuLinkProps {
     title: string,
-    path: string,
+    path: string | Path,
     tooltip?: string | React.ReactElement,
     active?: boolean,
     icon?: React.ReactElement,

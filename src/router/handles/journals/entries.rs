@@ -36,7 +36,14 @@ pub struct JournalPath {
 #[derive(Debug, Deserialize)]
 pub struct EntryPath {
     journals_id: JournalId,
-    entries_id: EntryId,
+    entries_id: EntryIdKind,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EntryIdKind {
+    Id(EntryId),
+    Date(NaiveDate),
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -125,9 +132,12 @@ pub async fn retrieve_entry(
     )
     .await?;
 
-    let rtn = form::EntryForm::retrieve_entry(&conn, &journal.id, &entries_id)
-        .await?
-        .ok_or(Error::Inner(RetrieveError::EntryNotFound))?;
+    let result = match entries_id {
+        EntryIdKind::Id(id) => form::EntryForm::retrieve_entry(&conn, (&journal.id, &id)).await,
+        EntryIdKind::Date(date) => form::EntryForm::retrieve_entry(&conn, (&journal.id, &date)).await,
+    };
+
+    let rtn = result?.ok_or(Error::Inner(RetrieveError::EntryNotFound))?;
 
     Ok(body::Json(rtn))
 }
@@ -395,9 +405,10 @@ pub async fn update_entry(
     )
     .await?;
 
-    let mut entry = Entry::retrieve(&transaction, (&journal.id, &entries_id))
-        .await?
-        .ok_or(Error::Inner(UpdateEntryError::EntryNotFound))?;
+    let mut entry = match entries_id {
+        EntryIdKind::Id(id) => Entry::retrieve(&transaction, (&journal.id, &id)).await,
+        EntryIdKind::Date(date) => Entry::retrieve(&transaction, (&journal.id, &date)).await,
+    }?.ok_or(Error::Inner(UpdateEntryError::EntryNotFound))?;
 
     entry.date = json.date;
     entry.title = opt_non_empty_str(json.title);
@@ -564,9 +575,10 @@ pub async fn delete_entry(
     )
     .await?;
 
-    let entry = Entry::retrieve(&transaction, (&journal.id, &entries_id))
-        .await?
-        .ok_or(Error::Inner(DeleteEntryError::EntryNotFound))?;
+    let entry = match entries_id {
+        EntryIdKind::Id(id) => Entry::retrieve(&transaction, (&journal.id, &id)).await,
+        EntryIdKind::Date(date) => Entry::retrieve(&transaction, (&journal.id, &date)).await,
+    }?.ok_or(Error::Inner(DeleteEntryError::EntryNotFound))?;
 
     let _tags = transaction
         .execute("delete from entry_tags where entries_id = $1", &[&entry.id])

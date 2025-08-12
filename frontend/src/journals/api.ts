@@ -247,7 +247,7 @@ export interface EntryPartial {
     uid: string,
     journals_id: number,
     users_id: number,
-    title: string
+    title: string | null
     date: string,
     created: string,
     updated: string | null,
@@ -487,7 +487,7 @@ export async function get_journal(journals_id: string) {
 }
 
 export async function create_entry(
-    journals_id: string,
+    journals_id: string | number,
     entry: UIEntryForm,
 ) {
     let sending: any = {
@@ -547,7 +547,7 @@ export async function create_entry(
 }
 
 export async function update_entry(
-    journals_id: string,
+    journals_id: string | number,
     entries_id: string,
     entry: UIEntryForm,
 ) {

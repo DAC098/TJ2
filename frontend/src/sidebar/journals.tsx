@@ -1,4 +1,4 @@
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useParams, useSearchParams } from "react-router-dom";
 import { Pencil, Trash } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -28,6 +28,7 @@ type SyncResult = {
 function JournalSidebar() {
     const {journals_id} = useParams();
     const location = useLocation();
+    const [search_params, _] = useSearchParams();
 
     if (journals_id == null) {
         throw new Error("missing journals_id param");
@@ -71,6 +72,8 @@ function JournalSidebar() {
         journal_name = journal.name;
     }
 
+    let entries_path = `/journals/${journals_id}/entries`;
+
     return <>
         <SidebarHeader className="border-b">
             <h2 className="w-full text-xl overflow-hidden text-nowrap whitespace-nowrap text-ellipsis" title={journal_name}>
@@ -83,10 +86,16 @@ function JournalSidebar() {
                 <SidebarGroupContent>
                     <SidebarMenu>
                         <SidebarMenuLink
+                            title="Calendar"
+                            tooltip={"View entries in the journal as a calendar"}
+                            path={`${entries_path}?view=calendar`}
+                            active={location.pathname.startsWith(entries_path) && search_params.has("view", "calendar")}
+                        />
+                        <SidebarMenuLink
                             title="Search"
                             tooltip={"Search all available entries for the journal."}
-                            path={`/journals/${journals_id}/entries`}
-                            active={location.pathname.startsWith(`/journals/${journals_id}/entries`)}
+                            path={entries_path}
+                            active={location.pathname.startsWith(entries_path) && !search_params.has("view")}
                         />
                     </SidebarMenu>
                 </SidebarGroupContent>

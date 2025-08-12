@@ -63,3 +63,41 @@ export function naive_date_to_date(given: string): Date | null {
         return rtn;
     }
 }
+
+export function same_date(given: Date, ref: Date) {
+    return given.getDate() === ref.getDate() &&
+        given.getMonth() === ref.getMonth() &&
+        given.getFullYear() === ref.getFullYear();
+}
+
+export const MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+export const DAY_NAMES = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+
+export const MILLISECOND = 1;
+export const SECOND = MILLISECOND * 1000;
+export const MINUTE = SECOND * 60;
+export const HOUR = MINUTE * 60;
+export const DAY = HOUR * 24;
+export const WEEK = DAY * 7;

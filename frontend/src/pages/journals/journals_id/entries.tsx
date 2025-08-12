@@ -1,7 +1,7 @@
-import { format, formatDistanceToNow } from "date-fns";
-import { useState, useMemo, useEffect } from "react";
+import { Day, endOfMonth, endOfWeek, format, parse, startOfMonth, startOfWeek } from "date-fns";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Plus, Search, ChevronUp, ChevronDown, CalendarIcon, RefreshCw } from "lucide-react";
+import { Plus, Search, ChevronUp, ChevronDown, CalendarIcon, RefreshCw, ArrowLeft, ArrowRight, LoaderCircle } from "lucide-react";
 import { useForm, FormProvider, SubmitHandler,  } from "react-hook-form";
 import { useQuery } from "@tanstack/react-query";
 
@@ -32,8 +32,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/utils";
-import { date_to_naive_date, naive_date_to_date } from "@/time";
+import { date_to_naive_date, DAY_NAMES, MINUTE, MONTH_NAMES, naive_date_to_date, same_date } from "@/time";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { use_date } from "@/components/hooks/timers";
+import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
 
 interface CustomFieldPartial {
     id: number,
@@ -47,22 +50,403 @@ interface SearchEntriesResults {
     custom_fields: CustomFieldPartial[]
 }
 
-interface SearchQuery {
-    start_date: Date | null,
-    end_date: Date | null,
+enum EntriesView {
+    Table = 0,
+    Calendar = 1,
 }
 
 function search_entries_query_key(journals_id: string, query: string): ["search_entries", string, string] {
     return ["search_entries", journals_id, query];
 }
 
+function get_view(search_params: URLSearchParams): EntriesView {
+    let view = search_params.get("view");
+
+    if (view != null) {
+        switch (view.toLowerCase()) {
+            case "calendar":
+                return EntriesView.Calendar;
+        }
+    }
+
+    return EntriesView.Table;
+}
+
 export function Entries() {
     const { journals_id } = useParams();
-    const [search_params, set_search_params] = useSearchParams();
 
     if (journals_id == null) {
         throw new Error("missing journals_id param");
     }
+
+    const [search_params, _] = useSearchParams();
+    const [view_type, set_view_type] = useState<EntriesView>(get_view(search_params));
+
+    useEffect(() => {
+        set_view_type(get_view(search_params));
+    }, [search_params])
+
+    switch (view_type) {
+        case EntriesView.Table:
+            return <EntriesTable journals_id={journals_id}/>;
+        case EntriesView.Calendar:
+            return <EntriesCalendar journals_id={journals_id}/>;
+    }
+}
+
+interface EntriesCalendarProps {
+    journals_id: string
+}
+
+let start_of_week: Day = 0;
+
+function EntriesCalendar({journals_id}: EntriesCalendarProps) {
+    let today = use_date();
+    const [search_params, set_search_params] = useSearchParams();
+
+    let [[year, month], set_date_tuple] = useState<[number, number]>(() => {
+        let date = search_params.get("date");
+        let now = new Date();
+
+        if (date != null) {
+            let parsed = parse(date, "yyyy-MM", now);
+
+            if (!isNaN(parsed.getTime())) {
+                return [parsed.getFullYear(), parsed.getMonth()];
+            }
+        }
+
+        return [now.getFullYear(), now.getMonth()];
+    });
+
+    const {data, isFetching, error} = useQuery({
+        queryKey: ["calendar_entries", journals_id, year, month] as [string, string, number, number],
+        queryFn: async ({queryKey}) => {
+            let {entries, custom_fields} = await req_api_json<SearchEntriesResults>(
+                "GET",
+                `/journals/${queryKey[1]}/entries?date=${queryKey[2]}-${(queryKey[3] + 1).toString().padStart(2, '0')}`
+            );
+
+            return create_calendar_month({year: queryKey[2], month: queryKey[3], entries});
+        },
+        placeholderData: (prev_data, prev_query) => prev_data,
+    });
+
+    let week_days = useMemo(() => {
+        let rtn = [];
+
+        for (let count = 0; count < 7; count += 1) {
+            let index = (count + start_of_week) % 7;
+
+            rtn.push(<div key={index} className="text-center">
+                {DAY_NAMES[index]}
+            </div>);
+        }
+
+        return rtn;
+    }, []);
+
+    let update_date = useCallback(({next_year = year, next_month = month}: {next_year?: number, next_month?: number}) => {
+        set_date_tuple([next_year, next_month]);
+        set_search_params(curr => {
+            let now = new Date();
+
+            if (next_year !== now.getFullYear() && next_month !== now.getMonth()) {
+                curr.delete("date");
+            } else {
+                curr.set("date", `${next_year}-${(next_month + 1).toString(10).padStart(2, '0')}`);
+            }
+
+            return curr;
+        });
+    }, [year, month]);
+
+    let prev_month = useCallback(() => {
+        let next_month = month - 1;
+        let next_year = year;
+
+        if (next_month === -1) {
+            next_month = 11;
+            next_year -= 1;
+        }
+
+        update_date({next_year, next_month});
+    }, [year, month]);
+
+    let next_month = useCallback(() => {
+        let next_month = month + 1;
+        let next_year = year;
+
+        if (next_month === 12) {
+            next_month = 0;
+            next_year += 1;
+        }
+
+        update_date({next_year, next_month});
+    }, [year, month]);
+
+    return <CenterPage className="max-w-7xl pt-2">
+        <div className="flex flex-row items-center">
+            <Button type="button" variant="outline" size="icon" disabled={isFetching} onClick={prev_month}>
+                <ArrowLeft/>
+            </Button>
+            <div className="flex-1"/>
+            <div className="flex flex-row gap-x-2">
+                <MonthSelect
+                    value={month}
+                    disabled={isFetching}
+                    on_change={value => update_date({next_month: value})}
+                />
+                <YearSelect
+                    value={year}
+                    lower={1900}
+                    upper={today.getFullYear()}
+                    disabled={isFetching}
+                    on_change={value => update_date({next_year: value})}
+                />
+                <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isFetching || (year === today.getFullYear() && month == today.getMonth())}
+                    onClick={() => update_date({next_year: today.getFullYear(), next_month: today.getMonth()})}
+                >
+                    Today
+                </Button>
+            </div>
+            <div className="flex-1 flex flex-row items-center justify-start pl-2 gap-x-2">
+                {isFetching ?
+                    <>
+                        <LoaderCircle className="animate-spin"/>
+                        <span>Loading...</span>
+                    </>
+                    :
+                    null
+                }
+            </div>
+            <Button type="button" variant="outline" size="icon" disabled={isFetching} onClick={next_month}>
+                <ArrowRight/>
+            </Button>
+        </div>
+        <div className="grid grid-cols-7 gap-4">
+            {week_days}
+            {data != null ?
+                data.map(({date, key, is_spacer, record}) => is_spacer ?
+                    <div/> :
+                    <CalendarCell
+                        key={key}
+                        date={key}
+                        is_today={same_date(date, today)}
+                        record={record}
+                        disable={isFetching}
+                    />
+                )
+                :
+                null
+            }
+        </div>
+    </CenterPage>;
+}
+
+interface CreateCalendarList {
+    year: number,
+    month: number,
+    start_of_week?: Day,
+    entries: EntryPartial[],
+}
+
+function create_calendar_month({
+    year,
+    month,
+    entries,
+    start_of_week = 0,
+}: CreateCalendarList) {
+    let month_start = startOfMonth(new Date(year, month));
+    let month_end = endOfMonth(new Date(year, month));
+    let rtn = [];
+    let list_index = entries.length - 1;
+
+    for (let iter = startOfWeek(month_start, {weekStartsOn: start_of_week}); iter < month_start; iter.setDate(iter.getDate() + 1)) {
+        rtn.push({
+            date: new Date(iter),
+            key: date_to_naive_date(iter),
+            is_spacer: true,
+            record: null,
+        });
+    }
+
+    for (let iter = month_start; iter <= month_end; iter.setDate(iter.getDate() + 1)) {
+        let key = date_to_naive_date(iter);
+        let record = null;
+
+        if (list_index >= 0 && entries[list_index].date === key) {
+            record = entries[list_index];
+            list_index -= 1;
+        }
+
+        rtn.push({
+            date: new Date(iter),
+            key,
+            is_spacer: false,
+            record,
+        });
+    }
+
+    let week_end = endOfWeek(month_end, {weekStartsOn: start_of_week});
+    let end = new Date(month_end);
+    end.setDate(end.getDate() + 1);
+
+    for (let iter = end; iter <= week_end; iter.setDate(iter.getDate() + 1)) {
+        rtn.push({
+            date: new Date(iter),
+            key: date_to_naive_date(iter),
+            is_spacer: true,
+            record: null,
+        });
+    }
+
+    if (list_index >= 0) {
+        console.warn("did not cover all records returned");
+
+        for (let index = list_index; index < entries.length; index += 1) {
+            console.log(entries[index]);
+        }
+    }
+
+    return rtn;
+}
+
+interface CalendarCellProps {
+    date: string,
+    is_today: boolean,
+    disable: boolean,
+    record: EntryPartial | null,
+}
+
+function CalendarCell({date, is_today, record, disable}: CalendarCellProps) {
+    if (record == null) {
+        return <div
+            className={cn("border rounded-lg p-2 h-48 text-muted-foreground hover:bg-secondary transition-colors", {
+                "border-foreground": is_today,
+            })}
+        >
+            {disable ?
+                date
+                :
+                <Link to={`./${date}`}>{date}</Link>
+            }
+        </div>;
+    }
+
+    let list = [];
+
+    for (let tag in record.tags) {
+        let value = record.tags[tag];
+
+        if (value != null) {
+            list.push(<Tooltip key={tag}>
+                <TooltipTrigger>
+                    <Badge variant="outline">{tag}</Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                    <p>{value}</p>
+                </TooltipContent>
+            </Tooltip>);
+        } else {
+            list.push(<Badge key={tag} variant="outline">{tag}</Badge>);
+        }
+    }
+
+    let content = null;
+
+    if (list.length > 0) {
+        content = <div className="flex flex-row flex-wrap gap-1">{list}</div>;
+    }
+
+    return <div
+        className={cn("space-y-2 border rounded-lg h-48 hover:bg-secondary transition-colors", {
+            "border-foreground": is_today,
+        })}
+    >
+        <div className="px-2 pt-2">
+            {disable ?
+                record.date
+                :
+                <Link to={`./${record.date}`}>{record.date}</Link>
+            }
+        </div>
+        <Separator/>
+        <div className="px-2 pb-2">
+            {record.title != null ? <h4 className="text-lg truncate">{record.title}</h4> : null}
+            {content}
+        </div>
+    </div>
+}
+
+interface YearSelectProps {
+    value: number,
+    lower: number,
+    upper: number,
+    disabled: boolean,
+    on_change: (value: number) => void,
+}
+
+function YearSelect({value, lower, upper, disabled, on_change}: YearSelectProps) {
+    let years = useMemo(() => {
+        let year_list = [];
+
+        for (let index = upper; index >= lower; index -= 1) {
+            year_list.push(<SelectItem key={index} value={index.toString()}>{index}</SelectItem>);
+        }
+
+        return year_list;
+    }, [lower, upper]);
+
+    return <Select
+        onValueChange={value => on_change(parseInt(value, 10))}
+        value={value.toString(10)}
+        disabled={disabled}
+    >
+        <SelectTrigger>
+            <SelectValue/>
+        </SelectTrigger>
+        <SelectContent>{years}</SelectContent>
+    </Select>;
+}
+
+interface MonthSelectProps {
+    value: number,
+    disabled: boolean,
+    on_change: (value: number) => void,
+}
+
+function MonthSelect({value, disabled, on_change}: MonthSelectProps) {
+    let months = useMemo(() => MONTH_NAMES.map((name, index) => {
+        return <SelectItem key={index} value={index.toString()}>{name}</SelectItem>;
+    }), []);
+
+    return <Select
+        onValueChange={value => on_change(parseInt(value, 10))}
+        value={value.toString(10)}
+        disabled={disabled}
+    >
+        <SelectTrigger>
+            <SelectValue/>
+        </SelectTrigger>
+        <SelectContent>{months}</SelectContent>
+    </Select>;
+}
+
+interface SearchQuery {
+    start_date: Date | null,
+    end_date: Date | null,
+}
+
+interface EntriesTableProps {
+    journals_id: string,
+}
+
+function EntriesTable({journals_id}: EntriesTableProps) {
+    const [search_params, set_search_params] = useSearchParams();
 
     const {data, isFetching, error, refetch} = useQuery<SearchEntriesResults, Error, SearchEntriesResults, ReturnType<typeof search_entries_query_key>>({
         queryKey: search_entries_query_key(journals_id, search_params.toString()),
@@ -148,17 +532,21 @@ export function Entries() {
             is_fetching={isFetching}
             on_refetch={refetch}
             on_search={data => {
-                let params: any = {};
+                set_search_params(prev => {
+                    if (data.start_date != null) {
+                        prev.set("start_date", date_to_naive_date(data.start_date));
+                    } else {
+                        prev.delete("start_date");
+                    }
 
-                if (data.start_date != null) {
-                    params["start_date"] = date_to_naive_date(data.start_date);
-                }
+                    if (data.end_date != null) {
+                        prev.set("end_date", date_to_naive_date(data.end_date));
+                    } else {
+                        prev.delete("end_date");
+                    }
 
-                if (data.end_date != null) {
-                    params["end_date"] = date_to_naive_date(data.end_date);
-                }
-
-                set_search_params(params);
+                    return prev;
+                });
             }}
         />
         <DataTable

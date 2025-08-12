@@ -378,7 +378,6 @@ pub struct Entry {
     pub uid: EntryUid,
 
     /// the journal that the entry belongs to
-    #[allow(dead_code)]
     pub journals_id: JournalId,
 
     /// the user that created the entry
@@ -401,18 +400,25 @@ pub struct Entry {
     pub updated: Option<DateTime<Utc>>,
 }
 
-pub enum EntryRetrieveOne<'a> {
+pub enum EntryRetrieve<'a> {
     JournalAndId((&'a JournalId, &'a EntryId)),
+    JournalAndDate((&'a JournalId, &'a NaiveDate)),
     JournalAndUserAndId((&'a JournalId, &'a UserId, &'a EntryId)),
 }
 
-impl<'a> From<(&'a JournalId, &'a EntryId)> for EntryRetrieveOne<'a> {
+impl<'a> From<(&'a JournalId, &'a EntryId)> for EntryRetrieve<'a> {
     fn from(given: (&'a JournalId, &'a EntryId)) -> Self {
         Self::JournalAndId(given)
     }
 }
 
-impl<'a> From<(&'a JournalId, &'a UserId, &'a EntryId)> for EntryRetrieveOne<'a> {
+impl<'a> From<(&'a JournalId, &'a NaiveDate)> for EntryRetrieve<'a> {
+    fn from(given: (&'a JournalId, &'a NaiveDate)) -> Self {
+        Self::JournalAndDate(given)
+    }
+}
+
+impl<'a> From<(&'a JournalId, &'a UserId, &'a EntryId)> for EntryRetrieve<'a> {
     fn from(given: (&'a JournalId, &'a UserId, &'a EntryId)) -> Self {
         Self::JournalAndUserAndId(given)
     }
@@ -505,7 +511,7 @@ impl Entry {
         given: T,
     ) -> Result<Option<Self>, db::PgError>
     where
-        T: Into<EntryRetrieveOne<'a>>,
+        T: Into<EntryRetrieve<'a>>,
     {
         let base = "\
             select entries.id, \
@@ -520,7 +526,7 @@ impl Entry {
             from entries";
 
         let result = match given.into() {
-            EntryRetrieveOne::JournalAndId((journals_id, entries_id)) => {
+            EntryRetrieve::JournalAndId((journals_id, entries_id)) => {
                 let query = format!(
                     "{base} \
                 where entries.journals_id = $1 and \
@@ -529,7 +535,16 @@ impl Entry {
 
                 conn.query_opt(&query, &[journals_id, entries_id]).await
             }
-            EntryRetrieveOne::JournalAndUserAndId((journals_id, users_id, entries_id)) => {
+            EntryRetrieve::JournalAndDate((journals_id, date)) => {
+                let query = format!(
+                    "{base} \
+                where entries.journals_id = $1 and \
+                      entries.entry_date = $2"
+                );
+
+                conn.query_opt(&query, &[journals_id, date]).await
+            }
+            EntryRetrieve::JournalAndUserAndId((journals_id, users_id, entries_id)) => {
                 let query = format!(
                     "{base} \
                     where entries.journals_id = $1 and \

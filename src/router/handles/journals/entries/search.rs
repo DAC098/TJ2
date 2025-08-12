@@ -5,7 +5,7 @@ use std::fmt;
 use axum::extract::{Path, Query};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc, Datelike};
 use deadpool_postgres::Transaction;
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,10 @@ pub struct JournalPath {
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
-    start_date: Option<NaiveDate>,
-    end_date: Option<NaiveDate>,
+    date: Option<String>,
+
+    start_date: Option<String>,
+    end_date: Option<String>,
 
     // used for both page and keyset pagination
     #[serde(default)]
@@ -177,6 +179,7 @@ pub struct SearchResults {
 #[serde(tag = "error")]
 pub enum SearchEntriesError {
     JournalNotFound,
+    InvalidDateFormat,
     InvalidEndDate,
 }
 
@@ -184,6 +187,7 @@ impl IntoResponse for SearchEntriesError {
     fn into_response(self) -> Response {
         match self {
             Self::JournalNotFound => (StatusCode::NOT_FOUND, body::Json(self)).into_response(),
+            Self::InvalidDateFormat => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
             Self::InvalidEndDate => (StatusCode::BAD_REQUEST, body::Json(self)).into_response(),
         }
     }
@@ -263,6 +267,7 @@ async fn multi_query_search(
     conn: &Transaction<'_>,
     journals_id: &JournalId,
     SearchQuery {
+        date,
         start_date,
         end_date,
         size,
@@ -273,6 +278,19 @@ async fn multi_query_search(
     }: SearchQuery,
     batch_size: i32,
 ) -> Result<Vec<EntryPartial>, Error<SearchEntriesError>> {
+    let start_d;
+    let end_d;
+
+    if let Some(date) = maybe_parse_date(date)? {
+        let (start, end) = get_month_range(date)?;
+
+        start_d = Some(start);
+        end_d = Some(end);
+    } else {
+        start_d = maybe_parse_date(start_date)?;
+        end_d = maybe_parse_date(end_date)?;
+    }
+
     let mut params: db::ParamsVec<'_> = vec![journals_id];
     let query = {
         let select_stmt = "\
@@ -289,20 +307,20 @@ async fn multi_query_search(
         //let mut offset_stmt = String::new();
         let order_parts = vec![String::from("entries.entry_date desc")];
 
-        if start_date.is_some() && end_date.is_some() {
-            if start_date > end_date {
+        if start_d.is_some() && end_d.is_some() {
+            if start_d > end_d {
                 return Err(Error::Inner(SearchEntriesError::InvalidEndDate));
             }
         }
 
-        if let Some(date) = &start_date {
+        if let Some(date) = &start_d {
             where_parts.push(format!(
                 "entries.entry_date >= ${}",
                 db::push_param(&mut params, date)
             ));
         }
 
-        if let Some(date) = &end_date {
+        if let Some(date) = &end_d {
             where_parts.push(format!(
                 "entries.entry_date <= ${}",
                 db::push_param(&mut params, date)
@@ -449,10 +467,13 @@ async fn multi_query_cfs(
         .query_raw(
             "\
         select custom_field_entries.custom_fields_id, \
-               custom_field_entries.value \
+               custom_field_entries.value, \
+               custom_fields.name \
         from custom_field_entries \
             left join entries on \
                 custom_field_entries.entries_id = entries.id \
+            join custom_fields on \
+                custom_field_entries.custom_fields_id = custom_fields.id \
         where entries.id = $1 \
         order by entries.entry_date desc",
             params,
@@ -469,3 +490,46 @@ async fn multi_query_cfs(
         .try_collect::<HashMap<CustomFieldId, custom_field::Value>>()
         .await?)
 }
+
+fn parse_date(given: &str) -> Result<NaiveDate, Error<SearchEntriesError>> {
+    let formats = [
+        format!("{given}-01-01"),
+        format!("{given}-01"),
+        given.to_string(),
+    ];
+
+    for v in formats {
+        if let Ok(valid) = NaiveDate::parse_from_str(&v, "%Y-%m-%d") {
+            return Ok(valid);
+        }
+    }
+
+    Err(Error::Inner(SearchEntriesError::InvalidDateFormat))
+}
+
+fn maybe_parse_date(given: Option<String>) -> Result<Option<NaiveDate>, Error<SearchEntriesError>> {
+    if let Some(value) = given {
+        Ok(Some(parse_date(&value)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn get_month_range(given: NaiveDate) -> Result<(NaiveDate, NaiveDate), Error<SearchEntriesError>> {
+    let start = NaiveDate::from_ymd_opt(given.year(), given.month(), 1)
+        .ok_or(Error::Inner(SearchEntriesError::InvalidDateFormat))?;
+
+    let (next_year, next_month) = if given.month() == 12 {
+        (given.year() + 1, 1)
+    } else {
+        (given.year(), given.month() + 1)
+    };
+
+    let end = NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .ok_or(Error::Inner(SearchEntriesError::InvalidDateFormat))?
+        .pred_opt()
+        .ok_or(Error::Inner(SearchEntriesError::InvalidDateFormat))?;
+
+    Ok((start, end))
+}
+
