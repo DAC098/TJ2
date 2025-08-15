@@ -29,113 +29,114 @@ function context_test(reg) {
     };
 }
 
-const is_dev = process.env.NODE_ENV === "development" || true;
+export default function (env, argv) {
+    let is_dev = process.env.NODE_ENV === "development";
 
-console.log("process.env.NODE_ENV", process.env.NODE_ENV);
-
-export default defineConfig({
-    mode: is_dev ? "development" : "production",
-    entry: {
-        index: "./frontend/src/index.tsx"
-    },
-    output: {
-        path: path.resolve(__dirname, "./frontend/static"),
-        filename: "[name].bundle.js",
-    },
-    resolve: {
-        tsConfig: path.resolve(__dirname, "./tsconfig.json"),
-        extensions: [".ts", ".tsx", ".js"],
-    },
-    module: {
-        rules: [
-            {
-                test: /\.jsx$/,
-                use: {
-                    loader: "builtin:swc-loader",
-                    options: {
-                        jsc: {
-                            parser: {
-                                syntax: "ecmascript",
-                                jsx: true,
-                            },
-                            transform: {
-                                react: {
-                                    runtime: "automatic",
-                                    //pragma: "React.createElement",
-                                    //pragmaFrag: "React.Fragment",
-                                    //throwIfNamespace: true,
-                                    development: is_dev,
-                                    //useBuiltins: false,
+    return defineConfig({
+        mode: is_dev ? "development" : "production",
+        entry: {
+            index: "./frontend/src/index.tsx"
+        },
+        output: {
+            path: path.resolve(__dirname, "./frontend/static"),
+            filename: "[name].bundle.js",
+        },
+        resolve: {
+            tsConfig: path.resolve(__dirname, "./tsconfig.json"),
+            extensions: [".ts", ".tsx", ".js"],
+        },
+        module: {
+            rules: [
+                {
+                    test: /\.jsx$/,
+                    use: {
+                        loader: "builtin:swc-loader",
+                        options: {
+                            jsc: {
+                                parser: {
+                                    syntax: "ecmascript",
+                                    jsx: true,
+                                },
+                                transform: {
+                                    react: {
+                                        runtime: "automatic",
+                                        //pragma: "React.createElement",
+                                        //pragmaFrag: "React.Fragment",
+                                        //throwIfNamespace: true,
+                                        development: is_dev,
+                                        //useBuiltins: false,
+                                    }
                                 }
-                            }
+                            },
                         },
                     },
+                    type: "javascript/auto",
                 },
-                type: "javascript/auto",
-            },
-            {
-                test: /\.tsx?$/,
-                use: {
-                    loader: 'builtin:swc-loader',
-                    options: {
-                        jsc: {
-                            parser: {
-                                syntax: 'typescript',
-                                tsx: true,
-                            },
-                            transform: {
-                                react: {
-                                    runtime: "automatic",
+                {
+                    test: /\.tsx?$/,
+                    use: {
+                        loader: 'builtin:swc-loader',
+                        options: {
+                            jsc: {
+                                parser: {
+                                    syntax: 'typescript',
+                                    tsx: true,
+                                },
+                                transform: {
+                                    react: {
+                                        runtime: "automatic",
+                                        development: is_dev,
+                                    }
                                 }
-                            }
+                            },
                         },
                     },
+                    type: 'javascript/auto',
                 },
-                type: 'javascript/auto',
-            },
-            {
-                test: /\.css$/,
-                use: ["postcss-loader"],
-                type: "css"
-            }
-        ]
-    },
-    optimization: {
-        runtimeChunk: "single",
-        splitChunks: {
-            cacheGroups: {
-                radix: {
-                    name: "radix",
-                    test: context_test(radix_modules_reg),
-                    priority: 20,
-                    chunks: "all",
-                },
-                react: {
-                    name: "react",
-                    test: context_test(react_modules_reg),
-                    priority: 20,
-                    chunks: "all",
-                    //reuseExistingChunk: true,
-                    //minChunks: 1,
-                    //minSize: 0,
-                },
-                vendor: {
-                    name: "vendor",
-                    test: context_test(node_modules_reg),
-                    priority: 10,
-                    chunks: "all",
-                    //reuseExistingChunk: true,
-                    //minChunks: 1,
-                    //minSize: 0,
+                {
+                    test: /\.css$/,
+                    use: ["postcss-loader"],
+                    type: "css"
+                }
+            ]
+        },
+        optimization: {
+            runtimeChunk: "single",
+            splitChunks: {
+                cacheGroups: {
+                    radix: {
+                        name: "radix",
+                        test: context_test(radix_modules_reg),
+                        priority: 20,
+                        chunks: "all",
+                    },
+                    react: {
+                        name: "react",
+                        test: context_test(react_modules_reg),
+                        priority: 20,
+                        chunks: "all",
+                        //reuseExistingChunk: true,
+                        //minChunks: 1,
+                        //minSize: 0,
+                    },
+                    vendor: {
+                        name: "vendor",
+                        test: context_test(node_modules_reg),
+                        priority: 10,
+                        chunks: "all",
+                        //reuseExistingChunk: true,
+                        //minChunks: 1,
+                        //minSize: 0,
+                    }
                 }
             }
+        },
+        plugins: [
+            new TsCheckerRspackPlugin(),
+        ],
+        stats: "normal",
+        experiments: {
+            css: true
         }
-    },
-    plugins: [
-        new TsCheckerRspackPlugin(),
-    ],
-    stats: "normal",
-    experiments: {
-        css: true
-    }
-});
+    });
+}
