@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
+use std::str::FromStr;
 
 use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode};
@@ -40,10 +41,28 @@ pub struct EntryPath {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[serde(try_from = "&str")]
 enum EntryIdKind {
     Id(EntryId),
     Date(NaiveDate),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("provided string cannot be parsed int a valid path entry id")]
+struct InvalidPathEntryId;
+
+impl<'a> TryFrom<&'a str> for EntryIdKind {
+    type Error = InvalidPathEntryId;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        if let Ok(id) = EntryId::from_str(value) {
+            Ok(Self::Id(id))
+        } else if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+            Ok(Self::Date(date))
+        } else {
+            Err(InvalidPathEntryId)
+        }
+    }
 }
 
 #[derive(Debug, strum::Display, Serialize)]
@@ -65,7 +84,7 @@ pub async fn retrieve_blank(
     initiator: Initiator,
     headers: HeaderMap,
     Path(JournalPath { journals_id }): Path<JournalPath>,
-) -> Result<body::Json<form::EntryForm>, Error<RetrieveBlankError>> {
+) -> Result<body::Json<&'static str>, Error<RetrieveBlankError>> {
     body::assert_html(state.templates(), &headers)?;
 
     let conn = state.db().get().await?;
@@ -84,9 +103,7 @@ pub async fn retrieve_blank(
     )
     .await?;
 
-    Ok(body::Json(
-        form::EntryForm::blank(&conn, &journal.id).await?,
-    ))
+    Ok(body::Json("okay"))
 }
 
 #[derive(Debug, strum::Display, Serialize)]

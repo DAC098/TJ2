@@ -414,21 +414,6 @@ export function timestamp_name() {
     return `${now.getFullYear()}-${month}-${day}_${hour}-${minute}-${second}`;
 }
 
-export function blank_form(): EntryForm {
-    let today = new Date();
-
-    return {
-        id: null,
-        uid: null,
-        date: today,
-        title: "",
-        contents: "",
-        tags: [],
-        files: [],
-        custom_fields: [],
-    };
-}
-
 interface ParsedDate {
     year: number,
     month: number,
@@ -548,7 +533,7 @@ export async function create_entry(
 
 export async function update_entry(
     journals_id: string | number,
-    entries_id: string,
+    entries_id: string | number,
     entry: UIEntryForm,
 ) {
     let sending: any = {
@@ -609,8 +594,8 @@ export async function update_entry(
 }
 
 export async function delete_entry(
-    journals_id: string,
-    entries_id: string,
+    journals_id: string | number,
+    entries_id: string | number,
 ) {
     let res = await fetch(`/journals/${journals_id}/entries/${entries_id}`, {
         method: "DELETE"

@@ -31,7 +31,7 @@ export function ViewImage({src}: ViewImageProps) {
             </DialogDescription>
         </VisuallyHidden>
         <DialogContent>
-            <img src={url}/>
+            {url != null ? <img src={url} onLoad={() => {}}/> : null}
         </DialogContent>
     </Dialog>;
 }

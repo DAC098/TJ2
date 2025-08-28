@@ -8,7 +8,14 @@ import { Verify } from "@/pages/verify";
 import { Root } from "@/pages/root";
 import { Toaster } from "./components/ui/toaster";
 
-const query_client = new QueryClient();
+const query_client = new QueryClient({
+    defaultOptions: {
+        queries: {
+            retry: false,
+            refetchOnWindowFocus: false,
+        }
+    }
+});
 
 export function MainRouter() {
     return <QueryClientProvider client={query_client}>

@@ -12,8 +12,6 @@ export function useObjectUrl(src: string | File | Blob): string | null {
             set_url(obj_url);
 
             return () => {
-                console.log("revoking object url");
-
                 URL.revokeObjectURL(obj_url);
             };
         }

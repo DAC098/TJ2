@@ -151,7 +151,7 @@ function EntriesCalendar({journals_id}: EntriesCalendarProps) {
         set_search_params(curr => {
             let now = new Date();
 
-            if (next_year !== now.getFullYear() && next_month !== now.getMonth()) {
+            if (next_year === now.getFullYear() && next_month === now.getMonth()) {
                 curr.delete("date");
             } else {
                 curr.set("date", `${next_year}-${(next_month + 1).toString(10).padStart(2, '0')}`);
@@ -231,7 +231,7 @@ function EntriesCalendar({journals_id}: EntriesCalendarProps) {
             {week_days}
             {data != null ?
                 data.map(({date, key, is_spacer, record}) => is_spacer ?
-                    <div/> :
+                    <div key={key}/> :
                     <CalendarCell
                         key={key}
                         date={key}
@@ -329,11 +329,7 @@ function CalendarCell({date, is_today, record, disable}: CalendarCellProps) {
                 "border-foreground": is_today,
             })}
         >
-            {disable ?
-                date
-                :
-                <Link to={`./${date}`}>{date}</Link>
-            }
+            {disable ? date : <Link to={`./${date}`}>{date}</Link>}
         </div>;
     }
 

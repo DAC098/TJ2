@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
 
@@ -21,25 +21,6 @@ pub struct EntryForm<FileT = EntryFileForm> {
 }
 
 impl EntryForm {
-    pub async fn blank(
-        conn: &impl db::GenericClient,
-        journals_id: &JournalId,
-    ) -> Result<Self, db::PgError> {
-        let now = Utc::now();
-        let custom_fields = EntryCustomFieldForm::retrieve_empty(conn, journals_id).await?;
-
-        Ok(EntryForm {
-            id: None,
-            uid: None,
-            date: now.date_naive(),
-            title: None,
-            contents: None,
-            tags: Vec::new(),
-            files: Vec::new(),
-            custom_fields,
-        })
-    }
-
     pub async fn retrieve_entry<'a, T>(
         conn: &impl db::GenericClient,
         given: T

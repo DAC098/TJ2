@@ -1,6 +1,6 @@
-import { useLocation, useParams, useSearchParams } from "react-router-dom";
-import { Pencil, Trash } from "lucide-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useLocation, useSearchParams } from "react-router-dom";
+import { LoaderCircle, Pencil, Trash } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import {
@@ -17,6 +17,9 @@ import {
 } from "@/components/ui/sidebar";
 import { ApiError, req_api_json } from "@/net";
 import { Button } from "@/components/ui/button";
+import { useCurrJournal } from "@/components/hooks/journal";
+import { Loading } from "@/components/ui/page";
+import { H3 } from "@/components/ui/typeography";
 
 type SyncResult = {
     type: "Noop"
@@ -26,25 +29,14 @@ type SyncResult = {
 }
 
 function JournalSidebar() {
-    const {journals_id} = useParams();
     const location = useLocation();
     const [search_params, _] = useSearchParams();
 
-    if (journals_id == null) {
-        throw new Error("missing journals_id param");
-    }
-
-    const {data: journal, isError, isLoading} = useQuery({
-        queryKey: ["journal", journals_id] as [String, String],
-        queryFn: async ({queryKey}) => {
-            return await req_api_json("GET", `/journals/${queryKey[1]}`);
-        }
-    });
+    const {id, journal, is_loading, is_fetching, error} = useCurrJournal();
 
     const {mutate: sync, isPending: sync_pending} = useMutation({
-        mutationKey: ["sync_journal", journals_id],
         mutationFn: async () => {
-            return await req_api_json<SyncResult>("POST", `/journals/${journals_id}/sync`, {});
+            return await req_api_json<SyncResult>("POST", `/journals/${journal?.id}/sync`, {});
         },
         onSuccess: (data) => {
             if (data.type === "Noop") {
@@ -61,24 +53,23 @@ function JournalSidebar() {
 
                 toast(`Failed to sync journal`);
             }
-        }
+        },
     });
 
-    let journal_name = "Journal";
-
-    if (isLoading) {
-        journal_name = "Loading...";
-    } else if (!isError) {
-        journal_name = journal.name;
+    if ((is_loading || is_fetching) && journal == null) {
+        return <Loading title="Loading Journal"/>;
+    } else if (error != null || id == null || journal == null) {
+        return null;
     }
 
-    let entries_path = `/journals/${journals_id}/entries`;
+    let entries_path = `/journals/${journal.id}/entries`;
 
     return <>
-        <SidebarHeader className="border-b">
-            <h2 className="w-full text-xl overflow-hidden text-nowrap whitespace-nowrap text-ellipsis" title={journal_name}>
-                {journal_name}
-            </h2>
+        <SidebarHeader className="border-b flex flex-row items-center">
+            <H3 className="flex-1 overflow-hidden text-nowrap whitespace-nowrap text-ellipsis" title={journal.name}>
+                {journal.name}
+            </H3>
+            {is_fetching ? <LoaderCircle className="animate-spin"/> : null}
         </SidebarHeader>
         <SidebarContent>
             <SidebarGroup>
@@ -107,8 +98,8 @@ function JournalSidebar() {
                         <SidebarMenuLink
                             title="Sharing"
                             tooltip={"Shows the list of shares for the journal."}
-                            path={`/journals/${journals_id}/share`}
-                            active={location.pathname.startsWith(`/journals/${journals_id}/share`)}
+                            path={`/journals/${journal.id}/share`}
+                            active={location.pathname.startsWith(`/journals/${journal.id}/share`)}
                         />
                     </SidebarMenu>
                 </SidebarGroupContent>
@@ -122,8 +113,8 @@ function JournalSidebar() {
                         <SidebarMenuLink
                             title="Edit"
                             tooltip="Edit the current journal"
-                            path={`/journals/${journals_id}`}
-                            active={location.pathname === `/journals/${journals_id}`}
+                            path={`/journals/${journal.id}`}
+                            active={location.pathname === `/journals/${journal.id}`}
                             icon={<Pencil/>}
                         />
                         <SidebarMenuItem>

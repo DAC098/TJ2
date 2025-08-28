@@ -101,3 +101,15 @@ export const MINUTE = SECOND * 60;
 export const HOUR = MINUTE * 60;
 export const DAY = HOUR * 24;
 export const WEEK = DAY * 7;
+
+export function wait(time: number) {
+    return new Promise<void>((resolve, reject) => {
+        let ref = 0;
+
+        ref = window.setTimeout(() => {
+            window.clearTimeout(ref);
+
+            resolve();
+        }, time);
+    });
+}

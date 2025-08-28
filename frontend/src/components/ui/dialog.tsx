@@ -4,7 +4,7 @@ import { X } from "lucide-react"
 
 import { cn } from "@/utils"
 
-let dialog_node = document.body;
+export let dialog_portal = document.body;
 
 document.addEventListener("DOMContentLoaded", () => {
     let found = document.getElementById("dialog-portal");
@@ -12,7 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (found == null) {
         console.error("failed to find dialog portal node");
     } else {
-        dialog_node = found;
+        dialog_portal = found;
     }
 }, {once: true});
 
@@ -43,7 +43,7 @@ const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
-  <DialogPortal container={dialog_node}>
+  <DialogPortal container={dialog_portal}>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
