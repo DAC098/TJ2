@@ -1,5 +1,4 @@
 import { format } from "date-fns";
-import { Plus, CalendarIcon } from "lucide-react";
 import { useFieldArray, useFormContext } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
@@ -18,12 +17,11 @@ import {
     PopoverContent,
     PopoverTrigger,
 } from "@/components/ui/popover";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
-import { EntryForm, JournalCustomField, custom_field } from "@/journals/api";
+import { EntryCustomFieldForm, EntryForm, custom_field } from "@/journals/api";
 import { JournalForm } from "@/journals/forms";
 import { diff_dates } from "@/time";
-import { cn } from "@/utils";
+import { H4 } from "@/components/ui/typeography";
 
 export interface CustomFieldEntryCellProps {
     value: custom_field.Value,
@@ -79,10 +77,58 @@ export function CustomFieldEntryCell({value: v, config}: CustomFieldEntryCellPro
     }
 }
 
+interface EntryCustomFieldProps {
+    field: EntryCustomFieldForm,
+}
+
+export function EntryCustomField({field}: EntryCustomFieldProps) {
+    let contents = null;
+
+    switch (field.type) {
+        case custom_field.TypeName.Integer:
+            contents = <>{field.value?.value ?? "no value"}</>;
+            break;
+        case custom_field.TypeName.IntegerRange:
+            if (field.value != null) {
+                contents = <>{field.value.low} - {field.value.high}</>;
+            } else {
+                contents = <>no value</>;
+            }
+            break;
+        case custom_field.TypeName.Float:
+            contents = <>{field.value?.value ?? "no value"}</>;
+            break;
+        case custom_field.TypeName.FloatRange:
+            if (field.value != null) {
+                contents = <>{field.value.low} - {field.value.high}</>;
+            } else {
+                contents = <>no value</>;
+            }
+            break;
+        case custom_field.TypeName.Time:
+            contents = <>{field.value?.value ?? "no value"}</>;
+            break;
+        case custom_field.TypeName.TimeRange:
+            if (field.value != null) {
+                if (field.config.show_diff) {
+                    contents = <>{diff_dates(new Date(field.value.high), new Date(field.value.low), false, true)}</>
+                } else {
+                    contents = <>{field.value.low} - {field.value.high}</>
+                }
+            }
+            break;
+    }
+
+    return <div className="space-y-2">
+        <H4>{field.name}</H4>
+        <div>{contents}</div>
+    </div>
+}
+
 export interface CustomFieldEntriesProps {
 }
 
-export function CustomFieldEntries({}: CustomFieldEntriesProps) {
+export function EditCustomFieldEntries({}: CustomFieldEntriesProps) {
     const form = useFormContext<EntryForm>();
     const custom_fields = useFieldArray<EntryForm, "custom_fields">({
         control: form.control,

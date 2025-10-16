@@ -45,15 +45,15 @@ import {
     EntryTagForm,
 } from "@/journals/api";
 import { RecordAudio, PlayAudio } from "@/components/audio";
-import { CustomFieldEntries } from "@/journals/custom_fields";
+import { EditCustomFieldEntries, EntryCustomField } from "@/journals/custom_fields";
 import { RecordVideo, PlayVideo } from "@/components/video";
 import { ViewImage } from "@/components/image";
 import { useObjectUrl } from "@/hooks";
-import { cn } from "@/utils";
+import { cn, merge_sorted } from "@/utils";
 import { uuidv4 } from "@/uuid";
 import { parse_mime, default_mime } from "@/parse";
 import { ApiError, req_api_json } from "@/net";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiErrorMsg, ErrorMsg } from "@/components/error";
 import { H1, H2, H4, P } from "@/components/ui/typeography";
 import { useCurrJournal } from "@/components/hooks/journal";
@@ -199,13 +199,21 @@ async function retrieve_entry(journals_id: string | number, entries_id: string |
     }
 }
 
+const ENTRY_ID_NUMBER = 0;
+const ENTRY_ID_DATE = 1;
+const ENTRY_ID_NEW = 2;
+
+interface EntryIdNew {
+    type: typeof ENTRY_ID_NEW,
+}
+
 interface EntryIdNumber {
-    type: 0,
+    type: typeof ENTRY_ID_NUMBER,
     value: number
 }
 
 interface EntryIdDate {
-    type: 1,
+    type: typeof ENTRY_ID_DATE,
     value: string,
     year: number,
     month: number,
@@ -213,7 +221,7 @@ interface EntryIdDate {
     date: Date,
 }
 
-type EntryId = EntryIdNumber | EntryIdDate;
+type EntryId = EntryIdNumber | EntryIdDate | EntryIdNew;
 
 function useEntryIdParams() {
     const {entries_id} = useParams();
@@ -223,11 +231,17 @@ function useEntryIdParams() {
     }
 
     let parsed = useMemo<EntryId>(() => {
+        if (entries_id === "new") {
+            return {
+                type: ENTRY_ID_NEW,
+            };
+        }
+
         let as_date = naive_date_to_date(entries_id);
 
         if (as_date != null) {
             return {
-                type: 1,
+                type: ENTRY_ID_DATE,
                 value: entries_id,
                 year: as_date.getFullYear(),
                 month: as_date.getMonth(),
@@ -236,7 +250,7 @@ function useEntryIdParams() {
             };
         } else {
             return {
-                type: 0,
+                type: ENTRY_ID_NUMBER,
                 value: parseInt(entries_id, 10)
             };
         }
@@ -262,6 +276,7 @@ export function Entry() {
         error: journal_error,
     } = useCurrJournal();
 
+    const client = useQueryClient();
     const {
         data,
         isFetching: fetching_entry,
@@ -270,6 +285,10 @@ export function Entry() {
         queryKey: retrieve_entry_query_key(journals_id ?? 0, entries_id),
         queryFn: async ({queryKey}) => {
             const [_, journals_id, entries_id] = queryKey;
+
+            if (entries_id.type === ENTRY_ID_NEW) {
+                return null;
+            }
 
             let result = await retrieve_entry(journals_id, entries_id.value);
 
@@ -323,7 +342,7 @@ export function Entry() {
             return <ErrorMsg title="Failed to retrieve entry"/>;
         }
     } else if (data == null) {
-        if (!view_edit) {
+        if (!view_edit && entries_id.type === ENTRY_ID_DATE) {
             return <CenterMessage title="No Entry">
                 <P>There was no entry found.</P>
                 <div className="flex flex-row items-center gap-x-2 mt-2">
@@ -342,13 +361,15 @@ export function Entry() {
                 data={blank_form(journal, entries_id)}
                 on_cancel={() => set_view_edit(false)}
                 on_created={data => {
-                    if (entries_id.type === 0) {
+                    if (entries_id.type === ENTRY_ID_NUMBER) {
                         navigate(`/journals/${journals_id}/entries/${data.id}`, {replace: true});
+                    } else {
+                        client.setQueryData(retrieve_entry_query_key(journals_id, entries_id), data);
+                        set_view_edit(false);
                     }
-
-                    set_view_edit(false);
                 }}
                 on_updated={data => {
+                    client.setQueryData(retrieve_entry_query_key(journals_id, entries_id), data);
                     set_view_edit(false);
                 }}
             />;
@@ -360,8 +381,14 @@ export function Entry() {
                 entries_id={entries_id}
                 data={entry_form(journal, data)}
                 on_cancel={() => set_view_edit(false)}
-                on_created={data => set_view_edit(false)}
-                on_updated={data => set_view_edit(false)}
+                on_created={data => {
+                    client.setQueryData(retrieve_entry_query_key(journals_id, entries_id), data);
+                    set_view_edit(false)
+                }}
+                on_updated={data => {
+                    client.setQueryData(retrieve_entry_query_key(journals_id, entries_id), data);
+                    set_view_edit(false);
+                }}
             />;
         } else {
             return <ViewEntry
@@ -420,6 +447,9 @@ function ViewEntry({journal, entry, on_edit}: ViewEntryProps) {
         {entry.title?.length !== 0 ? <H1>{entry.title}</H1> : null}
         <ViewEntryContents contents={entry.contents}/>
         <ViewEntryTags tags={entry.tags}/>
+        <Separator/>
+        <ViewEntryCustomFields fields={entry.custom_fields}/>
+        <Separator/>
         <ViewEntryFiles journal={journal} entry={entry} files={entry.files}/>
     </CenterPage>;
 }
@@ -447,6 +477,22 @@ function ViewEntryContents({contents}: ViewEntryContentsProps) {
     }, [contents]);
 
     return <>{elements}</>;
+}
+
+interface ViewEntryCustomFieldsProps {
+    fields: EntryCustomFieldForm[]
+}
+
+function ViewEntryCustomFields({fields}: ViewEntryCustomFieldsProps) {
+    return <div className="grid grid-cols-2 gap-2">
+        {fields.map(value => {
+            if (value.enabled) {
+                return <EntryCustomField key={value._id} field={value}/>;
+            } else {
+                return null;
+            }
+        })}
+    </div>
 }
 
 interface ViewEntryTagsProps {
@@ -771,12 +817,14 @@ function FullscreenFile({name, download}: FullscreenFileProps) {
     </div>
 }
 
-function blank_form(journal: JournalFull, entries_id: EntryId): EntryForm {
-    let date = entries_id.type === 1 ? entries_id.date : new Date();
-
+function fields_from_journal(journal: JournalFull, to_skip: Set<number>) {
     let custom_fields: EntryCustomFieldForm[] = [];
 
     for (let field of journal.custom_fields) {
+        if (to_skip.has(field.id)) {
+            continue;
+        }
+
         let item: any = {
             _id: field.id,
             uid: field.uid,
@@ -821,6 +869,12 @@ function blank_form(journal: JournalFull, entries_id: EntryId): EntryForm {
         custom_fields.push(item);
     }
 
+    return custom_fields;
+}
+
+function blank_form(journal: JournalFull, entries_id: EntryId): EntryForm {
+    let date = entries_id.type === 1 ? entries_id.date : new Date();
+
     return {
         id: null,
         uid: null,
@@ -829,12 +883,30 @@ function blank_form(journal: JournalFull, entries_id: EntryId): EntryForm {
         contents: "",
         tags: [],
         files: [],
-        custom_fields,
+        custom_fields: fields_from_journal(journal, new Set()),
     };
 }
 
+function sorter(a: EntryCustomFieldForm, b: EntryCustomFieldForm) {
+    if (a.order > b.order) {
+        return true;
+    } else if (a.order < b.order) {
+        return false;
+    } else {
+        return a.name > b.name;
+    }
+}
+
 function entry_form(journal: JournalFull, entry: EntryForm): UIEntryForm {
+    let known_fields: Set<number> = new Set();
     let custom_fields: EntryCustomFieldForm[] = [];
+
+    for (let field of entry.custom_fields) {
+        known_fields.add(field._id);
+        custom_fields.push(field);
+    }
+
+    let missing = fields_from_journal(journal, known_fields);
 
     return {
         id: entry.id,
@@ -844,7 +916,7 @@ function entry_form(journal: JournalFull, entry: EntryForm): UIEntryForm {
         contents: entry.contents ?? "",
         tags: entry.tags,
         files: entry.files,
-        custom_fields,
+        custom_fields: merge_sorted(custom_fields, missing, sorter),
     };
 }
 
@@ -979,7 +1051,7 @@ function EditEntry({
                     </FormItem>
                 }}/>
                 <Separator/>
-                <CustomFieldEntries />
+                <EditCustomFieldEntries />
                 <Separator/>
                 <EditTagEntry />
                 <Separator/>
@@ -999,6 +1071,7 @@ interface EditEntryHeaderProps {
 function EditEntryHeader({journals_id, entries_id, loading, on_cancel}: EditEntryHeaderProps) {
     const navigate = useNavigate();
     const form = useFormContext<UIEntryForm>();
+    let form_entries_id = form.getValues("id");
 
     return <div className="top-0 sticky flex flex-row flex-nowrap gap-x-4 bg-background border-b py-2">
         <Button type="button" variant="ghost" size="icon" onClick={() => navigate(-1)}>
@@ -1014,7 +1087,7 @@ function EditEntryHeader({journals_id, entries_id, loading, on_cancel}: EditEntr
                             <Button
                                 variant="outline"
                                 className={cn("w-[280px] justify-start text-left front-normal")}
-                                disabled={entries_id.type === 1}
+                                disabled={entries_id.type === ENTRY_ID_DATE}
                             >
                                 {format(date_value, "PPPP")}
                                 <CalendarIcon className="mr-2 h-4 w-4"/>
@@ -1040,9 +1113,9 @@ function EditEntryHeader({journals_id, entries_id, loading, on_cancel}: EditEntr
         <div className="flex-1"/>
         <Button type="button" onClick={() => on_cancel()}>Cancel</Button>
         <Button type="submit" disabled={loading}>Save <Save/></Button>
-        {entries_id != null ?
+        {form_entries_id != null ?
             <Button type="button" variant="destructive" disabled={loading} onClick={() => {
-                delete_entry(journals_id, entries_id.value).then(() => {
+                delete_entry(journals_id, form_entries_id).then(() => {
                     navigate(-1);
                 }).catch(err => {
                     console.error("failed to delete journal entry:", err);
