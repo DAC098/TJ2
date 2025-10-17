@@ -293,7 +293,9 @@ export function Entry() {
             let result = await retrieve_entry(journals_id, entries_id.value);
 
             if (result != null) {
-                result.date = new Date(result.date);
+                // this needs to be better, for now we will "cast" this as a
+                // string for ts to accept it
+                result.date = naive_date_to_date(result.date as unknown as string);
             }
 
             return result;
