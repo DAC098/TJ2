@@ -5,10 +5,9 @@ use axum::extract::{Path, Query};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
-use futures::StreamExt;
-use ringbuf::traits::{Consumer, Observer, Producer};
+use futures::{AsyncWrite, AsyncWriteExt, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncWrite, AsyncWriteExt, BufWriter};
+use tokio_util::compat::TokioAsyncWriteCompatExt;
 use tokio_util::io::ReaderStream;
 
 use crate::db;
@@ -24,6 +23,7 @@ use crate::sec::authz::{Ability, Scope};
 use crate::sec::hash::HashCheck;
 use crate::sec::Hash;
 use crate::state::{self, Storage};
+use crate::stream::{CaptureTrailing, HashStream, MaxBytes, MaxBytesError};
 
 use crate::router::handles::journals::entries::form::EntryFileForm;
 
@@ -208,9 +208,13 @@ async fn create_file(
     stream: Body,
 ) -> Result<ReceivedFile, Error<UploadError>> {
     let file_path = storage.journal_file_entry(journal.id, requested.id);
-    let mut creater = FileCreater::new(file_path).await?;
+    let mut compat = FileCreater::new(file_path).await?.compat_write();
 
-    let (written, hash) = match write_body(stream, &mut creater, hash_check).await {
+    let write_result = write_body(stream.into_data_stream(), &mut compat, hash_check).await;
+
+    let creater = compat.into_inner();
+
+    let (written, hash) = match write_result {
         Ok(rtn) => rtn,
         Err(err) => {
             creater.log_clean().await;
@@ -220,7 +224,7 @@ async fn create_file(
                 WriteError::TooLarge => Error::Inner(UploadError::TooLarge),
                 WriteError::TooSmall => Error::Inner(UploadError::TooSmall),
                 WriteError::Io(err) => Error::from(err),
-                WriteError::Axum(err) => Error::from(err),
+                WriteError::Stream(err) => Error::from(err),
             });
         }
     };
@@ -252,8 +256,18 @@ async fn create_file(
     }
 }
 
+fn get_mime(headers: &HeaderMap) -> Result<mime::Mime, Error<UploadError>> {
+    let content_type = headers
+        .get("content-type")
+        .ok_or(Error::Inner(UploadError::InvalidContentType))?
+        .to_str()
+        .map_err(|_| Error::Inner(UploadError::InvalidContentType))?;
+
+    mime::Mime::from_str(&content_type).map_err(|_| Error::Inner(UploadError::InvalidContentType))
+}
+
 #[derive(Debug, thiserror::Error)]
-enum WriteError {
+enum WriteError<SE> {
     #[error("the calculated hash does not match")]
     InvalidHash,
 
@@ -267,10 +281,8 @@ enum WriteError {
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
-    Axum(#[from] axum::Error),
+    Stream(SE),
 }
-
-const BUF_SIZE: usize = 8 * 1024;
 
 /// streams the [`Body`] into the given writer and calculates a hash with
 /// number of bytes written
@@ -278,241 +290,76 @@ const BUF_SIZE: usize = 8 * 1024;
 /// if specified this will do hash calculations against the data by comparing
 /// the given [`Hash`], using the last 32 bytes of the stream as the [`Hash`],
 /// or by just calculating the incoming data and doing no comparison
-async fn write_body<'a, T>(
-    stream: Body,
+async fn write_body<'a, B, S, T, SE>(
+    stream: S,
     writer: &'a mut T,
     hash_check: HashCheck,
-) -> Result<(i64, Hash), WriteError>
+) -> Result<(i64, Hash), WriteError<SE>>
 where
+    B: AsRef<[u8]>,
+    S: Stream<Item = Result<B, SE>> + Unpin,
     T: AsyncWrite + Unpin,
 {
+    let mut hasher = blake3::Hasher::new();
+    let mut max_bytes = MaxBytes::new(i64::MAX as usize);
+
     match hash_check {
         HashCheck::Given(given) => {
-            let (size, hash) = stream_to_writer(stream, writer).await?;
+            HashStream::new(
+                max_bytes.for_stream(stream).map_err(|err| match err {
+                    MaxBytesError::MaxSize => WriteError::TooLarge,
+                    MaxBytesError::Producer(p) => WriteError::Stream(p),
+                }),
+                &mut hasher,
+            )
+            .forward(writer.into_sink().sink_map_err(|e| WriteError::Io(e)))
+            .await?;
+
+            let hash = Hash::from(hasher);
 
             if given != hash {
                 Err(WriteError::InvalidHash)
             } else {
-                Ok((size, hash))
+                Ok((max_bytes.get_total().try_into().unwrap(), hash))
             }
         }
         HashCheck::AtEnd => {
-            let (size, hash, given) = stream_to_writer_truncate(stream, writer).await?;
+            let mut trailing = CaptureTrailing::new(32);
+
+            HashStream::new(
+                max_bytes
+                    .for_stream(trailing.for_stream(stream))
+                    .map_err(|err| match err {
+                        MaxBytesError::MaxSize => WriteError::TooLarge,
+                        MaxBytesError::Producer(p) => WriteError::Stream(p),
+                    }),
+                &mut hasher,
+            )
+            .forward(writer.into_sink().sink_map_err(|e| WriteError::Io(e)))
+            .await?;
+
+            let hash = Hash::from(hasher);
+            let given =
+                Hash::from_slice(trailing.pop_occupied()).map_err(|_| WriteError::TooSmall)?;
 
             if hash == given {
-                Ok((size, hash.into()))
+                Ok((max_bytes.get_total().try_into().unwrap(), hash))
             } else {
                 Err(WriteError::InvalidHash)
             }
         }
-        HashCheck::None => stream_to_writer(stream, writer).await,
-    }
-}
+        HashCheck::None => {
+            HashStream::new(
+                max_bytes.for_stream(stream).map_err(|err| match err {
+                    MaxBytesError::MaxSize => WriteError::TooLarge,
+                    MaxBytesError::Producer(p) => WriteError::Stream(p),
+                }),
+                &mut hasher,
+            )
+            .forward(writer.into_sink().sink_map_err(|e| WriteError::Io(e)))
+            .await?;
 
-/// streams the [`Body`] into the given writer and calculates a hash with
-/// number of bytes written
-async fn stream_to_writer<'a, T>(stream: Body, writer: &'a mut T) -> Result<(i64, Hash), WriteError>
-where
-    T: AsyncWrite + Unpin,
-{
-    let mut written = 0usize;
-    let mut hasher = blake3::Hasher::new();
-    let mut buf_writer = BufWriter::with_capacity(BUF_SIZE, &mut *writer);
-    let mut stream = stream.into_data_stream();
-
-    while let Some(result) = stream.next().await {
-        let bytes = result?;
-        let slice = bytes.as_ref();
-
-        hasher.update(slice);
-
-        let wrote = buf_writer.write(slice).await?;
-
-        written = written.checked_add(wrote).ok_or(WriteError::TooLarge)?;
-    }
-
-    buf_writer.flush().await?;
-
-    let hash = hasher.finalize();
-    let size = written.try_into().map_err(|_| WriteError::TooLarge)?;
-
-    Ok((size, hash.into()))
-}
-
-/// streams the [`Body`] into the given writer and calculates a hash with
-/// number of bytes writen.
-///
-/// will truncate the last 32 bytes from the stream for use as the provided
-/// hash of the data.
-async fn stream_to_writer_truncate<'a, T>(
-    stream: Body,
-    writer: &'a mut T,
-) -> Result<(i64, Hash, Hash), WriteError>
-where
-    T: AsyncWrite + Unpin,
-{
-    let mut written = 0usize;
-    let mut hasher = blake3::Hasher::new();
-    let mut stream = stream.into_data_stream();
-    // allocate enough memory for a reasonable write size and the size of the blake3 hash
-    let mut ring_buf = ringbuf::StaticRb::<u8, { BUF_SIZE + 32 }>::default();
-    let mut buffer = [0u8; BUF_SIZE];
-
-    tracing::trace!(
-        "buffer size: {} ring size: {}",
-        buffer.len(),
-        ring_buf.vacant_len()
-    );
-
-    while let Some(result) = stream.next().await {
-        let bytes = result?;
-        let mut slice = bytes.as_ref();
-
-        loop {
-            let pushed = ring_buf.push_slice(slice);
-
-            tracing::trace!(
-                "pushing slice to buffer. size: {} pushed: {pushed}",
-                slice.len()
-            );
-
-            if pushed == slice.len() {
-                break;
-            }
-
-            // there is still data in the slice that we did not push into the
-            // ring buffer. take out 8k and send to the writer
-            let popped = ring_buf.pop_slice(&mut buffer);
-
-            tracing::trace!("pushing to output. popped: {popped}");
-
-            hasher.update(&buffer);
-            writer.write_all(&buffer).await?;
-
-            written = written
-                .checked_add(buffer.len())
-                .ok_or(WriteError::TooLarge)?;
-
-            // create a sub slice of the data that was pushed
-            slice = &slice[pushed..];
+            Ok((max_bytes.get_total().try_into().unwrap(), hasher.into()))
         }
-    }
-
-    let occupied_len = ring_buf.occupied_len();
-
-    // take any remaing data in the ringbuffer except for the last 32 bytes
-    if occupied_len > 32 {
-        let diff = occupied_len - 32;
-        let slice = &mut buffer[..diff];
-
-        tracing::trace!(
-            "wrting remaining data to output. occupied_len: {occupied_len} diff: {diff}"
-        );
-
-        ring_buf.pop_slice(slice);
-
-        hasher.update(slice);
-        writer.write_all(slice).await?;
-
-        written = written
-            .checked_add(slice.len())
-            .ok_or(WriteError::TooLarge)?;
-    }
-
-    writer.flush().await?;
-
-    // we did not receive any data that would not consider the hash at the end
-    if written == 0 {
-        return Err(WriteError::TooSmall);
-    }
-
-    let given = {
-        let mut hash_buf = [0u8; 32];
-
-        ring_buf.pop_slice(&mut hash_buf);
-
-        blake3::Hash::from_bytes(hash_buf)
-    };
-
-    let hash = hasher.finalize();
-    let size = written.try_into().map_err(|_| WriteError::TooLarge)?;
-
-    Ok((size, hash.into(), given.into()))
-}
-
-fn get_mime(headers: &HeaderMap) -> Result<mime::Mime, Error<UploadError>> {
-    let content_type = headers
-        .get("content-type")
-        .ok_or(Error::Inner(UploadError::InvalidContentType))?
-        .to_str()
-        .map_err(|_| Error::Inner(UploadError::InvalidContentType))?;
-
-    mime::Mime::from_str(&content_type).map_err(|_| Error::Inner(UploadError::InvalidContentType))
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::sec::hash::{Hash, HashCheck};
-
-    fn gen_bytes(amount: usize) -> Vec<u8> {
-        let mut rtn = Vec::with_capacity(amount);
-        let marker = u8::MAX as usize;
-
-        for count in 0..amount {
-            if count % marker == 0 {
-                rtn.push(u8::MAX);
-            } else {
-                rtn.push((count % 10) as u8);
-            }
-        }
-
-        rtn
-    }
-
-    async fn run_write(amount: usize) {
-        let data = gen_bytes(amount);
-        let expected_hash = blake3::hash(&data);
-
-        let mut output = Vec::new();
-        let stream = {
-            let mut stream_data = data.clone();
-            stream_data.extend_from_slice(expected_hash.as_bytes());
-
-            axum::body::Body::from(stream_data)
-        };
-
-        match stream_to_writer_truncate(stream, &mut output).await {
-            Ok((size, hash, given)) => {
-                assert_eq!(size as usize, amount, "unexpected amout of written bytes");
-                assert_eq!(hash, given, "hash mismatch");
-                assert_eq!(output, data, "output data does not match input");
-            }
-            Err(err) => panic!("failed to stream to output: {err}"),
-        }
-    }
-
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn write_body_10() {
-        run_write(10).await;
-    }
-
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn write_body_1_000() {
-        run_write(1_000).await;
-    }
-
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn write_body_10_000() {
-        run_write(10_000).await;
-    }
-
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn write_body_100_000() {
-        run_write(100_000).await;
     }
 }

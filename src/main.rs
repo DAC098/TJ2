@@ -18,6 +18,7 @@ mod net;
 mod path;
 mod sec;
 mod state;
+mod stream;
 mod sync;
 mod templates;
 

@@ -15,11 +15,24 @@ impl Hash {
     {
         Ok(Self(blake3::Hash::from_hex(given)?))
     }
+
+    pub fn from_slice<T>(given: T) -> Result<Self, std::array::TryFromSliceError>
+    where
+        T: AsRef<[u8]>,
+    {
+        Ok(Self(blake3::Hash::from_slice(given.as_ref())?))
+    }
 }
 
 impl From<blake3::Hash> for Hash {
     fn from(given: blake3::Hash) -> Self {
         Self(given)
+    }
+}
+
+impl From<blake3::Hasher> for Hash {
+    fn from(given: blake3::Hasher) -> Self {
+        Self(given.finalize())
     }
 }
 
