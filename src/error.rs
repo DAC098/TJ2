@@ -64,9 +64,15 @@ impl Display for Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response<Body> {
-        log_prefix_error("response error", &self);
+        trace_error!("response error", &self);
 
         error_response("internal server error")
+    }
+}
+
+impl From<Infallible> for Error {
+    fn from(_: Infallible) -> Self {
+        Error::context("received Infallible?")
     }
 }
 
@@ -104,80 +110,140 @@ impl<T> Context<T, ()> for std::option::Option<T> {
     }
 }
 
+/// creates an error stack string from the provided error.
+pub fn create_error_list<D, E>(prefix: &D, err: &E) -> Result<String, std::fmt::Error>
+where
+    D: Display + ?Sized,
+    E: std::error::Error + ?Sized,
+{
+    let mut msg = format!("{prefix}: \n0) {err}");
+    let mut count = 1;
+    let mut curr = std::error::Error::source(&err);
+
+    loop {
+        let Some(next) = curr else {
+            return Ok(msg);
+        };
+
+        msg.write_fmt(format_args!("\n{count}) {next}"))?;
+
+        count += 1;
+        curr = std::error::Error::source(next);
+    }
+}
+
 /// logs the given mesage and error
 ///
-/// will recursively print any errors that are contained inside the current
-/// one.
+/// favor [`trace_error!`] as it will properly log the line the trace is
+/// called at
+#[deprecated = "favor `trace_error` as it will provide better logging data"]
 pub fn log_prefix_error<D, E>(prefix: &D, err: &E)
 where
     D: Display + ?Sized,
     E: std::error::Error + ?Sized,
 {
-    let mut msg = format!("0) {err}");
-    let mut count = 1;
-    let mut curr = std::error::Error::source(&err);
-
-    while let Some(next) = curr {
-        if let Err(err) = write!(&mut msg, "\n{count}) {next}") {
-            tracing::error!("error when writing out error message {err}");
-
-            return;
-        }
-
-        count += 1;
-        curr = std::error::Error::source(next);
-    }
-
-    tracing::error!("{prefix}:\n{msg}");
-}
-
-/// attempts unwrap the result and will log the error if unsuccessful
-pub fn prefix_try_result<D, T, E>(prefix: &D, given: Result<T, E>) -> Option<T>
-where
-    D: Display + ?Sized,
-    E: std::error::Error,
-{
-    match given {
-        Ok(rtn) => Some(rtn),
-        Err(err) => {
-            log_prefix_error(prefix, &err);
-
-            None
-        }
+    match create_error_list(prefix, err) {
+        Ok(msg) => tracing::error!("{msg}"),
+        Err(fmt_err) => tracing::error!("failed to create error stack: {fmt_err}\noriginal: {err}"),
     }
 }
 
-/// wrapper method to just log an error
+/// similar to [`log_prefix_error`] but with a prefined message prefix of
+/// "error stack"
+///
+/// favor [`trace_error!`] as it will properly log the line the trace is
+/// called at
+#[deprecated = "favor `trace_error` as it will provide better logging data"]
 pub fn log_error<E>(err: &E)
 where
     E: std::error::Error,
 {
-    log_prefix_error("error stack", err)
+    match create_error_list("error stack", err) {
+        Ok(msg) => tracing::error!("{msg}"),
+        Err(fmt_err) => tracing::error!("failed to create error stack: {fmt_err}\noriginal: {err}"),
+    }
 }
 
-/*
-macro_rules! simple_from {
-    ($e:path) => {
-        impl From<$e> for crate::error::api::Error {
-            fn from(err: $e) -> Self {
-                crate::error::Error::source("internal error", err)
+/// logs a given error and optional prefix message using [`tracing::error!`]
+macro_rules! trace_error {
+    ($prefix:expr, $err:expr) => {
+        match crate::error::create_error_list($prefix, $err) {
+            Ok(msg) => tracing::error!("{msg}"),
+            Err(fmt_err) => tracing::error!(
+                "failed to create error stack: {fmt_err}\noriginal: {}",
+                $err
+            ),
+        }
+    };
+    ($err:expr) => {
+        match crate::error::create_error_list("error stack", $err) {
+            Ok(msg) => tracing::error!("{msg}"),
+            Err(fmt_err) => tracing::error!(
+                "failed to create error stack: {fmt_err}\noriginal: {}",
+                $err
+            ),
+        }
+    };
+}
+
+pub(crate) use trace_error;
+
+macro_rules! trace_pass {
+    ($prefix:expr, $value:expr) => {
+        match $value {
+            Ok(v) => Ok(v),
+            Err(err) => {
+                crate::error::trace_error!($prefix, &err);
+
+                Err(err)
             }
         }
     };
-    ($e:path, $m:expr) => {
-        impl From<$e> for crate::error::api::Error {
-            fn from(err: $e) -> Self {
-                crate::error::Error::source($m, err)
+    ($value:expr) => {
+        match $value {
+            Ok(v) => Ok(v),
+            Err(err) => {
+                crate::error::trace_error!(&err);
+
+                Err(err)
             }
         }
-    }
+    };
 }
 
-pub(crate) use simple_from;
-*/
+pub(crate) use trace_pass;
 
-impl From<Infallible> for Error {
-    fn from(_: Infallible) -> Self {
-        Error::context("received Infallible?")
-    }
+macro_rules! trace_and_exit {
+    ($value:expr, $prefix:expr, $code:expr) => {
+        match $value {
+            Ok(v) => v,
+            Err(err) => {
+                crate::error::trace_error!($prefix, &err);
+
+                std::process::exit($code);
+            }
+        }
+    };
+    ($value:expr, $prefix:expr) => {
+        match $value {
+            Ok(v) => v,
+            Err(err) => {
+                crate::error::trace_error!($prefix, &err);
+
+                std::process::exit(1);
+            }
+        }
+    };
+    ($value:expr) => {
+        match $value {
+            Ok(v) => v,
+            Err(err) => {
+                crate::error::trace_error!(&err);
+
+                std::process::exit(1);
+            }
+        }
+    };
 }
+
+pub(crate) use trace_and_exit;

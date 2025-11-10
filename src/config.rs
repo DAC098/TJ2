@@ -3,13 +3,15 @@
 
 use std::collections::HashMap;
 use std::default::Default;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io::Read;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde::Deserialize;
+use tracing_subscriber::filter::{Directive, LevelFilter};
 
 use crate::error::{self, Context};
 use crate::path::{metadata, normalize_from};
@@ -19,13 +21,52 @@ pub mod meta;
 use meta::{check_path, get_cwd, sanitize_url_key, DotPath, Quote, SrcFile, TryDefault};
 
 /// specifies the verbosity level of the tracing logs
-#[derive(Debug, Clone, ValueEnum)]
+///
+/// the verbosity is stacked so if you specify a high verbosity it will show
+/// the lower ones as well. specify `"warn"` and it will display `"error"` as
+/// well and if you specify `"trace"` it will display all previous verbosities
+/// as well.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Verbosity {
+    Off,
     Error,
     Warn,
     Info,
     Debug,
     Trace,
+}
+
+impl From<&Verbosity> for LevelFilter {
+    fn from(given: &Verbosity) -> Self {
+        match given {
+            Verbosity::Off => LevelFilter::OFF,
+            Verbosity::Error => LevelFilter::ERROR,
+            Verbosity::Warn => LevelFilter::WARN,
+            Verbosity::Info => LevelFilter::INFO,
+            Verbosity::Debug => LevelFilter::DEBUG,
+            Verbosity::Trace => LevelFilter::TRACE,
+        }
+    }
+}
+
+impl From<&Verbosity> for Directive {
+    fn from(given: &Verbosity) -> Self {
+        LevelFilter::from(given).into()
+    }
+}
+
+impl Display for Verbosity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::Off => f.write_str("off"),
+            Self::Error => f.write_str("error"),
+            Self::Warn => f.write_str("warn"),
+            Self::Info => f.write_str("info"),
+            Self::Debug => f.write_str("debug"),
+            Self::Trace => f.write_str("trace"),
+        }
+    }
 }
 
 /// the list of command line arguments that the server accepts
@@ -34,28 +75,20 @@ pub struct CliArgs {
     /// specifies the config file to use when starting the server
     pub config_path: PathBuf,
 
-    /// specifies the verbosity level of the tracing logs
-    #[arg(short = 'V', long)]
-    pub verbosity: Option<Verbosity>,
-
-    /// logs output to the specified directory
-    #[arg(long)]
-    pub log_dir: Option<PathBuf>,
-
-    /// the format of the logging output
-    #[arg(long)]
-    pub log_format: Option<LogFormat>,
-
     /// attempts to generate test data for the server to use for testing
     /// purposes
     #[arg(long)]
     pub gen_test_data: bool,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+/// optional formats to output logs as
+#[derive(Debug, Clone, Deserialize)]
 pub enum LogFormat {
+    /// outputs all logs in valid JSON
     Json,
+    /// a more human readable log output
     Pretty,
+    /// compact log format
     Compact,
 }
 
@@ -226,6 +259,7 @@ pub struct SettingsShape {
     storage: Option<PathBuf>,
     thread_pool: Option<usize>,
     blocking_pool: Option<usize>,
+    logging: Option<LoggingShape>,
     listeners: Option<Vec<ListenerShape>>,
     assets: Option<AssetsShape>,
     templates: Option<TemplatesShape>,
@@ -258,6 +292,9 @@ pub struct Settings {
     ///
     /// defaults to 1
     pub blocking_pool: usize,
+
+    /// the available options for logging information for the server.
+    pub logging: Option<Logging>,
 
     /// the list of available listeners for the server to use
     pub listeners: Vec<Listener>,
@@ -318,6 +355,18 @@ impl Settings {
             println!("WARNING: total number of threads exceeds the systems");
         }
 
+        if let Some(logging) = settings.logging {
+            if let Some(curr) = &mut self.logging {
+                curr.merge(src, dot.push(&"logging"), logging)?;
+            } else {
+                let mut default = Logging::default();
+
+                default.merge(src, dot.push(&"logging"), logging)?;
+
+                self.logging = Some(default);
+            }
+        }
+
         if let Some(listeners) = settings.listeners {
             self.listeners = Vec::with_capacity(listeners.len());
 
@@ -355,11 +404,224 @@ impl TryDefault for Settings {
             storage: get_cwd()?.join("storage"),
             thread_pool: 1,
             blocking_pool: 1,
+            logging: None,
             listeners: Vec::new(),
             assets: Assets::default(),
             templates: Templates::try_default()?,
             db: Db::default(),
         })
+    }
+}
+
+/// the structure of logging loaded from a config file
+#[derive(Debug, Deserialize)]
+pub struct LoggingShape {
+    verbosity: Option<Verbosity>,
+    format: Option<LogFormat>,
+    directives: Option<HashMap<String, Verbosity>>,
+    output: Option<LoggingOutputShape>,
+}
+
+/// the structure of loggout output loaded from a config file
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum LoggingOutputShape {
+    Stdio,
+    File {
+        directory: Option<PathBuf>,
+        rotation: Option<LoggingRotation>,
+        max_files: Option<usize>,
+        prefix: Option<String>,
+    },
+}
+
+/// specifies the the kinds of rotation available for file logging output.
+///
+/// it maps to [`tracing_appender::rolling::Rotation`]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LoggingRotation {
+    /// rotates logs every minute
+    Minutely,
+    /// rotates logs every hour
+    Hourly,
+    /// rotates logs every day
+    Daily,
+    /// consolodates logs to a single file
+    Never,
+}
+
+impl From<&LoggingRotation> for tracing_appender::rolling::Rotation {
+    fn from(given: &LoggingRotation) -> Self {
+        match given {
+            LoggingRotation::Minutely => tracing_appender::rolling::Rotation::MINUTELY,
+            LoggingRotation::Hourly => tracing_appender::rolling::Rotation::HOURLY,
+            LoggingRotation::Daily => tracing_appender::rolling::Rotation::DAILY,
+            LoggingRotation::Never => tracing_appender::rolling::Rotation::NEVER,
+        }
+    }
+}
+
+/// the list of options available for configuring logging for the server
+///
+/// logging is done using [`tracing`] and combines options from
+/// [`tracing_subscriber`] and [`tracing_appender`]
+#[derive(Debug)]
+pub struct Logging {
+    pub verbosity: Verbosity,
+    pub format: Option<LogFormat>,
+    pub directives: HashMap<String, Verbosity>,
+    pub output: LoggingOutput,
+}
+
+/// the available options for log output
+#[derive(Debug)]
+pub enum LoggingOutput {
+    /// logs will be sent to stdout or stderr
+    Stdio,
+
+    /// logs will be sent to a file under a specified directory
+    File {
+        /// the directory to store all log files generated by the server
+        directory: PathBuf,
+
+        /// the rotation time for new logs to be created
+        ///
+        /// defaults to [`LoggingRotation::Daily`]
+        rotation: LoggingRotation,
+
+        /// the max number of log files to keep
+        ///
+        /// once the max number is reached the oldest logs will be removed
+        /// refer to [`tracing_appender::rolling::Builder::max_log_files`]
+        /// for details on how it is calculated
+        max_files: Option<usize>,
+
+        /// the log file prefix to use
+        ///
+        /// defaults to `"rsf_server"`
+        prefix: String,
+    },
+}
+
+impl Logging {
+    /// merges the given SettingsShape into the final Settings struct
+    fn merge(
+        &mut self,
+        src: &SrcFile<'_>,
+        dot: DotPath<'_>,
+        logging: LoggingShape,
+    ) -> Result<(), error::Error> {
+        if let Some(verbosity) = logging.verbosity {
+            self.verbosity = verbosity;
+        }
+
+        self.format = logging.format;
+
+        if let Some(directives) = logging.directives {
+            for (module, verbosity) in directives {
+                self.directives.insert(module, verbosity);
+            }
+        }
+
+        if let Some(output) = logging.output {
+            // well this is a big jank
+            let curr = std::mem::replace(&mut self.output, LoggingOutput::Stdio);
+
+            self.output = curr.merge(src, dot.push(&"output"), output)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl LoggingOutput {
+    fn merge(
+        self,
+        src: &SrcFile<'_>,
+        dot: DotPath<'_>,
+        output: LoggingOutputShape,
+    ) -> Result<Self, error::Error> {
+        Ok(match (self, output) {
+            (LoggingOutput::Stdio, LoggingOutputShape::Stdio) => Self::Stdio,
+            (
+                LoggingOutput::Stdio,
+                LoggingOutputShape::File {
+                    directory,
+                    rotation,
+                    max_files,
+                    prefix,
+                },
+            ) => {
+                let mut directory = directory.unwrap_or(PathBuf::new());
+
+                if !directory.as_os_str().is_empty() {
+                    let norm = src.normalize(directory);
+
+                    check_path(&norm, src, dot.push(&"directory"), false)?;
+
+                    directory = norm;
+                }
+
+                Self::File {
+                    directory,
+                    rotation: rotation.unwrap_or(LoggingRotation::Daily),
+                    max_files,
+                    prefix: prefix.unwrap_or(String::from("rsf_server")),
+                }
+            }
+            (LoggingOutput::File { .. }, LoggingOutputShape::Stdio) => Self::Stdio,
+            (
+                LoggingOutput::File {
+                    mut directory,
+                    mut rotation,
+                    mut max_files,
+                    mut prefix,
+                },
+                LoggingOutputShape::File {
+                    directory: shape_dir,
+                    rotation: shape_rot,
+                    max_files: shape_max,
+                    prefix: shape_pfx,
+                },
+            ) => {
+                if let Some(dir) = shape_dir {
+                    directory = src.normalize(dir);
+
+                    check_path(&directory, src, dot.push(&"directory"), false)?;
+                }
+
+                if let Some(rot) = shape_rot {
+                    rotation = rot;
+                }
+
+                if let Some(max) = shape_max {
+                    max_files = Some(max);
+                }
+
+                if let Some(pfx) = shape_pfx {
+                    prefix = pfx;
+                }
+
+                Self::File {
+                    directory,
+                    rotation,
+                    max_files,
+                    prefix,
+                }
+            }
+        })
+    }
+}
+
+impl Default for Logging {
+    fn default() -> Self {
+        Self {
+            verbosity: Verbosity::Off,
+            format: None,
+            directives: HashMap::new(),
+            output: LoggingOutput::Stdio,
+        }
     }
 }
 

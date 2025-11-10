@@ -52,10 +52,7 @@ async fn send_journal(
     let sync_date = Utc::now();
 
     loop {
-        let Some(checkpoint) = error::prefix_try_result(
-            "failed to create savepoint ofr journal sync",
-            transaction.transaction().await,
-        ) else {
+        let Some(checkpoint) = error::trace_pass!(transaction.transaction().await).ok() else {
             break;
         };
 
@@ -305,8 +302,7 @@ async fn send_entry(
         .send()
         .await;
 
-    let Some(res) = error::prefix_try_result("failed to send entry to remote server", result)
-    else {
+    let Some(res) = error::trace_pass!("failed to send entry to remote server", result).ok() else {
         return Err(entries_id);
     };
 

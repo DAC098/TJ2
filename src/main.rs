@@ -4,16 +4,14 @@ use axum::Router;
 use clap::Parser;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use tokio::runtime::{Builder, Runtime};
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::EnvFilter;
+use tokio::runtime::Builder;
 
 mod config;
 mod db;
 mod error;
 mod fs;
 mod jobs;
+mod logging;
 mod net;
 mod path;
 mod sec;
@@ -33,124 +31,36 @@ use error::{Context, Error};
 fn main() {
     let args = config::CliArgs::parse();
 
-    let guard = match init_logging(&args) {
-        Ok(guard) => guard,
-        Err(err) => {
-            error::log_error(&err);
+    let (config, guard) = tracing::subscriber::with_default(logging::stdio_subscriber(), || {
+        let config =
+            error::trace_and_exit!(config::Config::from_args(&args), "failed to create config");
+        let guard = error::trace_and_exit!(logging::init(&config), "failed to initialize logging");
 
-            std::process::exit(1);
-        }
-    };
+        (config, guard)
+    });
 
-    let code = if let Err(err) = entry(args) {
-        error::log_error(&err);
-
-        1
-    } else {
-        0
-    };
+    let successful = error::trace_pass!(entry(args, config)).is_ok();
 
     drop(guard);
 
-    std::process::exit(code);
+    std::process::exit(if successful { 1 } else { 0 });
 }
 
-fn entry(args: config::CliArgs) -> Result<(), Error> {
-    let config = config::Config::from_args(&args)?;
-
-    let rt = init_runtime(&config)?;
-
-    rt.block_on(run(args, config))
-}
-
-fn init_logging(args: &config::CliArgs) -> Result<Option<WorkerGuard>, Error> {
-    let mut filter = EnvFilter::from_default_env();
-
-    if let Some(verbosity) = &args.verbosity {
-        let log_str = match verbosity {
-            config::Verbosity::Error => "tj2=error",
-            config::Verbosity::Warn => "tj2=warn",
-            config::Verbosity::Info => "tj2=info",
-            config::Verbosity::Debug => "tj2=debug",
-            config::Verbosity::Trace => "tj2=trace",
-        };
-
-        filter = filter.add_directive(log_str.parse().unwrap());
-    }
-
-    let log_builder = tracing_subscriber::fmt();
-
-    if let Some(dir) = &args.log_dir {
-        let appender = RollingFileAppender::builder()
-            .rotation(Rotation::DAILY)
-            .filename_prefix("tj2_server")
-            .filename_suffix("log")
-            .build(&dir)
-            .context("failed to initialize rotating logs")?;
-
-        let (non_blocking, guard) = tracing_appender::non_blocking(appender);
-
-        let builder = log_builder
-            .with_writer(non_blocking)
-            .with_env_filter(filter)
-            .with_ansi(false);
-
-        let result = if let Some(format) = &args.log_format {
-            match format {
-                config::LogFormat::Json => builder.json().try_init(),
-                config::LogFormat::Pretty => builder.pretty().try_init(),
-                config::LogFormat::Compact => builder.pretty().try_init(),
-            }
-        } else {
-            builder.try_init()
-        };
-
-        if let Err(err) = result {
-            Err(Error::context_source(
-                "failed to initialize rotating logs",
-                err,
-            ))
-        } else {
-            Ok(Some(guard))
-        }
-    } else {
-        let builder = log_builder.with_env_filter(filter);
-
-        let result = if let Some(format) = &args.log_format {
-            match format {
-                config::LogFormat::Json => builder.json().try_init(),
-                config::LogFormat::Pretty => builder.pretty().try_init(),
-                config::LogFormat::Compact => builder.pretty().try_init(),
-            }
-        } else {
-            builder.try_init()
-        };
-
-        if let Err(err) = result {
-            Err(Error::context_source(
-                "failed to initialize stdoubt logging",
-                err,
-            ))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-/// configures the tokio runtime and starts the init process for the server
-fn init_runtime(config: &config::Config) -> Result<Runtime, Error> {
+fn entry(args: config::CliArgs, config: config::Config) -> Result<(), Error> {
     let mut builder = if config.settings.thread_pool == 1 {
         Builder::new_current_thread()
     } else {
         Builder::new_multi_thread()
     };
 
-    builder
+    let rt = builder
         .enable_io()
         .enable_time()
         .max_blocking_threads(config.settings.blocking_pool)
         .build()
-        .context("failed to create tokio runtime")
+        .context("failed to create tokio runtime")?;
+
+    rt.block_on(run(args, config))
 }
 
 /// initializes state, router configuration, database setup, and then starts
