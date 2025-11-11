@@ -83,6 +83,7 @@ pub struct CliArgs {
 
 /// optional formats to output logs as
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LogFormat {
     /// outputs all logs in valid JSON
     Json,

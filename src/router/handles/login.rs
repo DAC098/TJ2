@@ -103,7 +103,7 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type", content = "value")]
+#[serde(tag = "type")]
 pub enum LoginResult {
     Success { id: UserId, username: String },
     Verify,
