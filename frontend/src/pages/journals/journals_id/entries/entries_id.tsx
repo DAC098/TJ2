@@ -4,6 +4,7 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { Plus, CalendarIcon, Trash, Save, ArrowLeft, Download, Info, Pencil, LoaderCircle, Fullscreen, X, ArrowRight } from "lucide-react";
 import { useForm, useFieldArray, useFormContext, FormProvider, SubmitHandler } from "react-hook-form";
 
+import { upload_data } from "@/api/entries/files";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -36,7 +37,6 @@ import {
     create_entry,
     update_entry,
     delete_entry,
-    upload_data,
     timestamp_name,
     naive_date_to_date,
     JournalFull,
@@ -61,127 +61,6 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, dialog_portal, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
-
-interface UploadResult {
-    successful: ReceivedFile[],
-    failed: FailedFile[],
-}
-
-async function parallel_uploads(
-    journals_id: string | number,
-    entries_id: string | number,
-    local: UIEntryFileForm[],
-    server: EntryFileForm[],
-): Promise<UploadResult> {
-    let to_skip: {[key: number]: number} = {};
-    let mapped: {[key: string]: InMemoryFile | LocalFile} = {};
-    let to_upload: [RequestedFile, InMemoryFile | LocalFile][] = [];
-    let uploaders = [];
-
-    let result: UploadResult = {
-        successful: [],
-        failed: [],
-    };
-
-    for (let file of local) {
-        switch (file.type) {
-            case "requested":
-            case "received":
-                continue;
-            case "local":
-            case "in-memory":
-                mapped[file.key] = file;
-                break;
-            case "failed":
-                to_skip[file._id] = 1;
-
-                to_upload.push([{
-                    type: "requested",
-                    _id: file._id,
-                    uid: file.uid,
-                    name: file.name,
-                }, file.original]);
-                break;
-        }
-    }
-
-    for (let file_entry of server) {
-        if (file_entry.type !== "requested") {
-            result.successful.push(file_entry);
-
-            continue;
-        }
-
-        if (file_entry.attached == null) {
-            if (!(file_entry._id in to_skip)) {
-                result.successful.push(file_entry);
-            }
-
-            continue;
-        }
-
-        let ref = mapped[file_entry.attached.key];
-
-        if (ref == null) {
-            throw new Error("failed to find file reference, THIS SHOULD NOT HAPPEN");
-        }
-
-        to_upload.push([file_entry, ref]);
-    }
-
-    const uploader = async () => {
-        let count = 0;
-
-        while (true) {
-            let uploading = to_upload.pop();
-
-            if (uploading == null) {
-                break;
-            }
-
-            let [file_entry, ref] = uploading;
-
-            try {
-                let json = await upload_data(
-                    journals_id,
-                    entries_id,
-                    file_entry._id,
-                    ref.data
-                );
-
-                if (json != null) {
-                    result.successful.push(json);
-                } else {
-                    result.failed.push({
-                        type: "failed",
-                        _id: file_entry._id,
-                        uid: file_entry.uid,
-                        name: file_entry.name,
-                        original: ref,
-                    });
-                }
-            } catch (err) {
-                result.failed.push({
-                    type: "failed",
-                    _id: file_entry._id,
-                    uid: file_entry.uid,
-                    name: file_entry.name,
-                    original: ref
-                });
-            }
-
-            count += 1;
-        }
-    };
-
-    for (let index = 0; index < 2; index += 1) {
-        uploaders.push(uploader());
-    }
-
-    await Promise.all(uploaders);
-
-    return result;
-}
 
 async function retrieve_entry(journals_id: string | number, entries_id: string | number) {
     try {
@@ -922,6 +801,22 @@ function entry_form(journal: JournalFull, entry: EntryForm): UIEntryForm {
     };
 }
 
+interface UploadData {
+    journals_id: number,
+    entries_id: number,
+    requested: RequestedFile,
+    ref: InMemoryFile | LocalFile,
+}
+
+async function mutation_upload_data({journals_id, entries_id, requested, ref}: UploadData) {
+    return await upload_data({
+        journals_id,
+        entries_id,
+        file_entry_id: requested._id,
+        data: ref.data
+    });
+}
+
 interface EditEntryProps {
     journal: JournalFull,
     entries_id: EntryId,
@@ -943,79 +838,174 @@ function EditEntry({
         defaultValues: data,
     });
 
-    const onSubmit: SubmitHandler<UIEntryForm> = async (data, event) => {
-        if (data.id == null) {
-            try {
-                let result = await create_entry(journal.id, data);
-
-                let successful: EntryFileForm[] = [];
-                let failed: FailedFile[] = [];
-
-                if (result.files.length !== 0) {
-                    let uploaded = await parallel_uploads(
-                        journal.id,
-                        result.id!,
-                        data.files,
-                        result.files
-                    );
-
-                    successful = uploaded.successful;
-                    failed = uploaded.failed;
-                }
-
-                (result as UIEntryForm).files = successful;
-
-                form.reset(result);
-
-                let total = result.files.length;
-
-                for (let index = 0; index < failed.length; index += 1) {
-                    form.setValue(`files.${index + total}`, failed[index]);
-                }
-
-                on_created(result);
-            } catch(err) {
-                console.error("failed to create entry:", err);
+    // entry create / update
+    const { mutateAsync: send_entry } = useMutation({
+        mutationFn: async ({journals_id, data}: {journals_id: number, data: UIEntryForm}) => {
+            if (data.id == null) {
+                return await create_entry(journals_id, data);
+            } else {
+                return await update_entry(journals_id, data.id, data);
             }
-        } else {
-            try {
-                let result = await update_entry(journal.id, data.id, data);
+        },
+        onSuccess: (data, vars, ctx) => {
+        },
+        onError: (error, vars, ctx) => {
+        },
+    });
 
-                let successful: EntryFileForm[] = [];
-                let failed: FailedFile[] = [];
+    // file upload
+    const {mutateAsync: send_file} = useMutation({
+        mutationFn: mutation_upload_data,
+    });
 
-                if (result.files.length !== 0) {
-                    let uploaded = await parallel_uploads(
-                        journal.id,
-                        result.id!,
-                        data.files,
-                        result.files
-                    );
+    const on_submit: SubmitHandler<UIEntryForm> = async (data, event) => {
+        let result;
 
-                    successful = uploaded.successful;
-                    failed = uploaded.failed;
-                }
+        try {
+            result = await send_entry({journals_id: journal.id, data});
+        } catch (err) {
+            console.error("failed to upload entry to server:", err);
+            return;
+        }
 
-                (result as UIEntryForm).files = successful;
-
-                form.reset(result);
-
-                let total = result.files.length;
-
-                for (let index = 0; index < failed.length; index += 1) {
-                    form.setValue(`files.${index + total}`, failed[index]);
-                }
-
+        if (result.files.length === 0) {
+            if (data.id == null) {
+                on_created(result);
+            } else {
                 on_updated(result);
-            } catch(err) {
-                console.error("failed to update entry:", err);
+            }
+
+            return;
+        }
+
+        let successful: EntryFileForm[] = [];
+        let failed: FailedFile[] = [];
+        let queued = new Set<number>();
+        let mapped = new Map<string, InMemoryFile | LocalFile>();
+        let awaiting = [];
+
+        for (let file of data.files) {
+            switch (file.type) {
+                case "requested":
+                case "received":
+                    // received indicates the server already has the file
+                    // and if we have a requested file then that indicates
+                    // we wanted to upload a file but failed to do so.
+                    // either way we have not data to send
+                    continue;
+                case "local":
+                case "in-memory":
+                    // we have data to send to the server
+                    mapped.set(file.key, file);
+                    break;
+                case "failed":
+                    // a way to indicate that we have the information from
+                    // a previous failure so when we see the requested file
+                    // in the next loop we will not worry about it
+                    queued.add(file._id);
+
+                    awaiting.push(send_file({
+                        journals_id: journal.id,
+                        entries_id: result.id!,
+                        requested: {
+                            type: "requested",
+                            _id: file._id,
+                            uid: file.uid,
+                            name: file.name,
+                        },
+                        ref: file.original
+                    }, {
+                        onSuccess: (data, vars, ctx) => {
+                            successful.push(data);
+                        },
+                        onError: (error, vars, ctx) => {
+                            // when a file upload fails it will only ever
+                            // be for a requested file,
+                            failed.push({
+                                type: "failed",
+                                _id: vars.requested._id,
+                                uid: vars.requested.uid,
+                                name: vars.requested.name,
+                                original: vars.ref,
+                            });
+                        },
+                    }));
+                    break;
+            }
+        }
+
+        // the list of requested and received files from the server
+        for (let file of result.files) {
+            // file is already received by server so skip
+            if (file.type === "received") {
+                successful.push(file);
+                continue;
+            }
+
+            if (queued.has(file._id)) {
+                // file is already being sent
+                continue;
+            }
+
+            if (file.attached == null) {
+                console.warn("requested file has no attached key:", file.name, file._id);
+
+                continue;
+            }
+
+            let ref = mapped.get(file.attached.key);
+
+            if (ref != null) {
+                awaiting.push(send_file({
+                    journals_id: journal.id,
+                    entries_id: result.id!,
+                    requested: file,
+                    ref
+                }, {
+                    onSuccess: (data, vars, ctx) => {
+                        successful.push(data);
+                    },
+                    onError: (error, vars, ctx) => {
+                        failed.push({
+                            type: "failed",
+                            _id: vars.requested._id,
+                            uid: vars.requested.uid,
+                            name: vars.requested.name,
+                            original: vars.ref,
+                        });
+                    }
+                }));
+            } else {
+                console.warn("failed to find file reference during upload:", file.name, file._id);
+            }
+
+            await Promise.allSettled(awaiting);
+        }
+
+        let original = result.files.length;
+        result.files = successful;
+
+        if (failed.length !== 0) {
+            // some files failed so we will need to update the form with the
+            // successful changes and show the failed files.
+            console.warn("some files failed to upload to the server", failed.length);
+
+            let converted = entry_form(journal, result);
+            converted.files = converted.files.concat(failed);
+
+            form.reset(converted);
+        } else {
+            if (data.id == null) {
+                on_created(result);
+            } else {
+                on_updated(result);
             }
         }
     };
 
     return <CenterPage>
         <FormProvider<UIEntryForm> {...form} children={
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <form onSubmit={form.handleSubmit(on_submit)} className="space-y-4">
                 <EditEntryHeader
                     journals_id={journal.id}
                     entries_id={entries_id}

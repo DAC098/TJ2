@@ -1,7 +1,7 @@
 //@ts-ignore
 import MIMEType from "whatwg-mimetype";
 
-interface ErrorJson {
+export interface ErrorJson {
     error: string,
     message?: string,
 }
